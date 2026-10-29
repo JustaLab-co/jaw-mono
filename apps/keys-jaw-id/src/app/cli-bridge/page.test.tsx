@@ -39,6 +39,7 @@ vi.mock('@jaw.id/core', async (original) => ({
   },
 }));
 
+import { keyProof } from '../../lib/bridge-proof';
 import CLIBridgePage from './page';
 
 class FakeSocket {
@@ -775,5 +776,40 @@ describe('cli-bridge page refuses frames it cannot handle', () => {
     });
 
     expect(ws.sent.at(-1)).toEqual({ type: 'pong' });
+  });
+});
+
+describe('cli-bridge page proves the link secret', () => {
+  const LINK_SECRET = Buffer.alloc(32, 9).toString('base64url');
+
+  async function open(fragment: string) {
+    const cli = (cliKeys = await generateKeyPair());
+    window.location.hash = `pk=${await exportKeyToHexString('public', cli.publicKey)}${fragment}`;
+    await act(async () => root.render(<CLIBridgePage />));
+    return cli;
+  }
+
+  it('given a link with no secret, the key exchange carries no proof', async () => {
+    const cli = await open('');
+    const ws = await connect(1, cli);
+
+    expect(ws.sent[0].type).toBe('key_exchange');
+    expect(ws.sent[0]).not.toHaveProperty('proof');
+  });
+
+  it('given a link with a secret, the key exchange proves it for this session and key', async () => {
+    const cli = await open(`&s=${LINK_SECRET}`);
+    const ws = await connect(1, cli);
+
+    const frame = ws.sent[0];
+    const expected = await keyProof(new Uint8Array(32).fill(9), 's1', frame.publicKey as string);
+    expect(frame.proof).toBe(expected);
+  });
+
+  it('given a link with a damaged secret, the page says so and connects nothing', async () => {
+    await open('&s=not-a-secret');
+
+    expect(host.textContent).toContain('This link is damaged. Ask the agent for a new one.');
+    expect(FakeSocket.all).toHaveLength(0);
   });
 });
