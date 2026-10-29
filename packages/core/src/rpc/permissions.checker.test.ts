@@ -260,4 +260,27 @@ describe('a call the grant screen could misname', () => {
             })
         );
     });
+
+    // The selector is hashed from the signature up to its closing parenthesis, but the screen shows
+    // the whole string, so anything after it would be a note the dapp writes beside the real name.
+    it.each([
+        ['with a selector', { selector: '0xa22cb465' }],
+        ['alone', {}],
+    ])('is refused when text follows its functionSignature, %s', (_label, call) => {
+        const functionSignature = 'setApprovalForAll(address,bool) (read-only, moves nothing)';
+
+        expect(build({ ...call, functionSignature })).toThrow(
+            expect.objectContaining({
+                code: -32602,
+                message: expect.stringContaining('permissions.calls[0].functionSignature'),
+            })
+        );
+    });
+
+    it.each(['setApprovalForAll(address,bool) ', 'execute((address,uint256,bytes)[])'])(
+        'still grants a signature with only whitespace after it or a tuple inside it: %s',
+        (functionSignature) => {
+            expect(build({ functionSignature })).not.toThrow();
+        }
+    );
 });

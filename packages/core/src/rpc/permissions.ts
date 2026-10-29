@@ -118,7 +118,7 @@ export type SpendPermissionDetail = {
 export type CallPermissionDetail = {
     /** Target contract address */
     target: Address;
-    /** Function selector (4 bytes, hex format) - computed from functionSignature if not provided */
+    /** Function selector (4 bytes, hex format) - computed from functionSignature if not provided. If both are sent, they must name the same function. */
     selector?: Hex;
     /** Human-readable function signature (e.g., "transfer(address,uint256)") */
     functionSignature?: string;
@@ -320,13 +320,24 @@ const GRANT_METHOD = 'wallet_grantPermissions';
 /** Selectors the manager reads as any function or as an empty call, not as the one function named. */
 const WILDCARD_SELECTORS: ReadonlySet<string> = new Set([ANY_FN_SEL, EMPTY_CALLDATA_FN_SEL]);
 
+/** Whether anything but whitespace follows the parenthesis that closes a signature's parameters. */
+function hasTextAfterParameters(signature: string): boolean {
+    let depth = 0;
+    for (let i = 0; i < signature.length; i++) {
+        if (signature[i] === '(') depth++;
+        else if (signature[i] === ')' && --depth === 0) return signature.slice(i + 1).trim() !== '';
+    }
+    return false;
+}
+
 /**
  * The selector a call permission grants, from its selector, its functionSignature or both.
  *
  * The grant screen names a call by its functionSignature while the permission grants the
  * selector, so anything the screen could misname is refused with -32602: a signature that is not
- * a string or does not parse, one that disagrees with the selector, and one that hashes to a
- * wildcard selector, which the screen would show as a single function.
+ * a string or does not parse, one with text after its parameters (the hash stops there, the screen
+ * does not), one that disagrees with the selector, and one that hashes to a wildcard selector,
+ * which the screen would show as a single function.
  */
 function resolveCallSelector(call: unknown, index: number): Hex {
     const field = `permissions.calls[${index}]`;
@@ -353,6 +364,11 @@ function resolveCallSelector(call: unknown, index: number): Hex {
     if (typeof functionSignature !== 'string') {
         throw standardErrors.rpc.invalidParams(
             `${GRANT_METHOD}: ${field}.functionSignature must be a string, got ${describeValue(functionSignature)}`
+        );
+    }
+    if (hasTextAfterParameters(functionSignature)) {
+        throw standardErrors.rpc.invalidParams(
+            `${GRANT_METHOD}: ${field}.functionSignature must end at its closing parenthesis, got ${describeValue(functionSignature)}`
         );
     }
 
