@@ -4,7 +4,9 @@ import {
     type Hex,
     decodeEventLog,
     getAddress,
+    parseAbiItem,
     toFunctionSelector,
+    type AbiFunction,
     zeroAddress as ZERO_ADDRESS,
 } from 'viem';
 import { getTransactionReceipt } from 'viem/actions';
@@ -331,13 +333,28 @@ function hasTextAfterParameters(signature: string): boolean {
 }
 
 /**
+ * The selector of the function a signature shows, hashed from its canonical form, so a character
+ * the screen does not show (a zero-width space, a look-alike letter, a tab) or a type written short
+ * (uint for uint256) does not count. Undefined when the signature does not parse as one function.
+ */
+function canonicalSelector(signature: string): Hex | undefined {
+    try {
+        const item = parseAbiItem(`function ${signature.trim().replace(/^function\s+/, '')}`) as AbiFunction;
+        return item.type === 'function' ? toFunctionSelector(item) : undefined;
+    } catch {
+        return undefined;
+    }
+}
+
+/**
  * The selector a call permission grants, from its selector, its functionSignature or both.
  *
  * The grant screen names a call by its functionSignature while the permission grants the
  * selector, so anything the screen could misname is refused with -32602: a signature that is not
  * a string or does not parse, one with text after its parameters (the hash stops there, the screen
- * does not), one that disagrees with the selector, and one that hashes to a wildcard selector,
- * which the screen would show as a single function.
+ * does not), one that hashes differently from the function it shows, one that disagrees with the
+ * selector, and one that hashes to a wildcard selector, which the screen would show as a single
+ * function.
  */
 function resolveCallSelector(call: unknown, index: number): Hex {
     const field = `permissions.calls[${index}]`;
@@ -378,6 +395,11 @@ function resolveCallSelector(call: unknown, index: number): Hex {
     } catch {
         throw standardErrors.rpc.invalidParams(
             `${GRANT_METHOD}: ${field}.functionSignature must be a function signature such as transfer(address,uint256), got ${describeValue(functionSignature)}`
+        );
+    }
+    if (canonicalSelector(functionSignature) !== computed) {
+        throw standardErrors.rpc.invalidParams(
+            `${GRANT_METHOD}: ${field}.functionSignature ${describeValue(functionSignature)} hashes to ${computed}, not to the function it shows; write it as it is hashed, such as transfer(address,uint256)`
         );
     }
     if (WILDCARD_SELECTORS.has(computed)) {

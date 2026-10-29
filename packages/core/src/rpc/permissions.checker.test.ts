@@ -283,4 +283,30 @@ describe('a call the grant screen could misname', () => {
             expect(build({ functionSignature })).not.toThrow();
         }
     );
+
+    // The selector is hashed from the string as sent, characters the screen does not show included,
+    // so each of these reads as balanceOf(address) or transfer(address,uint256) but grants another
+    // selector, and a dapp can search such variants offline for one that hashes to setApprovalForAll.
+    it.each([
+        ['a zero-width space', 'balanceOf(​address)'],
+        ['a Cyrillic letter', 'bаlanceOf(address)'],
+        ['a tab after its parenthesis', 'balanceOf(\taddress)'],
+        ['a space after its parenthesis', 'balanceOf( address)'],
+        ['uint for uint256', 'transfer(address,uint)'],
+    ])('is refused when its functionSignature hides %s', (_label, functionSignature) => {
+        expect(build({ functionSignature })).toThrow(
+            expect.objectContaining({
+                code: -32602,
+                message: expect.stringContaining('permissions.calls[0].functionSignature'),
+            })
+        );
+    });
+
+    it.each([
+        'function transfer(address,uint256)',
+        'transfer(address, uint256)',
+        'execute((address target,uint256 value,bytes data)[] calls)',
+    ])('still grants a signature written another way that hashes as shown: %s', (functionSignature) => {
+        expect(build({ functionSignature })).not.toThrow();
+    });
 });
