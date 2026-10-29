@@ -1,1 +1,0 @@
-ALTER TABLE "sends" ADD CONSTRAINT "send_open_keyed" CHECK ("sends"."state" <> 'open' or "sends"."idempotency_key" is not null);

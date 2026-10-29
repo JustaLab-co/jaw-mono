@@ -9,7 +9,8 @@ Smart account wallet infrastructure with passkey authentication.
 | [@jaw.id/core](./packages/core)   | Core SDK - EIP-1193 provider, smart account operations, passkey management |
 | [@jaw.id/wagmi](./packages/wagmi) | Wagmi connector and React hooks                                            |
 | [@jaw.id/ui](./packages/ui)       | React UI components for wallet dialogs                                     |
-| [@jaw.id/cli](./packages/cli)     | CLI tool and MCP server for terminal and AI agent interaction              |
+
+The `jaw` CLI is installed from npm with `npm i -g @jaw.id/cli`. Its source is no longer in this repo.
 
 ## Documentation
 

@@ -11,7 +11,7 @@ Closes
 
 ## How to test
 
-<!-- Replace <project> with the package you touched: @jaw.id/core, @jaw.id/cli,
+<!-- Replace <project> with the package you touched: @jaw.id/core,
      @jaw.id/wagmi, @jaw.id/ui, @jaw-mono/playground, docs. -->
 
 ```bash

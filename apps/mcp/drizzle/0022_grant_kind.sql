@@ -1,1 +1,0 @@
-ALTER TABLE "grants" ADD COLUMN "kind" text DEFAULT 'x402-budget' NOT NULL;

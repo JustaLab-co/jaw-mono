@@ -12,7 +12,6 @@ coverage
 
 # Auto-generated files
 **/sdk-info.ts
-**/oclif.manifest.json
 **/next-env.d.ts
 packages/*/CHANGELOG.md
 apps/docs/docs/dist

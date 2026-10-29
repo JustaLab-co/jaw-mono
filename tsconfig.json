@@ -22,16 +22,7 @@
       "path": "./apps/playground"
     },
     {
-      "path": "./packages/cli"
-    },
-    {
       "path": "./apps/demo"
-    },
-    {
-      "path": "./packages/agent"
-    },
-    {
-      "path": "./apps/mcp"
     }
   ]
 }

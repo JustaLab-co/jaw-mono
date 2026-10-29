@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Publishes the four SDK packages to a throwaway Verdaccio registry, installs
+# Publishes the SDK packages to a throwaway Verdaccio registry, installs
 # them into projects outside the workspace and checks what an integrator gets.
 # Inside the workspace every import resolves to src/ through the
 # @jaw-mono/source condition, so no other test sees the tarballs.
@@ -7,7 +7,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 REGISTRY=http://localhost:4873
-PACKAGES=(core wagmi ui cli)
+PACKAGES=(core wagmi ui)
 WORK="$(mktemp -d)"
 # A version that cannot exist on npm, so nothing but this run's publish can
 # satisfy the install. A copy of the same release from npm has the same bytes.
@@ -126,19 +126,10 @@ install_consumer "$WORK/core-only" "@jaw.id/core@$(version_of core)" "viem@$VIEM
   node -e "require('@jaw.id/core')"
 )
 
-install_consumer "$WORK/cli-only" "@jaw.id/cli@$(version_of cli)" "viem@$VIEM_VERSION"
-(
-  cd "$WORK/cli-only"
-  # oclif falls back to scanning commands without it, so its absence is silent.
-  test -f node_modules/@jaw.id/cli/oclif.manifest.json
-  node_modules/.bin/jaw --help > /dev/null
-)
-
 install_consumer "$WORK/consumer" \
   "@jaw.id/core@$(version_of core)" \
   "@jaw.id/wagmi@$(version_of wagmi)" \
   "@jaw.id/ui@$(version_of ui)" \
-  "@jaw.id/cli@$(version_of cli)" \
   "@tanstack/react-query@5.90.21" \
   "react@^19.0.0" \
   "react-dom@^19.0.0" \

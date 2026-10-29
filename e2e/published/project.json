@@ -1,7 +1,7 @@
 {
   "name": "published-e2e",
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
-  "implicitDependencies": ["@jaw.id/core", "@jaw.id/wagmi", "@jaw.id/ui", "@jaw.id/cli"],
+  "implicitDependencies": ["@jaw.id/core", "@jaw.id/wagmi", "@jaw.id/ui"],
   "targets": {
     "e2e": {
       "executor": "nx:run-commands",

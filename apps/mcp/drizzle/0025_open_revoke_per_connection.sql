@@ -1,1 +1,0 @@
-CREATE UNIQUE INDEX "permission_requests_open_revoke_connection_index" ON "permission_requests" USING btree ("connection_id") WHERE "permission_requests"."method" = 'revoke' and "permission_requests"."state" = 'awaiting_owner';
