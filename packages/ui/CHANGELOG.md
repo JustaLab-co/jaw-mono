@@ -1,3 +1,13 @@
+## 1.10.2 (2026-10-29)
+
+### 🩹 Fixes
+
+- **ui:** read across swaps that pay the app fee ([#597](https://github.com/JustaLab-co/jaw-mono/pull/597))
+
+### ❤️ Thank You
+
+- Mariano Aguero
+
 ## 1.10.1 (2026-10-28)
 
 ### 🩹 Fixes
