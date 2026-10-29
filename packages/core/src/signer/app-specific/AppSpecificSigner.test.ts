@@ -1397,9 +1397,12 @@ describe('AppSpecificSigner', () => {
 
         // The grant screen names a call by its functionSignature, but the selector is what gets
         // signed. A pair that disagrees would show the user one function and grant another.
-        it.each([
+        it.each<[string, unknown, unknown]>([
             ['a harmless label on setApprovalForAll', '0xa22cb465', 'balanceOf(address)'],
             ['a label that does not parse', '0xa9059cbb', 'not a signature'],
+            ['a harmless label that is not a string', '0xa22cb465', ['balanceOf(address)']],
+            ['a label that hashes to the any-function selector', undefined, 'fba3b554e(uint256)'],
+            ['a selector the encoder cannot read', '0XA22CB465', 'setApprovalForAll(address,bool)'],
         ])('rejects a grant with %s with -32602 and opens no dialog', async (_label, selector, functionSignature) => {
             await expect(
                 signer.request({

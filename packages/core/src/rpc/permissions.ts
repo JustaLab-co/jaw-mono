@@ -16,7 +16,7 @@ import { standardErrors } from '../errors/errors.js';
 import { restCall } from '../api/index.js';
 import { buildHandleJawRpcUrl, fetchRPCRequest } from '../utils/index.js';
 import type { RequestArguments } from '../provider/index.js';
-import { describeValue, optionalHexAddress, requireHexBytes32, requireParamsObject } from './paramUtils.js';
+import { describeValue, isRecord, optionalHexAddress, requireHexBytes32, requireParamsObject } from './paramUtils.js';
 
 /**
  * ERC-7528 native token address convention
@@ -317,35 +317,71 @@ export interface NormalizedRevokePermissionsParams {
 
 const GRANT_METHOD = 'wallet_grantPermissions';
 
+/** Selectors the manager reads as any function or as an empty call, not as the one function named. */
+const WILDCARD_SELECTORS: ReadonlySet<string> = new Set([ANY_FN_SEL, EMPTY_CALLDATA_FN_SEL]);
+
 /**
- * Refuses a call that names its function twice, as a selector and a functionSignature, when the
- * two disagree. The grant screen shows the signature and the permission grants the selector, so a
- * pair that disagrees would show the user one function and grant another. A signature that does
- * not parse cannot be checked, so it is refused the same way.
+ * The selector a call permission grants, from its selector, its functionSignature or both.
+ *
+ * The grant screen names a call by its functionSignature while the permission grants the
+ * selector, so anything the screen could misname is refused with -32602: a signature that is not
+ * a string or does not parse, one that disagrees with the selector, and one that hashes to a
+ * wildcard selector, which the screen would show as a single function.
  */
-function checkSelectorMatchesSignature(call: unknown, index: number): void {
-    const { selector, functionSignature } = (call ?? {}) as { selector?: unknown; functionSignature?: unknown };
-    if (!selector || !functionSignature || typeof selector !== 'string' || typeof functionSignature !== 'string') {
-        return;
+function resolveCallSelector(call: unknown, index: number): Hex {
+    const field = `permissions.calls[${index}]`;
+    const { selector, functionSignature } = (isRecord(call) ? call : {}) as {
+        selector?: unknown;
+        functionSignature?: unknown;
+    };
+    const hasSelector = selector !== undefined && selector !== null && selector !== '';
+    const hasSignature = functionSignature !== undefined && functionSignature !== null && functionSignature !== '';
+
+    if (hasSelector && (typeof selector !== 'string' || !/^0x[0-9a-fA-F]{8}$/.test(selector))) {
+        throw standardErrors.rpc.invalidParams(
+            `${GRANT_METHOD}: ${field}.selector must be 4 bytes of 0x-prefixed hex, got ${describeValue(selector)}`
+        );
     }
-    let computed: Hex | undefined;
+    if (!hasSignature) {
+        if (!hasSelector) {
+            throw standardErrors.rpc.invalidParams(
+                `${GRANT_METHOD}: ${field} must have a selector or a functionSignature`
+            );
+        }
+        return selector as Hex;
+    }
+    if (typeof functionSignature !== 'string') {
+        throw standardErrors.rpc.invalidParams(
+            `${GRANT_METHOD}: ${field}.functionSignature must be a string, got ${describeValue(functionSignature)}`
+        );
+    }
+
+    let computed: Hex;
     try {
         computed = computeFunctionSelector(functionSignature);
     } catch {
-        // Left undefined: a signature that does not parse matches no selector.
-    }
-    if (computed !== selector.toLowerCase()) {
         throw standardErrors.rpc.invalidParams(
-            `${GRANT_METHOD}: permissions.calls[${index}].selector must be the selector of functionSignature ${describeValue(functionSignature)}, got ${describeValue(selector)}`
+            `${GRANT_METHOD}: ${field}.functionSignature must be a function signature such as transfer(address,uint256), got ${describeValue(functionSignature)}`
         );
     }
+    if (WILDCARD_SELECTORS.has(computed)) {
+        throw standardErrors.rpc.invalidParams(
+            `${GRANT_METHOD}: ${field}.functionSignature ${describeValue(functionSignature)} hashes to ${computed}, which the permission manager reads as more than one function`
+        );
+    }
+    if (hasSelector && computed !== (selector as string).toLowerCase()) {
+        throw standardErrors.rpc.invalidParams(
+            `${GRANT_METHOD}: ${field}.selector must be the selector of functionSignature ${describeValue(functionSignature)}, got ${describeValue(selector)}`
+        );
+    }
+    return hasSelector ? (selector as Hex) : computed;
 }
 
 /**
- * Refuses a grant whose call checker is not a 20-byte address, or whose selector and
- * functionSignature disagree, before any popup or dialog opens. A checker is part of the
- * permission the user signs, and a malformed one used to reach the grant screen, which drew it,
- * estimated a fee without it and failed only on Confirm.
+ * Refuses a grant whose call checker is not a 20-byte address, or whose call the grant screen
+ * could misname (see resolveCallSelector), before any popup or dialog opens. A checker is part of
+ * the permission the user signs, and a malformed one used to reach the grant screen, which drew
+ * it, estimated a fee without it and failed only on Confirm.
  */
 export function checkGrantPermissionsParams(params: unknown): void {
     const calls = (params as Array<{ permissions?: { calls?: unknown } }> | undefined)?.[0]?.permissions?.calls;
@@ -356,7 +392,7 @@ export function checkGrantPermissionsParams(params: unknown): void {
             GRANT_METHOD,
             `permissions.calls[${index}].checker`
         );
-        checkSelectorMatchesSignature(call, index);
+        resolveCallSelector(call, index);
     });
 }
 
@@ -626,24 +662,9 @@ function apiPermissionsToPermission(
     // Generate a random salt for uniqueness
     const salt = BigInt('0x' + Array.from({ length: 64 }, () => Math.floor(Math.random() * 16).toString(16)).join(''));
 
-    // Convert call permissions - compute selector from signature if not provided
     const calls: CallPermission[] = (permissions.calls || []).map((call, index) => {
-        // Checked again here, so keys.jaw.id refuses a request from an SDK without the signer's check.
-        checkSelectorMatchesSignature(call, index);
-
-        let selector: Hex;
-
-        if (call.selector) {
-            // Use provided selector
-            selector = call.selector;
-        } else if (call.functionSignature) {
-            // Compute selector from function signature
-            selector = computeFunctionSelector(call.functionSignature);
-        } else {
-            throw standardErrors.rpc.invalidParams({
-                message: 'Either selector or functionSignature must be provided for call permission',
-            });
-        }
+        // Resolved again here, so keys.jaw.id refuses a request from an SDK without the signer's check.
+        const selector = resolveCallSelector(call, index);
 
         // The checker is part of the permission hash, so a malformed one would
         // grant a permission no caller can rebuild.

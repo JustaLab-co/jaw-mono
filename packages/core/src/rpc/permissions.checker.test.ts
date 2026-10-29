@@ -203,3 +203,61 @@ describe('a call that names its function consistently', () => {
         expect(decoded.args[0].calls[0].selector.toLowerCase()).toBe('0xa9059cbb');
     });
 });
+
+describe('a call the grant screen could misname', () => {
+    function build(call: Record<string, unknown>) {
+        return () =>
+            buildGrantPermissionCall(ACCOUNT, SPENDER, 2000000000, {
+                calls: [{ target: TARGET, ...call } as NonNullable<PermissionsDetail['calls']>[number]],
+            });
+    }
+
+    // The screen renders a label that is not a string as its text, so ['balanceOf(address)']
+    // reads as balanceOf(address) while the selector is granted.
+    it.each([
+        ['an array', ['balanceOf(address)']],
+        ['a number', 42],
+    ])('is refused when its functionSignature is %s', (_label, functionSignature) => {
+        expect(build({ selector: '0xa22cb465', functionSignature })).toThrow(
+            expect.objectContaining({
+                code: -32602,
+                message: expect.stringContaining('permissions.calls[0].functionSignature'),
+            })
+        );
+    });
+
+    // The manager reads these selectors as any function and as an empty call, but the screen
+    // labels a call by its signature, so a signature that hashes to one would hide the wildcard.
+    it.each([
+        ['any-function', 'fba3b554e(uint256)'],
+        ['empty-call', 'f31225173(uint256)'],
+    ])('is refused when its functionSignature hashes to the %s selector', (_label, functionSignature) => {
+        expect(build({ functionSignature })).toThrow(
+            expect.objectContaining({
+                code: -32602,
+                message: expect.stringContaining('permissions.calls[0].functionSignature'),
+            })
+        );
+    });
+
+    it.each(['0XA22CB465', '0xa22cb4', '0xa22cb46500', 'a22cb465', 42])(
+        'is refused as invalid params when its selector is not 4 bytes of 0x-prefixed hex: %s',
+        (selector) => {
+            expect(build({ selector, functionSignature: 'setApprovalForAll(address,bool)' })).toThrow(
+                expect.objectContaining({
+                    code: -32602,
+                    message: expect.stringContaining('permissions.calls[0].selector'),
+                })
+            );
+        }
+    );
+
+    it('blames the functionSignature, not the selector, when the signature does not parse', () => {
+        expect(build({ selector: '0xa9059cbb', functionSignature: 'not a signature' })).toThrow(
+            expect.objectContaining({
+                code: -32602,
+                message: expect.stringContaining('permissions.calls[0].functionSignature'),
+            })
+        );
+    });
+});
