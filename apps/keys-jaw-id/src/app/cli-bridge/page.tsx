@@ -2,8 +2,9 @@
 
 import { useSearchParams } from 'next/navigation';
 import { useEffect, useState, Suspense, useRef, useCallback } from 'react';
-import { JAW, Mode } from '@jaw.id/core';
+import { JAW, Mode, getSupportedChains } from '@jaw.id/core';
 import { ReactUIHandler } from '@jaw.id/ui';
+import { MAX_FRAME_BYTES, parseInit, parseRequest } from '../../lib/bridge-frames';
 import { resolveBridgeApiKey } from '../../lib/cli-api-key';
 import { DEFAULT_BRIDGE_APP_NAME, resolveBridgeAppName } from '../../lib/bridge-app-name';
 import {
@@ -193,6 +194,10 @@ function CLIBridgeContent() {
 
         ws.onmessage = async (event) => {
           if (cancelled) return;
+          if (typeof event.data === 'string' && event.data.length > MAX_FRAME_BYTES) {
+            console.error('[cli-bridge] Dropped an oversized frame');
+            return;
+          }
           let msg: Record<string, unknown>;
           try {
             msg = JSON.parse(event.data as string) as Record<string, unknown>;
@@ -200,32 +205,37 @@ function CLIBridgeContent() {
             return;
           }
 
-          if (msg.type === 'encrypted' && sharedSecretRef.current) {
+          const secret = sharedSecretRef.current;
+          if (msg.type === 'encrypted' && secret) {
+            const reply = async (frame: Record<string, unknown>) =>
+              ws?.send(JSON.stringify(await encryptAndSerialize(secret, frame)));
             try {
-              const inner = await deserializeAndDecrypt(
-                sharedSecretRef.current,
-                msg as { iv: string; ciphertext: string }
-              );
+              const inner = await deserializeAndDecrypt(secret, msg as { iv: string; ciphertext: string });
 
               switch (inner.type) {
                 case 'init': {
                   clearTimeout(unanswered);
+                  const parsed = parseInit(
+                    inner,
+                    getSupportedChains(true).map((c) => c.id)
+                  );
+                  if ('refused' in parsed) {
+                    setState('error');
+                    setError(parsed.refused);
+                    await reply({ type: 'error', reason: parsed.refused });
+                    return;
+                  }
                   setState('connected');
-                  const chainId = (inner.chainId as number) ?? 1;
-                  const ens = inner.ens as string | undefined;
-                  const name = (appNameRef.current ??= resolveBridgeAppName(inner.appName));
+                  const { chainId, ens, paymaster } = parsed;
+                  const name = (appNameRef.current ??= resolveBridgeAppName(parsed.appName));
                   setAppName(name);
-                  const paymasterUrl = inner.paymasterUrl as string | undefined;
-                  // Only meaningful alongside the url it was written for; the CLI
-                  // sends the two together or not at all.
-                  const paymasterContext = inner.paymasterContext as Record<string, unknown> | undefined;
 
                   // A CLI that brought its own key keeps it, so anyone who wants
                   // their own attribution or their own limits sets one and
                   // nothing about their setup changes. Only the empty case is
                   // filled in, and it is filled in from the CLI's own workspace
                   // rather than this app's, which bills something else.
-                  const sentApiKey = typeof inner.apiKey === 'string' ? inner.apiKey : '';
+                  const sentApiKey = parsed.apiKey ?? '';
                   const apiKey = await resolveBridgeApiKey(sentApiKey);
                   if (!apiKey) {
                     const reason = `No API key: ${name} sent none and this deployment has none configured for it.`;
@@ -249,7 +259,7 @@ function CLIBridgeContent() {
                   // first SDK meant the browser kept signing under the key, the
                   // chain and the paymaster of the previous run while the CLI
                   // recorded the new ones, and neither side could see the gap.
-                  const signature = JSON.stringify({ chainId, ens, paymasterUrl, paymasterContext, apiKey, name });
+                  const signature = JSON.stringify({ chainId, ens, paymaster, apiKey, name });
                   if (!sdkRef.current || sdkSignatureRef.current !== signature) {
                     sdkSignatureRef.current = signature;
                     sdkRef.current = JAW.create({
@@ -262,16 +272,7 @@ function CLIBridgeContent() {
                       },
                       apiKey,
                       ...(ens ? { ens } : {}),
-                      ...(paymasterUrl
-                        ? {
-                            paymasters: {
-                              [chainId]: {
-                                url: paymasterUrl,
-                                ...(paymasterContext ? { context: paymasterContext } : {}),
-                              },
-                            },
-                          }
-                        : {}),
+                      ...(paymaster ? { paymasters: { [chainId]: paymaster } } : {}),
                     });
                   }
 
@@ -289,15 +290,26 @@ function CLIBridgeContent() {
                   break;
                 }
 
-                case 'rpc_request':
-                  if (typeof inner.id !== 'string' || !inner.id) {
+                case 'rpc_request': {
+                  const request = parseRequest(inner);
+                  if (request === 'no-id') {
                     console.error('[cli-bridge] Dropped a request with no string id');
                     break;
                   }
-                  handleRpcRequest(inner.id, inner.method as string, inner.params).catch((err) =>
+                  if ('refused' in request) {
+                    await reply({
+                      type: 'rpc_response',
+                      id: request.id,
+                      success: false,
+                      error: { code: request.code, message: request.refused },
+                    });
+                    break;
+                  }
+                  handleRpcRequest(request.id, request.method, request.params).catch((err) =>
                     console.error('[cli-bridge] Failed to answer request:', err)
                   );
                   break;
+                }
 
                 case 'shutdown':
                   // Direct close is intentional: /cli-bridge is never embedded
@@ -305,6 +317,9 @@ function CLIBridgeContent() {
                   // eslint-disable-next-line no-restricted-properties
                   window.close();
                   break;
+
+                default:
+                  await reply({ type: 'error', reason: `Unsupported message: ${String(inner.type)}` });
               }
             } catch (err) {
               console.error('[cli-bridge] Failed to decrypt/process message:', err);

@@ -633,3 +633,147 @@ describe('cli-bridge page when the link is opened in another tab', () => {
     expect(FakeSocket.all).toHaveLength(0);
   });
 });
+
+async function opened(ws: FakeSocket) {
+  return Promise.all(
+    ws.sent
+      .filter((m) => m.type === 'encrypted')
+      .map(async (m) =>
+        JSON.parse(
+          await decrypt(secret, {
+            iv: unb64(m.iv as string),
+            cipherText: unb64(m.ciphertext as string).buffer as ArrayBuffer,
+          })
+        )
+      )
+  );
+}
+
+describe('cli-bridge page refuses frames it cannot handle', () => {
+  it('an unknown frame type gets an error naming it', async () => {
+    const ws = await start();
+    await init(ws, {});
+
+    await deliver(ws, { type: 'teleport' });
+
+    await vi.waitFor(async () =>
+      expect(await opened(ws)).toContainEqual({ type: 'error', reason: 'Unsupported message: teleport' })
+    );
+  });
+
+  it('an init for an unsupported chain is refused, shows the reason and builds no SDK', async () => {
+    const ws = await start();
+
+    const reply = await init(ws, { chainId: 999999 });
+
+    expect(reply).toEqual({ type: 'error', reason: 'Unsupported chainId: 999999' });
+    expect(host.textContent).toContain('Unsupported chainId: 999999');
+    expect(created.appNames).toEqual([]);
+    expect(await opened(ws)).not.toContainEqual(expect.objectContaining({ type: 'ready' }));
+  });
+
+  it('an init with no chainId is refused instead of falling back to mainnet', async () => {
+    const ws = await start();
+
+    const reply = await init(ws, { chainId: undefined });
+
+    expect(reply).toMatchObject({ type: 'error', reason: expect.stringContaining('chainId') });
+    expect(created.appNames).toEqual([]);
+  });
+
+  it.each([
+    ['ens', { ens: 5 }],
+    ['appName', { appName: 5 }],
+    ['apiKey', { apiKey: 5 }],
+    ['paymasterUrl', { paymasterUrl: 'http://pm.example' }],
+    ['paymasterContext', { paymasterContext: { token: '0x1' } }],
+  ])('an init with a bad %s is refused and builds no SDK', async (field, payload) => {
+    const ws = await start();
+
+    const reply = await init(ws, payload);
+
+    expect(reply).toMatchObject({ type: 'error', reason: expect.stringContaining(field) });
+    expect(host.textContent).toContain(reply.reason);
+    expect(created.appNames).toEqual([]);
+  });
+
+  it('a request whose method is not a non-empty string is refused and the wallet is not asked', async () => {
+    const asked = vi.fn(async () => null);
+    created.request = asked;
+    const ws = await start();
+    await init(ws, {});
+
+    await deliver(ws, { type: 'rpc_request', id: 'm1', method: 7, params: [] });
+    await deliver(ws, { type: 'rpc_request', id: 'm2', params: [] });
+
+    await vi.waitFor(async () => expect(await answers(ws, 'm2')).toHaveLength(1));
+    expect(await answers(ws, 'm1')).toEqual([
+      { type: 'rpc_response', id: 'm1', success: false, error: { code: -32600, message: expect.any(String) } },
+    ]);
+    expect(asked).not.toHaveBeenCalled();
+  });
+
+  it('a request with one params value, as `jaw rpc` sends it, reaches the wallet as the first param', async () => {
+    const asked = vi.fn(async () => null);
+    created.request = asked;
+    const ws = await start();
+    await init(ws, {});
+
+    await deliver(ws, { type: 'rpc_request', id: 'p1', method: 'wallet_sendCalls', params: { calls: [] } });
+
+    await vi.waitFor(() => expect(asked).toHaveBeenCalledWith({ method: 'wallet_sendCalls', params: [{ calls: [] }] }));
+  });
+
+  it('a request with no id is dropped without an answer', async () => {
+    const asked = vi.fn(async () => null);
+    created.request = asked;
+    const error = vi.spyOn(console, 'error').mockReturnValue();
+    const ws = await start();
+    await init(ws, {});
+    const sent = ws.sent.length;
+
+    await deliver(ws, { type: 'rpc_request', method: 'eth_chainId', params: [] });
+
+    expect(ws.sent).toHaveLength(sent);
+    expect(asked).not.toHaveBeenCalled();
+    expect(error).toHaveBeenCalled();
+    error.mockRestore();
+  });
+
+  it('a method the provider knows nothing about still reaches it, since the provider is the gate', async () => {
+    const asked = vi.fn(async () => '0x1');
+    created.request = asked;
+    const ws = await start();
+    await init(ws, {});
+
+    await deliver(ws, { type: 'rpc_request', id: 'u1', method: 'eth_whatever', params: [] });
+
+    await vi.waitFor(async () => expect(await answers(ws, 'u1')).toHaveLength(1));
+    expect(asked).toHaveBeenCalledWith({ method: 'eth_whatever', params: [] });
+  });
+
+  it('a frame over 1 MiB is dropped before it is read', async () => {
+    const error = vi.spyOn(console, 'error').mockReturnValue();
+    const ws = await start();
+    const sent = ws.sent.length;
+
+    await act(async () => {
+      await ws.onmessage!({ data: JSON.stringify({ type: 'ping', pad: 'x'.repeat(1_048_576) }) });
+    });
+
+    expect(ws.sent).toHaveLength(sent);
+    expect(error).toHaveBeenCalled();
+    error.mockRestore();
+  });
+
+  it('a frame just under the cap is still read', async () => {
+    const ws = await start();
+    const pad = 'x'.repeat(1_048_576 - 64);
+
+    await act(async () => {
+      await ws.onmessage!({ data: JSON.stringify({ type: 'ping', pad }) });
+    });
+
+    expect(ws.sent.at(-1)).toEqual({ type: 'pong' });
+  });
+});
