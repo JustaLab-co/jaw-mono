@@ -3,6 +3,7 @@ import type { AddressInfo } from 'node:net';
 import axios, { AxiosError, type AxiosAdapter, type InternalAxiosRequestConfig } from 'axios';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
+import { backendInstance } from './axiosController.js';
 import { restCall } from './rest.js';
 import { setDappOrigin } from '../dappOrigin.js';
 
@@ -249,5 +250,25 @@ describe('restCall host selection', () => {
         await lookup(false, 'not a url');
 
         expect(dappHeader()).toBeUndefined();
+    });
+});
+
+describe('the User-Agent the backend instance sends', () => {
+    async function ping(adapter?: 'fetch') {
+        await backendInstance(false, serverUrl).request({ url: '/ping', adapter });
+        return last().headers['user-agent'];
+    }
+
+    it('asks fetch for no User-Agent from the fetch adapter', async () => {
+        const fetchSpy = vi.spyOn(globalThis, 'fetch');
+
+        const userAgent = await ping('fetch');
+
+        expect((fetchSpy.mock.calls[0][0] as Request).headers.has('user-agent')).toBe(false);
+        expect(userAgent).not.toMatch(/^axios\//);
+    });
+
+    it('keeps the axios User-Agent from the http adapter', async () => {
+        expect(await ping()).toMatch(/^axios\/\d/);
     });
 });
