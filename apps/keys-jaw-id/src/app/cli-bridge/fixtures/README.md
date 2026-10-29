@@ -2,7 +2,7 @@
 
 Each file here is one message a client really sends to this page, kept as the client sent it. `wire-contract.test.tsx` replays every file through the real page, so a change that stops the page from understanding a shape an installed client still sends fails the build.
 
-A file holds `sentBy`, the clients and versions known to send the shape, and one of:
+A file holds `sentBy`, the clients and versions known to send the shape in words, and `clients`, the same list as data: one `{ "family": "cli" | "mcp", "versions": "<range>", "current": true | false }` per client. `current` is true when the build on jaw-agent's main sends exactly this shape, and jaw-agent fits every frame its clients build to one current fixture of that family. A shape only an old version sends is never marked current. Each family has a current fixture for every frame type and for the link. Then one of:
 
 - `frame`: the decrypted inner frame (`init`, `rpc_request`, `shutdown`), with an `expect` block saying what the page must do with it. For an `init`: `appName`, `defaultChainId`, `apiKey` and `ens` and `paymasters` as the SDK receives them, `readyApiKey` when the page hands a key back, and `client` when the page reports it. For an `rpc_request`: `params`, what the provider receives.
 - `fragment` and `query`: the link fragment (`pk=<hex>`, plus `&s=<secret>` for clients that prove the link secret) and the query (`session=<id>&relay=<url>`) the client puts on the page URL. `expect.proof` says whether the key exchange must carry a proof.
