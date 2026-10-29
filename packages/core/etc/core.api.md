@@ -172,6 +172,9 @@ export interface BaseUIRequest {
 }
 
 // @public
+export const BRIDGE_APP_NAME_MAX_LENGTH = 64;
+
+// @public
 export function buildErc20PaymasterContext(estimate: TokenEstimate): {
     token: Address_2;
     gas: string;
@@ -1191,6 +1194,9 @@ export type RPCResponseNativeCurrency = {
     symbol?: string;
     decimal?: number;
 };
+
+// @public
+export function sanitizeBridgeAppName(raw: string, maxLength?: number): string;
 
 // @public (undocumented)
 export const SDK_NAME: string;
