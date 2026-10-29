@@ -37,6 +37,8 @@ export interface PasskeyRegistrationRequest {
     credentialId: string;
     publicKey: string;
     displayName: string;
+    /** Recipe version of the account the passkey creates; the backend derives the record from it. Absent = 1. */
+    accountVersion?: number;
 }
 
 export interface LookupPasskeysRequest {

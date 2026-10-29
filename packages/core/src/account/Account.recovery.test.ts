@@ -257,8 +257,8 @@ describe('setupRecovery', () => {
 
         expect(backend.submitted).toEqual([]);
         expect(sentCalls().map((call) => call.functionName)).toEqual(['addRecovery', 'setRecoveryThreshold']);
-        const [, , , , , , localAccount] = vi.mocked(sendTransaction).mock.calls[0];
-        expect(localAccount).toBe(OWNER);
+        const [, , , , , , ownerSetup] = vi.mocked(sendTransaction).mock.calls[0];
+        expect(ownerSetup).toEqual({ kind: 'eip7702', localAccount: OWNER });
     });
 
     it('refuses a connected chain the backend does not support, before anything is signed or sent', async () => {

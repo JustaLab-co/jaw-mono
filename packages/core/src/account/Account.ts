@@ -14,6 +14,7 @@ import {
     getBundlerClient,
     createSmartAccountEip7702,
     type BundledTransactionResult,
+    type OwnerSetup,
 } from './smartAccount.js';
 import {
     storeCallStatus,
@@ -23,11 +24,17 @@ import {
     type CallStatusResponse,
 } from '../rpc/wallet_sendCalls.js';
 import { type JustanAccountImplementation, sign as signWithOwner } from './toJustanAccount.js';
-import { type AccountRecord, deriveAccountRecordV1, resolveAccountRecord } from './accountRecord.js';
+import {
+    type AccountRecord,
+    deriveNewAccountRecord,
+    isAccountRecordOf,
+    resolveAccountRecord,
+} from './accountRecord.js';
 import { jawHttp } from '../utils/jawHttp.js';
 import { withoutApiKey } from '../utils/redact.js';
 import {
     PasskeyManager,
+    PasskeyLookupError,
     type PasskeyAccount,
     type NativePasskeyGetFn,
     type NativePasskeyCreateFn,
@@ -198,6 +205,8 @@ export class Account {
      * the recovery manager's owner proof.
      */
     private readonly _owner: WebAuthnAccount | LocalAccount;
+    /** The owners this account's own sends add when it lacks them; none for a passkey account. */
+    private readonly _ownerSetup: OwnerSetup | undefined;
 
     /**
      * Private constructor - use static factory methods to create instances
@@ -216,6 +225,11 @@ export class Account {
         this._apiKey = apiKey;
         this._localAccount = localAccount ?? null;
         this._owner = owner;
+        this._ownerSetup = localAccount
+            ? { kind: 'eip7702', localAccount }
+            : owner.type === 'local'
+              ? { kind: 'localKey' }
+              : undefined;
     }
 
     // ============================================
@@ -267,6 +281,33 @@ export class Account {
             derived.filter((entry): entry is NonNullable<typeof entry> => entry !== null)
         );
         return accounts;
+    }
+
+    /**
+     * The backend's record of the account a credential signs for, for a
+     * credential this device has no entry for. The backend's record is the only
+     * way to find the account: deriving one from the key gives the v1 address,
+     * which for a newer account is a different, empty one. A failed lookup, or a
+     * record that is not this key's, throws so the user can retry.
+     */
+    private static async fetchAccountRecordOf(
+        passkeyManager: PasskeyManager,
+        credentialId: string,
+        publicKey: Hex
+    ): Promise<AccountRecord> {
+        let fetched: AccountRecord;
+        try {
+            fetched = await passkeyManager.fetchAccountRecord(credentialId);
+        } catch (error) {
+            throw new PasskeyLookupError(
+                `Failed to look up the account for this passkey: ${error instanceof Error ? error.message : 'Unknown error'}`,
+                error
+            );
+        }
+        if (!isAccountRecordOf(fetched, publicKey)) {
+            throw new PasskeyLookupError('The account returned for this passkey does not belong to it');
+        }
+        return resolveAccountRecord(fetched, publicKey);
     }
 
     /**
@@ -461,7 +502,11 @@ export class Account {
 
         const chain = Account.buildChainConfig(chainId, apiKey, paymasterUrl, paymasterContext);
         const bundlerClient = getBundlerClient(chain);
-        const record = resolveAccountRecord(passkeyAccount?.account, publicKey);
+        // An entry stored before records existed derives its v1 record; a
+        // credential with no entry on this device asks the backend.
+        const record = passkeyAccount
+            ? resolveAccountRecord(passkeyAccount.account, publicKey)
+            : await Account.fetchAccountRecordOf(passkeyManager, credentialId, publicKey);
         const smartAccount = await createSmartAccount(
             webAuthnAccount,
             bundlerClient as JustanAccountImplementation['client'],
@@ -523,7 +568,7 @@ export class Account {
         const chain = Account.buildChainConfig(chainId, apiKey, paymasterUrl, paymasterContext);
 
         const bundlerClient = getBundlerClient(chain);
-        const record = deriveAccountRecordV1(publicKey);
+        const record = deriveNewAccountRecord(publicKey);
         const smartAccount = await createSmartAccount(
             webAuthnAccount,
             bundlerClient as JustanAccountImplementation['client'],
@@ -574,15 +619,11 @@ export class Account {
 
         const chain = Account.buildChainConfig(chainId, apiKey, paymasterUrl, paymasterContext);
 
-        // A failed lookup falls back to deriving the record, which is only safe
-        // while no account rotates: see resolveAccountRecord.
-        let fetched: AccountRecord | undefined;
-        try {
-            fetched = await passkeyManager.fetchAccountRecord(importResult.credential.id);
-        } catch {
-            fetched = undefined;
-        }
-        const record = resolveAccountRecord(fetched, importResult.credential.publicKey);
+        const record = await Account.fetchAccountRecordOf(
+            passkeyManager,
+            importResult.credential.id,
+            importResult.credential.publicKey
+        );
 
         const bundlerClient = getBundlerClient(chain);
         const smartAccount = await createSmartAccount(
@@ -931,13 +972,13 @@ export class Account {
 
         // If using JAW ERC-20 paymaster, prepend approval call if needed
         const paymaster = this.resolveEffectivePaymaster(paymasterUrlOverride, paymasterContextOverride);
-        const localAccount = isOverride ? undefined : (this._localAccount ?? undefined);
+        const ownerSetup = isOverride ? undefined : this._ownerSetup;
         const approvalCall = await this.createErc20ApprovalCall(
             paymaster.url,
             paymaster.context,
             formattedCalls,
             smartAccount,
-            localAccount
+            ownerSetup
         );
         const finalCalls = approvalCall ? [approvalCall, ...formattedCalls] : formattedCalls;
 
@@ -948,7 +989,7 @@ export class Account {
             paymaster.url,
             paymaster.context,
             this._apiKey,
-            localAccount
+            ownerSetup
         );
     }
 
@@ -996,8 +1037,8 @@ export class Account {
 
         const paymaster = this.resolveEffectivePaymaster(paymasterUrlOverride, paymasterContextOverride);
 
-        // Don't pass localAccount when overriding address — target is a standard smart account, not EIP-7702
-        const localAccount = isOverride ? undefined : (this._localAccount ?? undefined);
+        // No owner setup when overriding the address: the target is another account, not this one
+        const ownerSetup = isOverride ? undefined : this._ownerSetup;
 
         let result: BundledTransactionResult;
 
@@ -1025,7 +1066,7 @@ export class Account {
                 paymaster.context,
                 [permissionCall],
                 smartAccount,
-                localAccount
+                ownerSetup
             );
 
             result = await sendSmartAccountCallsWithPermission(
@@ -1036,19 +1077,19 @@ export class Account {
                 this._apiKey,
                 paymaster.url,
                 paymaster.context,
-                localAccount,
+                ownerSetup,
                 approvalCall ?? undefined,
                 permissionCall,
                 options.onSigned
             );
         } else {
-            // Standard execution (EIP-7702 handled inside sendSmartAccountCalls)
+            // Standard execution (owner setup handled inside sendSmartAccountCalls)
             const approvalCall = await this.createErc20ApprovalCall(
                 paymaster.url,
                 paymaster.context,
                 formattedCalls,
                 smartAccount,
-                localAccount
+                ownerSetup
             );
             const finalCalls = approvalCall ? [approvalCall, ...formattedCalls] : formattedCalls;
             result = await sendSmartAccountCalls(
@@ -1057,7 +1098,7 @@ export class Account {
                 this._chain,
                 paymaster.url,
                 paymaster.context,
-                localAccount,
+                ownerSetup,
                 options?.onSigned
             );
         }
@@ -1790,7 +1831,7 @@ export class Account {
         paymasterContext?: Record<string, unknown>,
         calls?: Array<{ to: Address; value?: bigint; data?: Hex }>,
         smartAccount?: SmartAccount,
-        localAccount?: LocalAccount
+        ownerSetup?: OwnerSetup
     ): Promise<{ to: Address; value?: bigint; data: Hex } | null> {
         const account = smartAccount ?? this._smartAccount;
         // Only add approval if using JAW ERC-20 paymaster
@@ -1845,14 +1886,14 @@ export class Account {
                 };
 
                 // Include dummy approval in estimation to get accurate gas limits,
-                // and let the send's own preparation add what it would add: on a
-                // 7702 account not yet owning the permission manager that is an
-                // extra owner-setup call, whose gas the ceiling has to cover too.
+                // and let the send's own preparation add what it would add: on an
+                // account lacking an owner its setup adds (7702 or local key), the
+                // owner-setup calls, whose gas the ceiling has to cover too.
                 const { calls: callsWithApproval, authorization } = await prepareCallsForExecution(
                     account,
                     [dummyApprovalCall, ...calls],
                     this._chain,
-                    localAccount
+                    ownerSetup
                 );
 
                 // Prepare a UserOp to get gas estimates
