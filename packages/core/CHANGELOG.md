@@ -1,3 +1,13 @@
+## 1.10.0 (2026-10-29)
+
+### 🚀 Features
+
+- **core:** export the bridge app name sanitizer ([#601](https://github.com/JustaLab-co/jaw-mono/pull/601))
+
+### ❤️ Thank You
+
+- Mariano Aguero
+
 ## 1.9.0 (2026-10-27)
 
 ### 🚀 Features
