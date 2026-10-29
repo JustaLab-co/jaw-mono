@@ -1,8 +1,15 @@
 {
-  "sentBy": ["@jaw.id/cli current (jaw-agent)"],
+  "sentBy": ["@jaw.id/cli >= the release after 0.7.2"],
   "frame": {
     "type": "init",
-    "client": "jaw-cli/0.7.2",
+    "client": "jaw-cli/0.8.0",
     "chainId": 84532
+  },
+  "expect": {
+    "appName": "JAW CLI",
+    "defaultChainId": 84532,
+    "apiKey": "workspace-key",
+    "readyApiKey": "workspace-key",
+    "client": "jaw-cli/0.8.0"
   }
 }

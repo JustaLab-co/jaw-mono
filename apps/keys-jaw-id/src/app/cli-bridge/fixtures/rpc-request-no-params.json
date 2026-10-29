@@ -1,8 +1,11 @@
 {
-  "sentBy": ["@jaw.id/cli 0.4.0 to 0.7.2", "@jaw.id/cli current (jaw-agent)"],
+  "sentBy": ["@jaw.id/cli 0.4.0 to 0.7.2", "@jaw.id/cli >= the release after 0.7.2"],
   "frame": {
     "type": "rpc_request",
     "id": "c2d8f7a1-3b65-4e0c-a7d9-81f4e6b2c905",
     "method": "eth_chainId"
+  },
+  "expect": {
+    "params": []
   }
 }

@@ -1,5 +1,5 @@
 {
-  "sentBy": ["@jaw.id/cli 0.4.0 to 0.7.2", "@jaw.id/cli current (jaw-agent)"],
+  "sentBy": ["@jaw.id/cli 0.4.0 to 0.7.2", "@jaw.id/cli >= the release after 0.7.2"],
   "frame": {
     "type": "rpc_request",
     "id": "7a3c9e52-1d44-4b9a-8f10-5e2b6a9c0d33",
@@ -14,5 +14,19 @@
         }
       ]
     }
+  },
+  "expect": {
+    "params": [
+      {
+        "version": "2.0.0",
+        "chainId": "0x14a34",
+        "calls": [
+          {
+            "to": "0x2222222222222222222222222222222222222222",
+            "value": "0x0"
+          }
+        ]
+      }
+    ]
   }
 }

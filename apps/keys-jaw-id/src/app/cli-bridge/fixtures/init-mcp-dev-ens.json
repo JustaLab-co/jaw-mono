@@ -1,10 +1,18 @@
 {
-  "sentBy": ["@jaw-mono/mcp (jaw-agent apps/mcp)"],
+  "sentBy": ["@jaw-mono/mcp images built after jaw-agent #17 and #18"],
   "frame": {
     "type": "init",
     "chainId": 84532,
     "appName": "Cursor (via JAW MCP)",
     "client": "jaw-mcp/dev",
     "ens": "alice.jaw.eth"
+  },
+  "expect": {
+    "appName": "Cursor (via JAW MCP)",
+    "defaultChainId": 84532,
+    "apiKey": "workspace-key",
+    "readyApiKey": "workspace-key",
+    "ens": "alice.jaw.eth",
+    "client": "jaw-mcp/dev"
   }
 }

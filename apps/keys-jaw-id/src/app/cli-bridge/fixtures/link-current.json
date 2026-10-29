@@ -1,4 +1,8 @@
 {
-  "sentBy": ["@jaw.id/cli current (jaw-agent)", "@jaw-mono/mcp (jaw-agent apps/mcp)"],
-  "fragment": "pk=3059301306072a8648ce3d020106082a8648ce3d03010703420004cab137bf7f54f6ac3fea9f37d6403be9cbc37ebd44c4e23f07149fc9c5d1ae585444f3b600c98aa9501f01c0bc837afee3b47d45629df87341689d7d52a0fd7a&s=BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc"
+  "sentBy": ["@jaw.id/cli >= the release after 0.7.2", "@jaw-mono/mcp images built after jaw-agent #17 and #18"],
+  "query": "session=0b5d1f0e-6c1a-4a0e-9d52-2f6d8c1a7e11&relay=wss%3A%2F%2Frelay.example.test",
+  "fragment": "pk=3059301306072a8648ce3d020106082a8648ce3d03010703420004ea3b7f166d88227c604e915437649c9e0fe893fd09570322342c6e73fce83b9b1ba974e6bf10c70c5141fb47913e47e89ec177056f8f8291dc69decfa25c719a&s=BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc",
+  "expect": {
+    "proof": true
+  }
 }

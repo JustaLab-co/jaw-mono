@@ -1,10 +1,17 @@
 {
-  "sentBy": ["@jaw.id/cli current (jaw-agent)"],
+  "sentBy": ["@jaw.id/cli >= the release after 0.7.2"],
   "frame": {
     "type": "init",
-    "client": "jaw-cli/0.7.2",
+    "client": "jaw-cli/0.8.0",
     "apiKey": "fake-api-key",
     "chainId": 84532,
     "ens": "alice.jaw.eth"
+  },
+  "expect": {
+    "appName": "JAW CLI",
+    "defaultChainId": 84532,
+    "apiKey": "fake-api-key",
+    "ens": "alice.jaw.eth",
+    "client": "jaw-cli/0.8.0"
   }
 }
