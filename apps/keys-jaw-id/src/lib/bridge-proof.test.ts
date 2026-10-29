@@ -1,37 +1,43 @@
 import { describe, expect, it } from 'vitest';
-import { keyProof, parseLinkSecret } from './bridge-proof';
+import { keyProof, readLink } from './bridge-proof';
 
-// 32 bytes of 0x07, and its proof for session-1 and public key 04abcd, computed with Node's createHmac.
+// 32 bytes of 0x07. The same vector is pinned in jaw-agent's agent package test,
+// computed there and here with Node's createHmac.
 const SECRET = 'BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc';
-const PROOF = '526ecccfc6968475c3e156cba183d7b8cdef3cd7bfc47006538b06a8ee701d23';
+const PROOF = '0a5a8276cde5ae4600cb3ba7bb40c1f3718c2ddf26e7ad98d8b8eaf91c9619b4';
+const SECRET_BYTES = new Uint8Array(32).fill(7);
 
 describe('keyProof', () => {
   it('matches the vector computed outside this codebase', async () => {
-    const secret = parseLinkSecret(SECRET) as Uint8Array;
-    expect(await keyProof(secret, 'session-1', '04abcd')).toBe(PROOF);
+    expect(await keyProof(SECRET_BYTES, 'session-1', '04aaaa', '04abcd')).toBe(PROOF);
   });
 
-  it('changes with the session and with the public key', async () => {
-    const secret = parseLinkSecret(SECRET) as Uint8Array;
-    expect(await keyProof(secret, 'session-2', '04abcd')).not.toBe(PROOF);
-    expect(await keyProof(secret, 'session-1', '04abce')).not.toBe(PROOF);
+  it('changes with the session, the client key and the page key', async () => {
+    expect(await keyProof(SECRET_BYTES, 'session-2', '04aaaa', '04abcd')).not.toBe(PROOF);
+    expect(await keyProof(SECRET_BYTES, 'session-1', '04aaab', '04abcd')).not.toBe(PROOF);
+    expect(await keyProof(SECRET_BYTES, 'session-1', '04aaaa', '04abce')).not.toBe(PROOF);
   });
 });
 
-describe('parseLinkSecret', () => {
-  it('is undefined when the link carries no secret', () => {
-    expect(parseLinkSecret(null)).toBeUndefined();
+describe('readLink', () => {
+  it('reads the key of a link with no secret', () => {
+    expect(readLink('pk=04aa')).toEqual({ kind: 'ok', pk: '04aa', secret: undefined });
   });
 
-  it('decodes 32 bytes of unpadded base64url', () => {
-    expect(parseLinkSecret(SECRET)).toEqual(new Uint8Array(32).fill(7));
+  it('reads 32 bytes of unpadded base64url', () => {
+    expect(readLink(`pk=04aa&s=${SECRET}`)).toEqual({ kind: 'ok', pk: '04aa', secret: SECRET_BYTES });
   });
 
-  it('decodes the url-safe alphabet', () => {
+  it('reads the url-safe alphabet', () => {
     const bytes = new Uint8Array(32).fill(0xfb);
     const encoded = Buffer.from(bytes).toString('base64url');
     expect(encoded).toMatch(/[-_]/);
-    expect(parseLinkSecret(encoded)).toEqual(bytes);
+    expect(readLink(`pk=04aa&s=${encoded}`)).toEqual({ kind: 'ok', pk: '04aa', secret: bytes });
+  });
+
+  it('is gone when the link has no key', () => {
+    expect(readLink('')).toEqual({ kind: 'gone' });
+    expect(readLink(`s=${SECRET}`)).toEqual({ kind: 'gone' });
   });
 
   it.each([
@@ -41,7 +47,8 @@ describe('parseLinkSecret', () => {
     ['padded', SECRET + '='],
     ['standard base64 characters', SECRET.slice(0, -1) + '+'],
     ['other characters', SECRET.slice(0, -1) + '!'],
-  ])('is invalid when %s', (_, s) => {
-    expect(parseLinkSecret(s)).toBe('invalid');
+    ['non-canonical trailing bits', SECRET.slice(0, -1) + 'x'],
+  ])('is damaged when the secret is %s', (_, s) => {
+    expect(readLink(`pk=04aa&s=${encodeURIComponent(s)}`)).toEqual({ kind: 'damaged' });
   });
 });

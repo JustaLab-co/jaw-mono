@@ -5,7 +5,7 @@ import { useEffect, useState, Suspense, useRef, useCallback } from 'react';
 import { JAW, Mode, getSupportedChains } from '@jaw.id/core';
 import { ReactUIHandler } from '@jaw.id/ui';
 import { MAX_FRAME_BYTES, parseInit, parseRequest } from '../../lib/bridge-frames';
-import { keyProof, parseLinkSecret } from '../../lib/bridge-proof';
+import { keyProof, readLink, type BridgeLink } from '../../lib/bridge-proof';
 import { resolveBridgeApiKey } from '../../lib/cli-api-key';
 import { DEFAULT_BRIDGE_APP_NAME, resolveBridgeAppName } from '../../lib/bridge-app-name';
 import {
@@ -102,34 +102,18 @@ function CLIBridgeContent() {
   const sessionId = replaced ? null : searchParams.get('session');
   const relayUrl = replaced ? null : searchParams.get('relay');
 
-  // Read CLI public key from URL fragment (use ref to survive React Strict Mode double-invoke)
-  const cliPublicKeyRef = useRef<string | null>(null);
+  // The fragment is read once and stripped, so the first read lives in a ref to survive Strict Mode's second effect run.
+  const linkRef = useRef<BridgeLink | null>(null);
   const [cliPublicKeyHex, setCliPublicKeyHex] = useState<string | null>(null);
-  /** The link secret, kept out of state so it is never rendered. Undefined when the link has none. */
-  const linkSecretRef = useRef<Uint8Array | undefined>(undefined);
 
   useEffect(() => {
-    if (cliPublicKeyRef.current) {
-      // Already read on a previous effect invocation (Strict Mode)
-      setCliPublicKeyHex(cliPublicKeyRef.current);
-      return;
-    }
-    const hash = window.location.hash.slice(1);
-    const hashParams = new URLSearchParams(hash);
-    const pk = hashParams.get('pk');
-    const linkSecret = parseLinkSecret(hashParams.get('s'));
-    if (linkSecret === 'invalid') {
-      setState('error');
-      setError(LINK_DAMAGED);
-    } else if (pk) {
-      cliPublicKeyRef.current = pk;
-      linkSecretRef.current = linkSecret;
-      setCliPublicKeyHex(pk);
-      window.history.replaceState(null, '', window.location.pathname + window.location.search);
+    const link = (linkRef.current ??= readLink(window.location.hash.slice(1)));
+    window.history.replaceState(null, '', window.location.pathname + window.location.search);
+    if (link.kind === 'ok') {
+      setCliPublicKeyHex(link.pk);
     } else {
-      // The key is stripped once read, so a reload or a second open has none.
       setState('error');
-      setError(LINK_GONE);
+      setError(link.kind === 'damaged' ? LINK_DAMAGED : LINK_GONE);
     }
   }, []);
 
@@ -177,8 +161,8 @@ function CLIBridgeContent() {
 
         sharedSecretRef.current = sharedSecret;
 
-        const linkSecret = linkSecretRef.current;
-        const proof = linkSecret && (await keyProof(linkSecret, sessionId, browserPublicKeyHex));
+        const linkSecret = linkRef.current?.kind === 'ok' ? linkRef.current.secret : undefined;
+        const proof = linkSecret && (await keyProof(linkSecret, sessionId, cliPublicKeyHex, browserPublicKeyHex));
         if (cancelled) return;
 
         // Connect to relay
