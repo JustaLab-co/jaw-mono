@@ -259,7 +259,7 @@ function floorAmount(exact: string): string {
 }
 
 const receivedDeltas = (receive: Received): AssetDelta[] =>
-  receive.kind === 'minimum' && receive.amount.token.known
+  receive.amount.token.known
     ? sentDeltas(receive.amount).map((delta) => ({
         ...delta,
         direction: 'in',
@@ -267,9 +267,7 @@ const receivedDeltas = (receive: Received): AssetDelta[] =>
       }))
     : [];
 
-const receivedChainId = (receive: Received) => (receive.kind === 'minimum' ? receive.amount.chainId : receive.chainId);
-
-/** A token the amount column cannot scale, or whose amount a swap on the destination sets. */
+/** A token the amount column cannot scale. */
 function PlainRow({
   chainId,
   token,
@@ -314,11 +312,11 @@ function BridgeColumns({
 }) {
   const icons = useChainIcons(apiKey);
   const { send, receive, provider, otherRecipient } = bridge;
-  const crossChain = !!receive && receivedChainId(receive) !== send.chainId;
+  const crossChain = !!receive && receive.amount.chainId !== send.chainId;
   const badge = (label: ChainLabel | undefined, chainId: number) =>
     crossChain && label ? { name: label.name, icon: icons[chainId] } : undefined;
   const origin = badge(bridge.origin, send.chainId);
-  const destination = receive && receivedChainId(receive);
+  const destination = receive?.amount.chainId;
 
   return (
     <div className="flex items-stretch gap-3">
@@ -341,12 +339,7 @@ function BridgeColumns({
           chainId={destination}
           nativeSymbol={bridge.destination.nativeSymbol}
         >
-          {receive.kind === 'swap' && (
-            <PlainRow chainId={destination} token={receive.token} chain={badge(bridge.destination, destination)}>
-              <span className="text-warning text-body-xs">Amount set by a swap on {bridge.destination.name}</span>
-            </PlainRow>
-          )}
-          {receive.kind === 'minimum' && !receive.amount.token.known && (
+          {!receive.amount.token.known && (
             <PlainRow chainId={destination} token={receive.amount.token} chain={badge(bridge.destination, destination)}>
               <span className="text-value text-positive break-all font-mono">
                 ≥ <SubText>{`${receive.amount.amount} base units`}</SubText>

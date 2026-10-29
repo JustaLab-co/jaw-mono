@@ -18,15 +18,7 @@ import {
 } from 'viem';
 import { JAW_FEE_RECIPIENT, type AcrossContracts } from './contracts';
 import type { BridgeContracts } from './table';
-import {
-  pinnedToken,
-  tokenAmount,
-  tokenOf,
-  type BridgeCall,
-  type Received,
-  type TokenAmount,
-  type Unreadable,
-} from './view';
+import { pinnedToken, tokenAmount, type BridgeCall, type Received, type TokenAmount, type Unreadable } from './view';
 
 const DEPOSIT_ABI = parseAbi([
   'function deposit(bytes32 depositor, bytes32 recipient, bytes32 inputToken, bytes32 outputToken, uint256 inputAmount, uint256 outputAmount, uint256 destinationChainId, bytes32 exclusiveRelayer, uint32 quoteTimestamp, uint32 fillDeadline, uint32 exclusivityParameter, bytes message)',
@@ -93,7 +85,7 @@ export type AcrossDeposit = {
 type Call = { target: Address; callData: Hex; value: bigint };
 type Program = { calls: readonly Call[]; fallbackRecipient: Address };
 type Fee = { recipient: Address; amount: bigint };
-type Payout = { recipient: Address; received: Address; fee?: Fee; swapped?: true; minimum?: bigint };
+type Payout = { recipient: Address; received: Address; fee?: Fee; minimum?: bigint };
 type Fields = {
   depositor: Address;
   recipient: Address;
@@ -228,20 +220,13 @@ function depositOf(
 ): AcrossDeposit | undefined {
   const { destinationChainId, outputAmount } = fields;
   const payout = payoutOf(fields, destination);
-  if (!payout || (payout.fee && payout.fee.amount > outputAmount)) return undefined;
+  if (!payout) return undefined;
+  // A swap payout's minimum is in the bought token and already net of its fee.
+  if (payout.minimum === undefined && payout.fee && payout.fee.amount > outputAmount) return undefined;
 
   const { fee, received } = payout;
-  const receive: Received = payout.swapped
-    ? { kind: 'swap', chainId: destinationChainId, token: tokenOf(contracts, destinationChainId, received) }
-    : {
-        kind: 'minimum',
-        amount: tokenAmount(
-          contracts,
-          destinationChainId,
-          received,
-          payout.minimum ?? outputAmount - (fee?.amount ?? 0n)
-        ),
-      };
+  const minimum = payout.minimum ?? outputAmount - (fee?.amount ?? 0n);
+  const receive: Received = { kind: 'minimum', amount: tokenAmount(contracts, destinationChainId, received, minimum) };
   return {
     kind: 'deposit',
     provider: 'across',
@@ -335,41 +320,71 @@ function unwrapPayout({ calls, fallbackRecipient }: Program, weth: Address, acro
   return emitsOnly(calls.slice(i + 2), across) ? { recipient, received: zeroAddress, fee } : undefined;
 }
 
-// Drain to the pinned router, its `execute`, drain the bought token [and the bridged one left], emits.
-// The router sets the amount, so any other router could keep the whole bridged amount.
+// Drain to the pinned router, its `execute`, [fee transfer of the bought token], drain the bought token
+// [and the bridged one left], emits. The router sets the amount, so any other router could keep the
+// whole bridged amount.
 function swapPayout({ calls, fallbackRecipient }: Program, bridged: Address, amount: bigint, across: AcrossContracts) {
   const drained = drainedTo(calls[0], bridged, across);
   if (!drained || !calls[1] || !isAddressEqual(calls[1].target, drained)) return undefined;
   const router = required(across.swapRouter);
   if (drained !== router) return undefined;
-  const bought = drainOf(calls[2], across);
-  if (!bought || isAddressEqual(bought.token, bridged)) return undefined;
-  if (!routerSwaps(calls[1], router, { from: bridged, to: bought.token, amount }, across)) return undefined;
+  const after = boughtAfterSwap(calls, 2, across);
+  if (!after || isAddressEqual(after.bought.token, bridged)) return undefined;
+  const { bought, fee, next } = after;
+  const floor = routerSwaps(calls[1], router, { from: bridged, to: bought.token, amount }, across);
+  if (floor === undefined) return undefined;
+  const minimum = netOfFee(floor, fee);
+  if (minimum === undefined) return undefined;
   const { token, destination: recipient } = bought;
   if (fallbackRecipient !== zeroAddress && !isAddressEqual(fallbackRecipient, recipient)) return undefined;
-  const i = drainedTo(calls[3], bridged, across) === recipient ? 4 : 3;
-  return emitsOnly(calls.slice(i), across) ? { recipient, received: token, swapped: true as const } : undefined;
+  const i = next + (drainedTo(calls[next], bridged, across) === recipient ? 1 : 0);
+  return emitsOnly(calls.slice(i), across) ? { recipient, received: token, fee, minimum } : undefined;
 }
 
-// Approve the pinned LiFi diamond, its swap of the whole bridged amount paid to the handler, drain the
-// bought token and the bridged one the diamond hands back, emits. LiFi's allow list governs the exchange call and the
-// diamond reverts below minAmountOut, so only that floor is promised and callTo, approveTo and the
-// exchange calldata are not read.
+// Approve the pinned LiFi diamond, its swap of the whole bridged amount paid to the handler, [fee transfer
+// of the bought token], drain the bought token and the bridged one the diamond hands back, emits. LiFi's
+// allow list governs the exchange call and the diamond reverts below minAmountOut, so only that floor is
+// promised and callTo, approveTo and the exchange calldata are not read.
 function lifiPayout({ calls, fallbackRecipient }: Program, bridged: Address, amount: bigint, across: AcrossContracts) {
   const spender = approvedTo(calls[0], bridged);
   if (!spender || !calls[1] || !isAddressEqual(calls[1].target, spender)) return undefined;
   if (!isAddressEqual(spender, required(across.lifiDiamond))) return undefined;
   const swap = lifiSwap(calls[1]);
-  const bought = drainOf(calls[2], across);
-  if (!swap || !bought || bought.token === zeroAddress || isAddressEqual(bought.token, bridged)) return undefined;
-  if (!isAddressEqual(swap.receiver, across.multicallHandler) || swap.minAmountOut === 0n) return undefined;
+  const after = boughtAfterSwap(calls, 2, across);
+  if (!swap || !after) return undefined;
+  const { bought, fee, next } = after;
+  if (bought.token === zeroAddress || isAddressEqual(bought.token, bridged)) return undefined;
+  if (!isAddressEqual(swap.receiver, across.multicallHandler)) return undefined;
   const { sendingAssetId, receivingAssetId, fromAmount } = swap.data;
   if (!isAddressEqual(sendingAssetId, bridged) || !isAddressEqual(receivingAssetId, bought.token)) return undefined;
   if (fromAmount !== amount) return undefined;
   const { token, destination: recipient } = bought;
   if (fallbackRecipient !== zeroAddress && !isAddressEqual(fallbackRecipient, recipient)) return undefined;
-  if (drainedTo(calls[3], bridged, across) !== recipient) return undefined;
-  return emitsOnly(calls.slice(4), across) ? { recipient, received: token, minimum: swap.minAmountOut } : undefined;
+  if (drainedTo(calls[next], bridged, across) !== recipient) return undefined;
+  const minimum = netOfFee(swap.minAmountOut, fee);
+  if (minimum === undefined) return undefined;
+  return emitsOnly(calls.slice(next + 1), across) ? { recipient, received: token, fee, minimum } : undefined;
+}
+
+// The fee comes out of what the swap returns, so the recipient gets at least the floor less the fee.
+// A zero floor leaves the swap without slippage protection. Nothing upstream bounds JAW's fee, so one
+// above 1% of the floor is unreadable.
+function netOfFee(floor: bigint, fee: Fee | undefined): bigint | undefined {
+  if (floor === 0n) return undefined;
+  if (!fee) return floor;
+  if (fee.amount >= floor) return undefined;
+  if (isAddressEqual(fee.recipient, JAW_FEE_RECIPIENT) && fee.amount * 100n > floor) return undefined;
+  return floor - fee.amount;
+}
+
+// The bought token's drain, after an optional transfer of that token to the fee recipient.
+function boughtAfterSwap(calls: readonly Call[], at: number, across: AcrossContracts) {
+  const drain = drainOf(calls[at], across);
+  if (drain) return { bought: drain, next: at + 1 };
+  const fee = calls[at] && feeTransfer(calls[at]);
+  const bought = fee && drainOf(calls[at + 1], across);
+  if (!fee || !bought || !isAddressEqual(calls[at].target, bought.token)) return undefined;
+  return { bought, fee, next: at + 2 };
 }
 
 function approvedTo(call: Call | undefined, token: Address): Address | undefined {
@@ -416,34 +431,38 @@ type Swap = { from: Address; to: Address; amount: bigint };
 // The router pays each step to the recipient in its inputs and keeps what no step spends, where
 // anyone can sweep it. So every step must swap the bridged token into the bought one and pay the
 // handler, and the steps must spend the whole bridged amount. Any other command is unreadable.
-// Uniswap appends a tag after the arguments, so trailing bytes are allowed.
-function routerSwaps(call: Call | undefined, router: Address, swap: Swap, across: AcrossContracts): boolean {
-  if (!call || call.value !== 0n || !isAddressEqual(call.target, router)) return false;
+// Uniswap appends a tag after the arguments, so trailing bytes are allowed. Returns the sum of the
+// steps' minimum outputs, the least the handler receives.
+function routerSwaps(call: Call | undefined, router: Address, swap: Swap, across: AcrossContracts) {
+  if (!call || call.value !== 0n || !isAddressEqual(call.target, router)) return undefined;
   const [commands, inputs] = decodeFunctionData({ abi: ROUTER_ABI, data: call.callData }).args;
   const steps = [...hexToBytes(commands)];
-  if (steps.length === 0 || steps.length !== inputs.length) return false;
+  if (steps.length === 0 || steps.length !== inputs.length) return undefined;
   let spent = 0n;
+  let floor = 0n;
   for (const [i, command] of steps.entries()) {
     const step = swapStep(command, inputs[i]);
-    if (!step || !isAddressEqual(step.recipient, across.multicallHandler)) return false;
-    if (!isAddressEqual(step.from, swap.from) || !isAddressEqual(step.to, swap.to)) return false;
+    if (!step || !isAddressEqual(step.recipient, across.multicallHandler)) return undefined;
+    if (!isAddressEqual(step.from, swap.from) || !isAddressEqual(step.to, swap.to)) return undefined;
     spent += step.amountIn;
+    floor += step.amountOutMin;
   }
-  return spent === swap.amount;
+  return spent === swap.amount ? floor : undefined;
 }
 
 // Inputs are read by offset, as the router reads them, so arguments after these five, which some
 // routers take, are allowed. A V3 path is a token and then a 3-byte fee and a token per pool.
 function swapStep(command: number, input: Hex) {
   if (command === 0x00) {
-    const [recipient, amountIn, , path, payerIsUser] = decodeAbiParameters(V3_SWAP, input);
+    const [recipient, amountIn, amountOutMin, path, payerIsUser] = decodeAbiParameters(V3_SWAP, input);
     if (payerIsUser || size(path) < 43 || (size(path) - 20) % 23 !== 0) return undefined;
-    return { recipient, amountIn, from: getAddress(slice(path, 0, 20)), to: getAddress(slice(path, -20)) };
+    const [from, to] = [getAddress(slice(path, 0, 20)), getAddress(slice(path, -20))];
+    return { recipient, amountIn, amountOutMin, from, to };
   }
   if (command === 0x08) {
-    const [recipient, amountIn, , path, payerIsUser] = decodeAbiParameters(V2_SWAP, input);
+    const [recipient, amountIn, amountOutMin, path, payerIsUser] = decodeAbiParameters(V2_SWAP, input);
     if (payerIsUser || path.length < 2) return undefined;
-    return { recipient, amountIn, from: path[0], to: path[path.length - 1] };
+    return { recipient, amountIn, amountOutMin, from: path[0], to: path[path.length - 1] };
   }
   if (command === 0x10) return v4Step(input);
   return undefined;
@@ -455,14 +474,14 @@ function swapStep(command: number, input: Hex) {
 function v4Step(input: Hex) {
   const [actions, params] = decodeAbiParameters(V4_SWAP, input);
   if (actions !== V4_ACTIONS || params.length !== 3) return undefined;
-  const [{ currencyIn, path, amountIn }] = decodeAbiParameters(V4_EXACT_IN, params[0]);
+  const [{ currencyIn, path, amountIn, amountOutMinimum }] = decodeAbiParameters(V4_EXACT_IN, params[0]);
   const [settled, settleAmount, payerIsUser] = decodeAbiParameters(V4_SETTLE, params[1]);
   const [taken, recipient, takeAmount] = decodeAbiParameters(V4_TAKE, params[2]);
   const last = path.at(-1);
   if (!last || path.some((hop) => !isAddressEqual(hop.hooks, zeroAddress) || hop.hookData !== '0x')) return undefined;
   if (!isAddressEqual(settled, currencyIn) || settleAmount !== 0n || payerIsUser) return undefined;
   if (!isAddressEqual(taken, last.intermediateCurrency) || takeAmount !== 0n) return undefined;
-  return { recipient, amountIn, from: currencyIn, to: last.intermediateCurrency };
+  return { recipient, amountIn, amountOutMin: amountOutMinimum, from: currencyIn, to: last.intermediateCurrency };
 }
 
 // emitData only logs swap metadata.

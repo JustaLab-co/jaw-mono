@@ -32,7 +32,5 @@ export class BridgeContracts {
 
 let snapshot: BridgeContracts | undefined;
 
-// A live table below this version is ignored, so bump it only when a synced address changes here.
-
 export const snapshotContracts = (): BridgeContracts =>
   (snapshot ??= new BridgeContracts({ version: 3, chains: BRIDGE_CHAINS }, 'snapshot'));

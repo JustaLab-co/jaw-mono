@@ -13,8 +13,8 @@ export type Token =
   | { address: Address; known: false };
 export type TokenAmount = { chainId: number; amount: bigint; token: Token };
 
-/** What arrives: at least an amount, or a token whose amount a swap on the destination sets. */
-export type Received = { kind: 'minimum'; amount: TokenAmount } | { kind: 'swap'; chainId: number; token: Token };
+/** What arrives: at least this amount. */
+export type Received = { kind: 'minimum'; amount: TokenAmount };
 
 export function pinnedToken(contracts: BridgeContracts, chainId: number, address: string): BridgeToken | undefined {
   return contracts.chain(chainId)?.tokens[getAddress(address)];

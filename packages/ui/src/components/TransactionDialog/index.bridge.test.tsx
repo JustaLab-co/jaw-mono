@@ -222,14 +222,10 @@ describe('TransactionDialog with a bridge deposit', () => {
     expect(column(root, 'You get via Across')).not.toContain('0.01');
   });
 
-  it('names the token of a swap on the destination and says the swap sets its amount, in yellow', () => {
+  it('names the token of a swap on the destination and the least of it the router floor promises', () => {
     const root = render([approve(SPOKE_POOL), ACROSS_CALLS.usdcToArb]);
-    const swapNote = [...root.querySelectorAll('.text-warning')].find((e) =>
-      e.textContent?.includes('Amount set by a swap on Arbitrum')
-    );
-    expect(swapNote).toBeDefined();
     expect(column(root, 'You get via Across')).toContain('0x912C...6548');
-    expect(column(root, 'You get via Across')).not.toContain('≥');
+    expect(column(root, 'You get via Across')).toContain('≥ 52534325335448453260 base units');
     expect(red(root)).toEqual([]);
   });
 
@@ -322,6 +318,19 @@ describe('TransactionDialog with a bridge deposit', () => {
     const root = render([approve(SPOKE_POOL), ACROSS_CALLS.prod], { assetPreviewError: true });
     expect(yellow(root)[0]).toContain('Could not simulate this transaction');
     expect(column(root, 'You get via Across')).toContain('≥ 9.9609');
+  });
+});
+
+describe('TransactionDialog with a destination swap that pays the JAW fee', () => {
+  it.each([
+    ['Uniswap', ACROSS_CALLS.usdcToNvdaFee, '≥ 12801829359864708 base units'],
+    ['LiFi', ACROSS_CALLS.usdcToNvdaLifiFee, '≥ 431045955026407396 base units'],
+  ])('reads as a bridge to Robinhood Chain through %s', (_, call, receive) => {
+    const root = render([approve(SPOKE_POOL), call]);
+    expect(title(root)).toBe('Bridge to Robinhood Chain');
+    expect(column(root, 'They get via Across')).toContain(receive);
+    expect(root.textContent).not.toContain(UNREADABLE);
+    expect(red(root)).toEqual([]);
   });
 });
 

@@ -203,28 +203,34 @@ describe('given the deposit call of a live Across quote', () => {
     });
   });
 
-  it('then a swap on Arbitrum into ARB reads the token and recipient but no amount', () => {
+  it('then a swap on Arbitrum into ARB reads the least ARB the router floor promises', () => {
     expect(readAcrossCall(contracts, ACROSS_CALLS.usdcToArb)).toEqual({
       kind: 'deposit',
       provider: 'across',
       send: usdc(8453, BASE_USDC, 10_000_000n),
       destinationChainId: 42161,
       recipient: ACCOUNT,
-      receive: { kind: 'swap', chainId: 42161, token: { address: ARB, known: false } },
+      receive: {
+        kind: 'minimum',
+        amount: { chainId: 42161, amount: 52_534_325_335_448_453_260n, token: { address: ARB, known: false } },
+      },
       fee: undefined,
       refundTo: ACCOUNT,
       fillDeadline: 1792683695,
     });
   });
 
-  it('then 3 USDC on Base into NVDA on Robinhood Chain reads the token and recipient but no amount', () => {
+  it('then 3 USDC on Base into NVDA on Robinhood Chain reads the least NVDA the router floor promises', () => {
     expect(readAcrossCall(contracts, ACROSS_CALLS.usdcToNvda)).toMatchObject({
       kind: 'deposit',
       provider: 'across',
       send: usdc(8453, BASE_USDC, 3_000_000n),
       destinationChainId: 4663,
       recipient: OTHER,
-      receive: { kind: 'swap', chainId: 4663, token: { address: NVDA, known: false } },
+      receive: {
+        kind: 'minimum',
+        amount: { chainId: 4663, amount: 12_947_686_322_874_098n, token: { address: NVDA, known: false } },
+      },
     });
   });
 
@@ -840,7 +846,7 @@ describe('given a periphery swapAndBridge, which swaps on the origin before it d
 });
 
 describe('given a destination swap through a router in the handler program', () => {
-  const swapRead = { kind: 'swap', chainId: 42161, token: { address: ARB, known: false } };
+  const swapRead = { kind: 'minimum', amount: { chainId: 42161, token: { address: ARB, known: false } } };
 
   it('then the bridged token left over may go back to the recipient or stay, and still reads', () => {
     const call = withProgram(ACROSS_CALLS.usdcToArb, (p) => p.calls.splice(3, 1));
@@ -918,7 +924,7 @@ describe('given an Across call that needs a table entry the table in use lacks',
 });
 
 describe('given the router steps of a destination swap', () => {
-  const swapRead = { kind: 'swap', chainId: 42161, token: { address: ARB, known: false } };
+  const swapRead = { kind: 'minimum', amount: { chainId: 42161, token: { address: ARB, known: false } } };
   const routerAbi = parseAbi([
     'function execute(bytes commands, bytes[] inputs)',
     'function execute(bytes commands, bytes[] inputs, uint256 deadline)',
@@ -962,7 +968,7 @@ describe('given the router steps of a destination swap', () => {
         input: encodeAbiParameters(v2Swap, [HANDLER, BRIDGED - half, 1n, [ARB_USDC, ARB], false]),
       });
     });
-    expect(readAcrossCall(contracts, call)).toMatchObject({ recipient: ACCOUNT, receive: swapRead });
+    expect(readAcrossCall(contracts, call)).toMatchObject({ recipient: ACCOUNT, receive: { amount: { amount: 2n } } });
   });
 
   const mutants: [string, (steps: Step[]) => void][] = [
@@ -976,6 +982,10 @@ describe('given the router steps of a destination swap', () => {
         }),
     ],
     ['a swap allowed to revert', (s) => void (s[0].command = 0x80)],
+    [
+      'a swap with no minimum output',
+      (s) => void (s[0].input = encodeAbiParameters(v3Swap, [HANDLER, BRIDGED, 0n, toArb, false])),
+    ],
     ['a swap paid by the user through Permit2', (s) => void (s[0] = v3(HANDLER, BRIDGED, toArb, true))],
     [
       'a swap into another token than the drained one',
@@ -997,7 +1007,7 @@ describe('given the router steps of a destination swap', () => {
 
 describe('given the Uniswap v4 swap of a destination program', () => {
   const USDG = getAddress('0x5fc5360d0400a0fd4f2af552add042d716f1d168');
-  const swapRead = { kind: 'swap', chainId: 4663, token: { address: NVDA, known: false } };
+  const swapRead = { kind: 'minimum', amount: { chainId: 4663, token: { address: NVDA, known: false } } };
   const routerAbi = parseAbi(['function execute(bytes commands, bytes[] inputs)']);
   const actionsAbi = parseAbiParameters('bytes actions, bytes[] params');
   const exactInAbi = parseAbiParameters(
@@ -1237,5 +1247,91 @@ describe('given the LiFi swap of a destination program', () => {
   ];
   it.each(mutants)('then %s is unreadable', (_, edit) => {
     expect(readAcrossCall(contracts, withCalls(edit))).toEqual(unreadable);
+  });
+});
+
+describe('given a destination swap that pays the JAW app fee in the bought token', () => {
+  const USDG = getAddress('0x5fc5360d0400a0fd4f2af552add042d716f1d168');
+  const LIFI_MINIMUM = 432_126_270_703_165_309n;
+  // amountOutMinimum of the quote's v4 swap.
+  const ROUTER_FLOOR = 12_833_914_145_227_777n;
+  const OTHER_FEE_RECIPIENT = getAddress('0x2222222222222222222222222222222222222222');
+  const swapFee = { chainId: 4663, amount: 32_084_785_363_069n, token: { address: NVDA, known: false } };
+  const lifiFee = { chainId: 4663, amount: 1_080_315_676_757_913n, token: { address: NVDA, known: false } };
+  const feeRead = (amount: typeof swapFee) => ({ amount, recipient: FEE_RECIPIENT, jaw: true });
+
+  describe('through Uniswap', () => {
+    const call = ACROSS_CALLS.usdcToNvdaFee;
+
+    it('then it reads as a deposit to the recipient with the fee and the router floor less the fee', () => {
+      expect(readAcrossCall(contracts, call)).toMatchObject({
+        kind: 'deposit',
+        recipient: OTHER,
+        receive: {
+          kind: 'minimum',
+          amount: { chainId: 4663, amount: ROUTER_FLOOR - swapFee.amount, token: { address: NVDA, known: false } },
+        },
+        fee: feeRead(swapFee),
+      });
+    });
+
+    it('then a JAW fee of 1% of the router floor reads, and one unit more is unreadable', () => {
+      const fee = (amount: bigint) =>
+        withProgram(call, (p) => void (p.calls[2] = transfer(NVDA, FEE_RECIPIENT, amount)));
+      expect(readAcrossCall(contracts, fee(ROUTER_FLOOR / 100n))).toMatchObject({ kind: 'deposit' });
+      expect(readAcrossCall(contracts, fee(ROUTER_FLOOR / 100n + 1n))).toEqual(unreadable);
+    });
+
+    it('then a fee to another address reads without the JAW label, and the floor less that fee', () => {
+      const amount = ROUTER_FLOOR / 2n;
+      const edited = withProgram(call, (p) => void (p.calls[2] = transfer(NVDA, OTHER_FEE_RECIPIENT, amount)));
+      expect(readAcrossCall(contracts, edited)).toMatchObject({
+        receive: { kind: 'minimum', amount: { amount: ROUTER_FLOOR - amount } },
+        fee: { recipient: OTHER_FEE_RECIPIENT, jaw: false },
+      });
+    });
+
+    const mutants: [string, (p: Program) => void][] = [
+      ['two fee transfers', (p) => p.calls.splice(3, 0, { ...p.calls[2] })],
+      ['a fee transfer of the bridged token', (p) => void (p.calls[2] = transfer(USDG, FEE_RECIPIENT, 1n))],
+      ['a fee transfer after the drain of the bought token', (p) => p.calls.splice(3, 0, p.calls.splice(2, 1)[0])],
+      ['a fee transfer with value', (p) => void (p.calls[2].value = 1n)],
+      ['a fee of the whole router floor', (p) => void (p.calls[2] = transfer(NVDA, OTHER_FEE_RECIPIENT, ROUTER_FLOOR))],
+      ['a fee transfer that is not canonical', (p) => void (p.calls[2].callData = `${p.calls[2].callData}00`)],
+    ];
+    it.each(mutants)('then %s is unreadable', (_, edit) => {
+      expect(readAcrossCall(contracts, withProgram(call, edit))).toEqual(unreadable);
+    });
+  });
+
+  describe('through LiFi', () => {
+    const call = ACROSS_CALLS.usdcToNvdaLifiFee;
+
+    it('then it reads as a deposit to the recipient with the fee and the minimum less the fee', () => {
+      expect(readAcrossCall(contracts, call)).toMatchObject({
+        kind: 'deposit',
+        recipient: OTHER,
+        receive: {
+          kind: 'minimum',
+          amount: { chainId: 4663, amount: LIFI_MINIMUM - lifiFee.amount, token: { address: NVDA, known: false } },
+        },
+        fee: feeRead(lifiFee),
+      });
+    });
+
+    const mutants: [string, (p: Program) => void][] = [
+      ['two fee transfers', (p) => p.calls.splice(3, 0, { ...p.calls[2] })],
+      ['a fee transfer of the bridged token', (p) => void (p.calls[2] = transfer(USDG, FEE_RECIPIENT, 1n))],
+      ['a fee transfer after the drain of the bought token', (p) => p.calls.splice(3, 0, p.calls.splice(2, 1)[0])],
+      [
+        'a JAW fee above 1% of the minimum',
+        (p) => void (p.calls[2] = transfer(NVDA, FEE_RECIPIENT, LIFI_MINIMUM / 100n + 1n)),
+      ],
+      ['a fee equal to the minimum', (p) => void (p.calls[2] = transfer(NVDA, OTHER_FEE_RECIPIENT, LIFI_MINIMUM))],
+      ['a fee above the minimum', (p) => void (p.calls[2] = transfer(NVDA, OTHER_FEE_RECIPIENT, LIFI_MINIMUM + 1n))],
+    ];
+    it.each(mutants)('then %s is unreadable', (_, edit) => {
+      expect(readAcrossCall(contracts, withProgram(call, edit))).toEqual(unreadable);
+    });
   });
 });

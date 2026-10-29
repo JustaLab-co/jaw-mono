@@ -272,9 +272,12 @@ describe('given the periphery depositNative of across-native-eth', () => {
 });
 
 describe('given an Across deposit that swaps on one side', () => {
-  it('when it swaps on the destination, then the transfer names the bought token with no amount', () => {
+  it('when it swaps on the destination, then the transfer names the bought token and the router floor', () => {
     const batch = readBridgeBatch(contracts, [approve(BASE_SPOKE_POOL, '989680'), ACROSS_CALLS.usdcToArb], SIGNER);
-    expect(batch?.transfer?.receive).toEqual({ kind: 'swap', chainId: 42161, token: { address: ARB, known: false } });
+    expect(batch?.transfer?.receive).toEqual({
+      kind: 'minimum',
+      amount: { chainId: 42161, amount: 52_534_325_335_448_453_260n, token: { address: ARB, known: false } },
+    });
     expect(batch?.steps).toEqual([PLAIN_STEP, PLAIN_STEP]);
     expect(batch?.alerts).toEqual([]);
     expect(batch?.notices).toEqual([`This screen does not know the token ${ARB}. Check it before you confirm.`]);
@@ -374,6 +377,18 @@ describe('given an approve the owner must check', () => {
     const batch = readBridgeBatch(contracts, [approve(BASE_SPOKE_POOL, UNLIMITED), ACROSS_CALLS.prod], SIGNER);
     expect(batch?.notices).toEqual([]);
   });
+
+  it.each([
+    ['Uniswap', ACROSS_CALLS.usdcToNvdaFee, '32,084,785,363,069'],
+    ['LiFi', ACROSS_CALLS.usdcToNvdaLifiFee, '1,080,315,676,757,913'],
+  ])(
+    'when a swap through %s pays the JAW fee, then the details name it and nothing says the call is unreadable',
+    (_, call, raw) => {
+      const batch = readBridgeBatch(contracts, [call], SIGNER);
+      expect(batch?.alerts).toEqual([]);
+      expect(batch?.transfer?.details.find((d) => d.label === 'Fee')?.value).toBe(`${raw} base units to JAW`);
+    }
+  );
 
   it('when the table in use is the snapshot, then an unknown token adds the refresh line, and a live table does not', () => {
     const calls = [{ ...approve(BASE_SPOKE_POOL, '989680'), to: USDBC }, ACROSS_CALLS.prod];
