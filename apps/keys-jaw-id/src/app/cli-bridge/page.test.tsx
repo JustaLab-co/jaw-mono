@@ -861,3 +861,60 @@ describe('cli-bridge page proves the link secret', () => {
     expect(window.location.hash).toBe('');
   });
 });
+
+describe('cli-bridge page reports its client', () => {
+  const posts = (fetchMock: ReturnType<typeof vi.fn>) =>
+    fetchMock.mock.calls.filter(([url]) => url === '/api/bridge-client');
+
+  it('posts the client once and not again for the same value', async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true, status: 204 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const ws = await start();
+
+    await init(ws, { client: 'jaw-cli/0.7.2' });
+    await init(ws, { client: 'jaw-cli/0.7.2' });
+
+    const sent = posts(fetchMock);
+    expect(sent).toHaveLength(1);
+    expect(sent[0][1]).toMatchObject({ method: 'POST', body: JSON.stringify({ client: 'jaw-cli/0.7.2' }) });
+  });
+
+  it('posts nothing when init carries no client', async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true, status: 204 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const ws = await start();
+
+    await init(ws, {});
+
+    expect(posts(fetchMock)).toHaveLength(0);
+  });
+
+  it('posts nothing for a client value that does not match', async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true, status: 204 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const ws = await start();
+
+    await init(ws, { client: 'not a client' });
+
+    expect(posts(fetchMock)).toHaveLength(0);
+  });
+
+  it('still answers ready and requests when the post fails', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new Error('offline');
+      })
+    );
+    created.request = async () => '0x1';
+    const ws = await start();
+
+    const ready = await init(ws, { client: 'jaw-cli/0.7.2' });
+
+    expect(ready).toMatchObject({ type: 'ready', chainId: 84532 });
+    await deliver(ws, { type: 'rpc_request', id: 'r1', method: 'eth_chainId', params: [] });
+    await vi.waitFor(async () =>
+      expect(await answers(ws, 'r1')).toEqual([{ type: 'rpc_response', id: 'r1', success: true, data: '0x1' }])
+    );
+  });
+});
