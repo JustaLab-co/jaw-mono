@@ -146,6 +146,7 @@ function CLIBridgeContent() {
     let cancelled = false;
     let unanswered: ReturnType<typeof setTimeout> | undefined;
     answersRef.current = new Map();
+    let clientPosted: string | undefined;
 
     (async () => {
       try {
@@ -223,7 +224,11 @@ function CLIBridgeContent() {
                     return;
                   }
                   setState('connected');
-                  const { chainId, ens, paymaster } = parsed;
+                  const { chainId, ens, paymaster, client } = parsed;
+                  if (client && client !== clientPosted) {
+                    clientPosted = client;
+                    reportBridgeClient(client);
+                  }
                   const name = (appNameRef.current ??= resolveBridgeAppName(parsed.appName));
                   setAppName(name);
 
@@ -490,6 +495,15 @@ function canonical(value: unknown): string {
     return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonical(v)}`).join(',')}}`;
   }
   return JSON.stringify(value) ?? 'null';
+}
+
+/** Fire and forget: the bridge never waits on this and never shows a failure of it. */
+function reportBridgeClient(client: string) {
+  fetch('/api/bridge-client', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ client }),
+  }).catch(() => undefined);
 }
 
 type RpcResponse = Record<string, unknown> & { type: 'rpc_response'; id: string };
