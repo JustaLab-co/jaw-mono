@@ -5,5 +5,11 @@
     "apiKey": "fake-api-key",
     "chainId": 84532,
     "ens": "alice.jaw.eth"
+  },
+  "expect": {
+    "appName": "JAW CLI",
+    "defaultChainId": 84532,
+    "apiKey": "fake-api-key",
+    "ens": "alice.jaw.eth"
   }
 }

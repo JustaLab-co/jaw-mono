@@ -1,0 +1,12 @@
+{
+  "sentBy": ["@jaw.id/cli 0.4.0 to 0.7.2", "@jaw.id/cli >= the release after 0.7.2"],
+  "frame": {
+    "type": "rpc_request",
+    "id": "3e1f6a40-9b27-4c58-b0d4-6a7c2e9f1b88",
+    "method": "eth_getBalance",
+    "params": "0x1111111111111111111111111111111111111111"
+  },
+  "expect": {
+    "params": ["0x1111111111111111111111111111111111111111"]
+  }
+}

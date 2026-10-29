@@ -1,9 +1,15 @@
 {
-  "sentBy": ["@jaw-mono/mcp (jaw-agent apps/mcp)"],
+  "sentBy": [
+    "@jaw-mono/mcp images built before jaw-agent #17 and #18",
+    "@jaw-mono/mcp images built after jaw-agent #17 and #18"
+  ],
   "frame": {
     "type": "rpc_request",
-    "id": "b9f3c1d2e4a5:0",
+    "id": "0b5d1f0e-6c1a-4a0e-9d52-2f6d8c1a7e11:0",
     "method": "eth_requestAccounts",
+    "params": []
+  },
+  "expect": {
     "params": []
   }
 }

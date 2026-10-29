@@ -8,5 +8,18 @@
     "paymasterContext": {
       "token": "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
     }
+  },
+  "expect": {
+    "appName": "JAW CLI",
+    "defaultChainId": 84532,
+    "apiKey": "fake-api-key",
+    "paymasters": {
+      "84532": {
+        "url": "https://paymaster.example.com/rpc",
+        "context": {
+          "token": "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+        }
+      }
+    }
   }
 }

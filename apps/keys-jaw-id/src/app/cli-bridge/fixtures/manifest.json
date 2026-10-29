@@ -1,0 +1,22 @@
+[
+  "init-cli-current-no-key.json",
+  "init-cli-current.json",
+  "init-cli-published-ens-no-key.json",
+  "init-cli-published-no-key.json",
+  "init-cli-published-paymaster-url-only.json",
+  "init-cli-published-paymaster.json",
+  "init-cli-published.json",
+  "init-mcp-dev-ens.json",
+  "init-mcp-published.json",
+  "init-mcp.json",
+  "link-current.json",
+  "link-published.json",
+  "rpc-request-array-params.json",
+  "rpc-request-lone-object-params.json",
+  "rpc-request-lone-string-params.json",
+  "rpc-request-mcp-id.json",
+  "rpc-request-mcp-send-calls.json",
+  "rpc-request-no-params.json",
+  "rpc-request-null-params.json",
+  "shutdown.json"
+]

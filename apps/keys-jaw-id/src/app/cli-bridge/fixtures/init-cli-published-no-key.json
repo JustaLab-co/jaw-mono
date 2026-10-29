@@ -3,5 +3,11 @@
   "frame": {
     "type": "init",
     "chainId": 84532
+  },
+  "expect": {
+    "appName": "JAW CLI",
+    "defaultChainId": 84532,
+    "apiKey": "workspace-key",
+    "readyApiKey": "workspace-key"
   }
 }
