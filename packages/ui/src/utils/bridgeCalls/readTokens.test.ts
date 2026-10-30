@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Address } from 'viem';
+import { stringToHex, type Address, type Hex } from 'viem';
 import { readTokens } from './readTokens';
 import { readKey } from './table';
 import { DECIMALS, SYMBOL, nodeFor, type Answer } from './tokenNode';
@@ -29,6 +29,25 @@ describe('given tokens outside the pinned table', () => {
 
   it('when a bytes32 symbol is not printable text, then the token stays unread', async () => {
     expect(await readOne({ symbol: 'AA\nPL', decimals: 18n, bytes32: true })).toBeUndefined();
+  });
+
+  it.each([
+    ['all zeros', '0x' + '00'.repeat(32)],
+    ['not ASCII', stringToHex('ÄAPL', { size: 32 })],
+    ['a null byte inside it', stringToHex('AA\u0000PL', { size: 32 })],
+    ['32 printable characters', stringToHex('A'.repeat(32), { size: 32 })],
+    ['bytes that are neither a string nor a word', '0xdeadbeef'],
+  ] as [string, Hex][])('when the symbol is %s, then the token stays unread', async (_, symbolBytes) => {
+    expect(await readOne({ symbolBytes, decimals: 18n })).toBeUndefined();
+  });
+
+  it('when a bytes32 symbol fills 16 characters, then it is read', async () => {
+    const symbolBytes = stringToHex('B'.repeat(16), { size: 32 });
+    expect(await readOne({ symbolBytes, decimals: 18n })).toEqual({ symbol: 'B'.repeat(16), decimals: 18 });
+  });
+
+  it('when decimals is 0, then the token is read with no decimals', async () => {
+    expect(await readOne({ symbol: 'NODEC', decimals: 0n })).toEqual({ symbol: 'NODEC', decimals: 0 });
   });
 
   it.each([
