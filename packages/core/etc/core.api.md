@@ -31,7 +31,7 @@ export class Account {
         permissionId?: Hex;
         address?: Address_2;
     }): Promise<string>;
-    cancelRecovery(requestId: Hex, paymasterUrlOverride?: string, paymasterContextOverride?: Record<string, unknown>): Promise<RecoverySetupResult>;
+    cancelRecovery(requestId: Hex): Promise<RecoverySetupResult>;
     get chainId(): number;
     static create(config: AccountConfig, options: CreateAccountOptions): Promise<Account>;
     estimateGas(calls: TransactionCall[], options?: {
@@ -50,6 +50,7 @@ export class Account {
     getMetadata(): AccountMetadata | null;
     getPermission(permissionId: Hex): Promise<WalletGrantPermissionsResponse>;
     getRecovery(): Promise<RecoveryState>;
+    getRecoveryNetworks(): Promise<RecoveryNetworksPlan>;
     getSmartAccount(): SmartAccount;
     getSmartAccountFor(address?: Address_2): Promise<SmartAccount>;
     static getStoredAccounts(apiKey?: string, storage?: SyncStorage): PasskeyAccount[];
@@ -62,7 +63,7 @@ export class Account {
     // Warning: (ae-forgotten-export) The symbol "BundledTransactionResult" needs to be exported by the entry point index.d.ts
     sendCalls(calls: TransactionCall[], options?: SendCallsOptions, paymasterUrlOverride?: string, paymasterContextOverride?: Record<string, unknown>): Promise<BundledTransactionResult>;
     sendTransaction(calls: TransactionCall[], paymasterUrlOverride?: string, paymasterContextOverride?: Record<string, unknown>, from?: Address_2): Promise<Hash>;
-    setupRecovery(config: RecoveryConfig, paymasterUrlOverride?: string, paymasterContextOverride?: Record<string, unknown>): Promise<RecoverySetupResult>;
+    setupRecovery(config: RecoveryConfig): Promise<RecoverySetupResult>;
     signMessage(message: string, options?: {
         address?: Address_2;
     }): Promise<Hex>;
@@ -252,12 +253,6 @@ export function buildGrantPermissionCall(account: Address_2, spender: Address_2,
 
 // @public
 export function buildHandleJawRpcUrl(baseUrl: string, apiKey?: string): string;
-
-// @public
-export function buildRecoverySetupCalls(account: Address_2, current: RecoveryChainConfig | undefined, desired: RecoveryConfig): Array<{
-    to: Address_2;
-    data: Hex;
-}>;
 
 // @public (undocumented)
 export function buildRemoveRecoveryCall(account: Address_2, recoveryId: Hex): {
@@ -1282,6 +1277,9 @@ export interface PersonalSignRequestData {
 // @public
 export function planRecoveryChanges(current: RecoveryChainConfig, desired: RecoveryConfig): RecoveryChange[];
 
+// @public
+export function planRecoveryNetworks(chains: RecoveryChainConfig[], signerIsOwner: ReadonlyMap<number, boolean>, connectedChainId: number): RecoveryNetworksPlan;
+
 // @public (undocumented)
 export interface ProviderConnectInfo {
     // (undocumented)
@@ -1737,6 +1735,23 @@ export type RecoveryMethodInput = {
     delay: number;
     provider?: Address_2;
 };
+
+// @public
+export type RecoveryNetwork = {
+    chainId: number;
+    status: RecoveryNetworkStatus;
+    config: RecoveryChainConfig;
+    enabledByTransaction?: boolean;
+};
+
+// @public
+export type RecoveryNetworksPlan = {
+    base?: RecoveryChainConfig;
+    networks: RecoveryNetwork[];
+};
+
+// @public
+export type RecoveryNetworkStatus = 'ready' | 'not-deployed' | 'not-available' | 'not-owner' | 'out-of-sync';
 
 // @public
 export type RecoverySetupResult = {

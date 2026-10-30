@@ -18,18 +18,25 @@ import { AppAvatar } from '../AppAvatar';
 import { useChainIconURI, useFeeTokenPrice } from '../../hooks';
 import { useRecoveryRelayStatus } from '../../hooks/useRecoveryRelayStatus';
 import { resolveBlockReason } from '../../utils/transactionFailure';
-import { RECOVERY_SETUP_PROBLEM_TEXT, recoveryGuardianRows } from '../../utils/recoverySetup';
+import {
+  RECOVERY_SETUP_PROBLEM_TEXT,
+  RECOVERY_UNAVAILABLE_TEXT,
+  recoveryGuardianRows,
+  recoveryUnavailable,
+} from '../../utils/recoverySetup';
 import type { RecoveryDialogProps } from './types';
-import { GuardianList, NetworkStatusList, RecoveryNotice, RecoveryTerms, chainName } from './Sections';
+import { GuardianList, NetworkStatusList, RecoveryNetworks, RecoveryNotice, RecoveryTerms } from './Sections';
 
 /**
  * The recovery screen works like the permission screen: the app passes the end state, the screen
  * shows it and the user approves or declines. Nothing on it is editable (R16).
  *
  * The guardians are one list (the team's option 1): the end state with what is new marked, then
- * what the change removes, struck through, and the approvals before and after. A first setup
- * carries the fee of the one transaction that enables recovery on the connected network; an edit
- * is relayed to every network where recovery is on, and JAW pays.
+ * what the change removes, struck through, and the approvals before and after. A first setup and
+ * an edit are the same one signature, relayed to every network that can take it, and JAW pays;
+ * the Networks section shows, before the user confirms, every network the account is on and
+ * whether the change reaches it, with the reason when it doesn't. When no network can take it yet, the
+ * screen offers the one transaction that fixes that on the connected network, with its fee.
  */
 export const RecoveryDialog = ({
   open,
@@ -39,8 +46,7 @@ export const RecoveryDialog = ({
   appName,
   appLogoUrl,
   config,
-  current,
-  chains,
+  plan,
   isLoadingConfig = false,
   problem,
   networkName,
@@ -48,9 +54,11 @@ export const RecoveryDialog = ({
   chainIcon,
   apiKey,
   onConfirm,
+  onActivate,
   onCancel,
   onDone,
   isProcessing,
+  isActivating = false,
   status,
   result,
   gasFee,
@@ -87,36 +95,38 @@ export const RecoveryDialog = ({
     };
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
-  }, [isProcessing, result, isLoadingConfig]);
+  }, [isProcessing, isActivating, result, isLoadingConfig]);
 
-  const isFirstSetup = !current || isFirstRecoverySetup(current);
+  // The change is planned from the base network; with none, nothing holds a config yet.
+  const base = plan?.base ?? null;
+  const isFirstSetup = !base || isFirstRecoverySetup(base);
   const minimumDelay = minimumRecoveryDelay(config.recoveries, config.threshold);
 
   const rows = useMemo(
-    () => recoveryGuardianRows(isFirstSetup ? null : current, config.recoveries),
-    [isFirstSetup, current, config.recoveries]
+    () => recoveryGuardianRows(isFirstSetup ? null : base, config.recoveries),
+    [isFirstSetup, base, config.recoveries]
   );
   const approvals = {
-    from: isFirstSetup || !current ? undefined : { threshold: current.threshold, count: current.recoveries.length },
+    from: isFirstSetup || !base ? undefined : { threshold: base.threshold, count: base.recoveries.length },
     to: { threshold: config.threshold, count: config.recoveries.length },
   };
 
-  const editNetworks = chains
-    .filter((chain) => chain.deployed && chain.enrolled)
-    .map((chain) => chainName(chain.chainId));
+  // No network can take the change yet: why, and whether one transaction here fixes it.
+  const unavailable = plan && !isLoadingConfig && !problem ? recoveryUnavailable(plan, chainId ?? 0) : null;
+  const canActivate = unavailable === 'deploy' || unavailable === 'enable';
 
   // The account already holds exactly this: nothing to sign (the planner, which is what gets
   // signed, has no change). The answer is Account's own for an edit that changes nothing.
   const alreadyInPlace = useMemo(
-    () =>
-      !isLoadingConfig && !problem && !isFirstSetup && !!current && planRecoveryChanges(current, config).length === 0,
-    [isLoadingConfig, problem, isFirstSetup, current, config]
+    () => !isLoadingConfig && !problem && !isFirstSetup && !!base && planRecoveryChanges(base, config).length === 0,
+    [isLoadingConfig, problem, isFirstSetup, base, config]
   );
 
-  // Same fee rules as the permission screen, on the first setup only: an edit is relayed.
+  // Same fee rules as the permission screen, for the activation transaction only: a change is
+  // relayed.
   const hasSelectablePaymentOption =
     !feeTokens || feeTokens.length === 0 ? true : feeTokens.some((t) => t.isSelectable);
-  const blockReason = isFirstSetup
+  const blockReason = canActivate
     ? resolveBlockReason({
         hasSelectablePaymentOption,
         gasEstimationError,
@@ -125,16 +135,11 @@ export const RecoveryDialog = ({
       })
     : null;
   const erc20CannotPay =
-    isFirstSetup && isPayingWithErc20 && (!selectedFeeToken?.gasCostMaxFormatted || !selectedFeeToken?.isSelectable);
+    canActivate && isPayingWithErc20 && (!selectedFeeToken?.gasCostMaxFormatted || !selectedFeeToken?.isSelectable);
 
-  const canConfirm =
-    !isLoadingConfig &&
-    !problem &&
-    !isProcessing &&
-    !(isFirstSetup && gasFeeLoading) &&
-    !blockReason &&
-    !erc20CannotPay &&
-    (minimumDelay !== 0 || zeroDelayConfirmed);
+  const busy = isProcessing || isActivating;
+  const canActivateNow = canActivate && !busy && !gasFeeLoading && !blockReason && !erc20CannotPay;
+  const canConfirm = !isLoadingConfig && !problem && !!base && !busy && (minimumDelay !== 0 || zeroDelayConfirmed);
 
   const hasError = !!status && status.includes('Error');
 
@@ -175,18 +180,18 @@ export const RecoveryDialog = ({
                 Already set up. Recovery on this account matches what this app asks for.
               </div>
             )}
-            <GuardianList rows={rows} approvals={approvals} chainId={chainId} mainnetRpcUrl={mainnetRpcUrl} />
-            {!alreadyInPlace && (
-              <RecoveryTerms
-                minimumDelay={minimumDelay}
-                networks={isFirstSetup ? networkName : editNetworks.join(', ')}
-                feesPaidByJaw={!isFirstSetup}
-              />
+            {unavailable && (
+              <RecoveryNotice
+                tone={canActivate ? 'warning' : 'destructive'}
+                title={RECOVERY_UNAVAILABLE_TEXT[unavailable].text}
+              >
+                {RECOVERY_UNAVAILABLE_TEXT[unavailable].detail(networkName)}
+              </RecoveryNotice>
             )}
-            {isFirstSetup && (
-              <p className="text-muted-foreground text-body-sm">
-                Adds the recovery contract to your account so these guardians can restore access.
-              </p>
+            <GuardianList rows={rows} approvals={approvals} chainId={chainId} mainnetRpcUrl={mainnetRpcUrl} />
+            {!alreadyInPlace && <RecoveryTerms minimumDelay={minimumDelay} />}
+            {base && plan && !alreadyInPlace && (
+              <RecoveryNetworks networks={plan.networks} connectedChainId={chainId} apiKey={apiKey} />
             )}
           </>
         )}
@@ -196,7 +201,7 @@ export const RecoveryDialog = ({
             <Checkbox
               checked={zeroDelayConfirmed}
               onCheckedChange={(checked) => setZeroDelayConfirmed(checked === true)}
-              disabled={isProcessing}
+              disabled={busy}
               className="mt-0.5"
             />
             <span className="text-destructive text-body-sm">
@@ -213,7 +218,7 @@ export const RecoveryDialog = ({
       </div>
 
       <div className="border-border/40 flex-none space-y-2 border-t px-6 pb-5 pt-3">
-        {isFirstSetup && !isLoadingConfig && (
+        {canActivate && (
           <NetworkFeeRow
             blockReason={blockReason}
             gasFee={gasFee}
@@ -231,15 +236,24 @@ export const RecoveryDialog = ({
             showFeeTokenSelector={showFeeTokenSelector}
             isPayingWithErc20={isPayingWithErc20}
             hasSelectablePaymentOption={hasSelectablePaymentOption}
-            disabled={isProcessing}
+            disabled={busy}
           />
+        )}
+        {canActivate && (
+          <Button
+            onClick={onActivate}
+            disabled={!canActivateNow}
+            className="rounded-box text-button h-10 w-full font-semibold focus-visible:ring-1"
+          >
+            {blockReason === 'funds' ? 'Insufficient Funds' : `Activate on ${networkName}`}
+          </Button>
         )}
 
         <div className="flex gap-2">
           <Button
             variant="secondary"
             onClick={onCancel}
-            disabled={isProcessing}
+            disabled={busy}
             className="rounded-box text-button h-10 flex-[44] font-semibold focus-visible:ring-1"
           >
             Cancel
@@ -257,7 +271,7 @@ export const RecoveryDialog = ({
               disabled={!canConfirm}
               className="rounded-box text-button h-10 flex-[56] font-semibold focus-visible:ring-1"
             >
-              {blockReason === 'funds' ? 'Insufficient Funds' : isFirstSetup ? 'Enable recovery' : 'Confirm changes'}
+              {isFirstSetup ? 'Set up recovery' : 'Confirm changes'}
             </Button>
           )}
         </div>
@@ -269,15 +283,22 @@ export const RecoveryDialog = ({
     <ShellDialog
       open={open}
       onOpenChange={onOpenChange}
-      dismissable={!isProcessing}
+      dismissable={!busy}
       onClose={onCancel}
       contentClassName="min-h-[510px]"
     >
-      {isProcessing ? (
+      {isActivating ? (
         <ProcessingScreen
           seedAddress={accountAddress}
           appAvatar={appAvatar}
-          title={isFirstSetup ? 'Enabling recovery' : 'Updating recovery'}
+          title={`Activating on ${networkName}`}
+          subtitle="Confirm with your passkey"
+        />
+      ) : isProcessing ? (
+        <ProcessingScreen
+          seedAddress={accountAddress}
+          appAvatar={appAvatar}
+          title={isFirstSetup ? 'Setting up recovery' : 'Updating recovery'}
           subtitle="Confirm with your passkey"
         />
       ) : result ? (
@@ -290,10 +311,9 @@ export const RecoveryDialog = ({
 };
 
 /**
- * A·05: the outcome per network. A first setup landed before it got here (the account door
- * returns after the transaction); an edit is relayed, so its networks are polled until none is in
- * flight. Done is always enabled: the work carries on in the background, and the result the dApp
- * gets carries the latest statuses.
+ * A·05: the outcome per network. Every change is relayed, so its networks are polled until none
+ * is in flight. Done is always enabled: the work carries on in the background, and the result the
+ * dApp gets carries the latest statuses.
  */
 function RecoveryDone({
   result,
@@ -315,13 +335,11 @@ function RecoveryDone({
       {header(isFirstSetup ? 'Recovery is on' : 'Recovery updated')}
 
       <div className="jaw-scroll min-h-0 flex-1 space-y-3 overflow-y-auto px-6 pb-3 pt-6">
-        <NetworkStatusList chains={chains} />
+        <NetworkStatusList chains={chains} apiKey={apiKey} />
         <p className="text-muted-foreground text-body-sm">
           {timedOut
             ? 'Still updating in the background. Reopen recovery later to check.'
-            : isFirstSetup
-              ? 'Recovery is on for this network. Set it up on other networks you use.'
-              : 'A network that didn’t go through can be updated again from recovery settings.'}
+            : 'A network that didn’t go through can be updated again from recovery settings.'}
         </p>
       </div>
 

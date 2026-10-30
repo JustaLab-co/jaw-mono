@@ -17,10 +17,6 @@
  *     // SET_THRESHOLD   => abi.encode(uint256 threshold)
  *     // CANCEL_REQUEST  => abi.encode(bytes32 requestId)
  *
- *     function addRecovery(address account, address provider, bytes commitment, uint32 delay)
- *     function removeRecovery(address account, bytes32 recoveryId)
- *     function setRecoveryThreshold(address account, uint256 threshold)
- *
  * and the rules every op is held to, in order, atomically: a threshold stays
  * within [1, recoveryCount] (InvalidThreshold); a removal may not leave fewer
  * recoveries than the effective threshold, which defaults to 1, except a full
@@ -28,22 +24,13 @@
  * (RecoveryAlreadyAdded) and removed only if registered (RecoveryNotRegistered).
  */
 import fc from 'fast-check';
-import {
-    decodeAbiParameters,
-    decodeFunctionData,
-    getAddress,
-    parseAbi,
-    parseAbiParameters,
-    type Address,
-    type Hex,
-} from 'viem';
+import { decodeAbiParameters, getAddress, parseAbiParameters, type Address, type Hex } from 'viem';
 import { describe, it, expect } from 'vitest';
 
-import { RECOVERY_MANAGER_ADDRESS, SIGNATURE_RECOVERY_PROVIDER_ADDRESS } from '../constants.js';
+import { SIGNATURE_RECOVERY_PROVIDER_ADDRESS } from '../constants.js';
 import {
     AdminOpType,
     addRecoveryOp,
-    buildRecoverySetupCalls,
     cancelRequestOp,
     computeRecoveryId,
     diffRecoveryConfig,
@@ -63,12 +50,6 @@ fc.configureGlobal({ seed: 0x7ec, numRuns: 200 });
 const ACCOUNT = '0x1111111111111111111111111111111111111111' as const;
 const PROVIDER = SIGNATURE_RECOVERY_PROVIDER_ADDRESS;
 
-const CONTRACT_ABI = parseAbi([
-    'function addOwnerAddress(address owner)',
-    'function addRecovery(address account, address provider, bytes commitment, uint32 delay) returns (bytes32)',
-    'function removeRecovery(address account, bytes32 recoveryId)',
-    'function setRecoveryThreshold(address account, uint256 threshold)',
-]);
 const ADD_DATA = parseAbiParameters('address provider, bytes commitment, uint32 delay');
 const ID_DATA = parseAbiParameters('bytes32 id');
 const THRESHOLD_DATA = parseAbiParameters('uint256 threshold');
@@ -285,80 +266,6 @@ describe('the batch that takes the on-chain config to the desired one', () => {
                     expect(diffRecoveryConfig(from, same)).toEqual([]);
                 }
             )
-        );
-    });
-});
-
-type Step =
-    | { kind: 'enroll'; owner: Address }
-    | { kind: 'add'; provider: Address; commitment: Hex; delay: number }
-    | { kind: 'remove'; id: Hex }
-    | { kind: 'threshold'; threshold: number };
-
-function describeOp(op: AdminOp): Step {
-    switch (op.opType) {
-        case AdminOpType.ADD_RECOVERY: {
-            const [provider, c, delay] = decodeAbiParameters(ADD_DATA, op.data);
-            return { kind: 'add', provider, commitment: c, delay };
-        }
-        case AdminOpType.REMOVE_RECOVERY:
-            return { kind: 'remove', id: decodeAbiParameters(ID_DATA, op.data)[0] };
-        case AdminOpType.SET_THRESHOLD:
-            return { kind: 'threshold', threshold: Number(decodeAbiParameters(THRESHOLD_DATA, op.data)[0]) };
-        default:
-            throw new Error(`unexpected op ${op.opType}`);
-    }
-}
-
-function describeCall(call: { to: Address; data: Hex }): Step & { to: Address } {
-    const { functionName, args } = decodeFunctionData({ abi: CONTRACT_ABI, data: call.data });
-    const to = getAddress(call.to);
-    switch (functionName) {
-        case 'addOwnerAddress':
-            return { kind: 'enroll', owner: args[0], to };
-        case 'addRecovery':
-            expect(args[0]).toBe(getAddress(ACCOUNT));
-            return { kind: 'add', provider: args[1], commitment: args[2], delay: args[3], to };
-        case 'removeRecovery':
-            expect(args[0]).toBe(getAddress(ACCOUNT));
-            return { kind: 'remove', id: args[1], to };
-        case 'setRecoveryThreshold':
-            expect(args[0]).toBe(getAddress(ACCOUNT));
-            return { kind: 'threshold', threshold: Number(args[1]), to };
-    }
-}
-
-describe('the account door, next to the admin batch', () => {
-    it('carries the same changes in the same order, enrolment first when the manager is not an owner yet', () => {
-        fc.assert(
-            fc.property(current, desired, (from, wanted) => {
-                const manager = getAddress(RECOVERY_MANAGER_ADDRESS);
-                const enrolment: Array<Step & { to: Address }> = from.enrolled
-                    ? []
-                    : [{ kind: 'enroll', owner: manager, to: getAddress(ACCOUNT) }];
-
-                expect(buildRecoverySetupCalls(ACCOUNT, from, wanted).map(describeCall)).toEqual([
-                    ...enrolment,
-                    ...diffRecoveryConfig(from, wanted).map((op) => ({ ...describeOp(op), to: manager })),
-                ]);
-            })
-        );
-    });
-
-    it('reads a chain the backend lists nothing for as unenrolled with nothing registered', () => {
-        fc.assert(
-            fc.property(desired, (to) => {
-                const empty: RecoveryChainConfig = {
-                    chainId: 84_532,
-                    deployed: false,
-                    enrolled: false,
-                    threshold: 0,
-                    recoveries: [],
-                };
-                expect(buildRecoverySetupCalls(ACCOUNT, undefined, to)).toEqual(
-                    buildRecoverySetupCalls(ACCOUNT, empty, to)
-                );
-            })
         );
     });
 });

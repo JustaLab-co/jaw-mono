@@ -29,8 +29,6 @@ import {
   buildGrantPermissionCall,
   buildRevokePermissionCall,
   buildErc20PaymasterContext,
-  buildRecoverySetupCalls,
-  getRecoveryConfig,
   isFirstRecoverySetup,
   type Chain,
   type SignInWithEthereumCapabilityRequest,
@@ -71,8 +69,8 @@ import { useSpenderPrefund, describeSpenderPrefund } from '../hooks/useSpenderPr
 import { useAssetPreview } from '../hooks/useAssetPreview';
 import { usePermissionExecution } from '../hooks/usePermissionExecution';
 import { usePermissionRevocation } from '../hooks/usePermissionRevocation';
-import { useRecoveryConfig } from '../hooks/useRecoveryConfig';
-import { recoveryPlanStillHolds } from '../utils/recoverySetup';
+import { useRecoveryNetworks } from '../hooks/useRecoveryNetworks';
+import { recoveryActivationCalls, recoveryPlanStillHolds, recoveryUnavailable } from '../utils/recoverySetup';
 import { useFunctionSignatures } from '../hooks/useFunctionSignatures';
 import { fetchTokenBalance, isNativeToken } from '../utils/tokenBalance';
 import { resolvePaymaster } from '../utils/resolvePaymaster';
@@ -89,8 +87,13 @@ import { getSystemColorScheme, useColorScheme } from '../theme/use-color-scheme.
 const SIGNED_TICK_MS = 850;
 
 // How long the recovery outcome screen stays up after the dApp has its answer, unless the user
-// closes it first: long enough to watch a relayed change land (polling stops at two minutes).
+// closes it first: long enough to watch a relayed change land (polling stops at five minutes).
 const RECOVERY_OUTCOME_HOLD_MS = 5 * 60_000;
+
+// After the activation transaction lands, the networks are read again until one can take the
+// change: the read is live, and a node a block behind can still answer with the old state.
+const RECOVERY_ACTIVATION_READS = 5;
+const RECOVERY_ACTIVATION_READ_INTERVAL_MS = 2_000;
 
 // ============================================================================
 // Chain Utilities
@@ -3384,13 +3387,13 @@ function RevokePermissionDialogWrapper({
   );
 }
 
-// RecoveryDialogWrapper - handles wallet_setupRecovery (setup and edit, R15, R16)
+// RecoveryDialogWrapper - handles wallet_setupRecovery (setup and edit, R15, R16, R18)
 //
 // The PermissionDialogWrapper shape: the app sends the end state, the screen shows it and the user
-// approves, then an outcome per network. The configs read picks the flow for the connected
-// network: no recovery there is a first setup through the account door (one userOp, the fee row
-// below); recovery there is an edit, one signature relayed by JAW to every network where it is
-// on. `Account.setupRecovery` makes the same read and the same choice.
+// approves, then an outcome per network. A first setup and an edit are both one signature, relayed
+// by JAW to every network that can take it; `Account.getRecoveryNetworks` says which, the read
+// `Account.setupRecovery` makes too. When none can yet, the screen offers one transaction on the
+// connected network (the fee row below), then reads the networks again.
 function RecoveryDialogWrapper({
   request,
   onApprove,
@@ -3414,6 +3417,7 @@ function RecoveryDialogWrapper({
 }) {
   const [open, setOpen] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isActivating, setIsActivating] = useState(false);
   const [status, setStatus] = useState<string>('');
   const [account, setAccount] = useState<Account | null>(null);
   const [feeTokens, setFeeTokens] = useState<FeeTokenOption[]>([]);
@@ -3423,18 +3427,16 @@ function RecoveryDialogWrapper({
   // re-render, which is too soft a gate for a change to who can take over the account.
   const submittingRef = useRef(false);
 
-  // Recovery is account-level: the request carries the connected chain, where a first setup lands.
+  // Recovery is account-level: the request carries the connected chain, where an activation
+  // transaction would go.
   const chainId = request.data.chainId || defaultChainId || 1;
   const viemChain = SUPPORTED_CHAINS.find((c) => c.id === chainId);
   const networkName = viemChain?.name || 'Unknown Network';
 
-  const {
-    config,
-    chains,
-    loading: isLoadingConfig,
-    problem,
-  } = useRecoveryConfig({ address: request.data.address, apiKey, chainId });
-  const isFirstSetup = !config || isFirstRecoverySetup(config);
+  const { plan, loading: isLoadingConfig, problem, reload } = useRecoveryNetworks({ account });
+  const isFirstSetup = !plan?.base || isFirstRecoverySetup(plan.base);
+  const unavailable = plan ? recoveryUnavailable(plan, chainId) : null;
+  const needsActivation = unavailable === 'deploy' || unavailable === 'enable';
 
   // What the app asked for, shown and signed as it is.
   const desired = useMemo<RecoveryConfig>(
@@ -3448,17 +3450,12 @@ function RecoveryDialogWrapper({
   );
   const isSponsored = !!effectivePaymasterUrl;
 
-  // The account-door userOp of a first setup, built from the requested config so the fee is
-  // estimated over exactly what will be sent. An edit is relayed and costs the user nothing.
-  const transactionCalls = useMemo(() => {
-    if (!config || !isFirstSetup) return [];
-    try {
-      return buildRecoverySetupCalls(request.data.address, config, desired);
-    } catch (error) {
-      console.warn('[RecoveryDialogWrapper] Failed to build recovery setup calls:', error);
-      return [];
-    }
-  }, [desired, config, isFirstSetup, request.data.address]);
+  // The activation transaction, priced and sent as one object. A recovery change is relayed and
+  // costs the user nothing, so there is nothing else to price.
+  const transactionCalls = useMemo(
+    () => (needsActivation ? recoveryActivationCalls(request.data.address) : []),
+    [needsActivation, request.data.address]
+  );
 
   const {
     gasFee,
@@ -3474,7 +3471,7 @@ function RecoveryDialogWrapper({
     chainId,
     apiKey,
     feeTokens,
-    // Nothing to price for an edit, or before the configs read lands.
+    // Nothing to price unless the activation transaction is on screen.
     isSponsored: isSponsored || transactionCalls.length === 0,
     address: request.data.address,
     onFeeTokensUpdate: setFeeTokens,
@@ -3618,17 +3615,17 @@ function RecoveryDialogWrapper({
     submittingRef.current = true;
     setIsProcessing(true);
     onSubmissionInFlight?.(true);
-    setStatus(isFirstSetup ? 'Enabling recovery...' : 'Updating recovery...');
+    setStatus(isFirstSetup ? 'Setting up recovery...' : 'Updating recovery...');
     try {
       // Account plans again from its own read when it signs. Refuse when that plan is no longer
       // the one this screen showed, so nothing is signed that the user did not see.
-      const fresh = await getRecoveryConfig(request.data.address, apiKey);
-      if (!recoveryPlanStillHolds(chains, fresh.chains, chainId, desired)) {
+      const fresh = await account.getRecoveryNetworks();
+      if (!plan || !recoveryPlanStillHolds(plan, fresh, desired)) {
         throw new Error('Recovery settings changed since this screen opened. Close this and try again.');
       }
 
-      // The config the screen rendered. The paymaster only applies to the account door.
-      const setup = await account.setupRecovery(desired, computedPaymasterUrl, computedPaymasterContext);
+      // The config the screen rendered, relayed.
+      const setup = await account.setupRecovery(desired);
       // Answered now, while the submission is still marked in flight: once the change has landed,
       // nothing after it (closing the window, a crash on the outcome screen) may report a
       // rejection. The outcome screen stays up as information until Done; a relayed batch is the
@@ -3652,6 +3649,29 @@ function RecoveryDialogWrapper({
       onSubmissionInFlight?.(false);
       submittingRef.current = false;
       setIsProcessing(false);
+    }
+  };
+
+  // The one transaction that lets the connected network take a change. It answers nothing: the
+  // request stays open, and a failure stays on screen for another try or Cancel.
+  const handleActivate = async () => {
+    if (submittingRef.current || !account) return;
+    submittingRef.current = true;
+    setIsActivating(true);
+    setStatus('');
+    try {
+      await account.sendTransaction(transactionCalls, computedPaymasterUrl, computedPaymasterContext);
+      for (let read = 1; read <= RECOVERY_ACTIVATION_READS; read++) {
+        const fresh = await reload();
+        if (fresh?.base || read === RECOVERY_ACTIVATION_READS) break;
+        await new Promise((resolve) => setTimeout(resolve, RECOVERY_ACTIVATION_READ_INTERVAL_MS));
+      }
+    } catch (error) {
+      console.error('Recovery activation failed:', error);
+      setStatus(`Error: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      submittingRef.current = false;
+      setIsActivating(false);
     }
   };
 
@@ -3684,17 +3704,18 @@ function RecoveryDialogWrapper({
       appName={appName}
       appLogoUrl={appLogoUrl}
       config={desired}
-      current={config}
-      chains={chains}
+      plan={plan}
       isLoadingConfig={isLoadingConfig}
       problem={problem}
       networkName={networkName}
       chainId={chainId}
       apiKey={apiKey}
       onConfirm={handleConfirm}
+      onActivate={handleActivate}
       onCancel={handleCancel}
       onDone={handleDone}
       isProcessing={isProcessing}
+      isActivating={isActivating}
       status={status}
       result={result}
       gasFee={gasFee}

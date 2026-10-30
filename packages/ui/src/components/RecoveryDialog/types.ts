@@ -1,5 +1,5 @@
 import { ReactElement } from 'react';
-import type { RecoveryChainConfig, RecoveryConfig, RecoverySetupResult } from '@jaw.id/core';
+import type { RecoveryConfig, RecoveryNetworksPlan, RecoverySetupResult } from '@jaw.id/core';
 import { FeeTokenOption } from '../FeeTokenSelector';
 import type { RecoverySetupProblem } from '../../utils/recoverySetup';
 
@@ -16,14 +16,15 @@ export interface RecoveryDialogProps {
   /** What the app asked for: the end state, shown for approval as it is. */
   config: RecoveryConfig;
 
-  // The account's recovery config, from the configs read
-  /** The config on the connected chain: a first setup when it holds no method, else an edit. */
-  current: RecoveryChainConfig | null;
-  /** The config on every supported chain: an edit reaches the deployed and enrolled ones. */
-  chains: RecoveryChainConfig[];
-  /** The configs read is still in flight. */
+  // Where the change goes, from `Account.getRecoveryNetworks`
+  /**
+   * The networks the change is relayed to and why the others don't take it. Its base config is
+   * what the change is planned from: a first setup when it holds no method, else an edit.
+   */
+  plan: RecoveryNetworksPlan | null;
+  /** The networks read is still in flight. */
   isLoadingConfig?: boolean;
-  /** A named reason this setup can't go ahead, resolved from the configs read. Blocks approval. */
+  /** A named reason this setup can't go ahead, resolved from the networks read. Blocks approval. */
   problem?: RecoverySetupProblem | null;
 
   // Network info
@@ -32,20 +33,27 @@ export interface RecoveryDialogProps {
   chainIcon?: ReactElement;
   apiKey?: string;
 
-  // The flow: review → sign → done
+  // The flow: review → (activate) → sign → done
   /** Sign and send `config`. */
   onConfirm: () => void;
+  /**
+   * Send the one transaction that lets the connected network take a change, when no network can
+   * yet. The screen reads the networks again once it lands.
+   */
+  onActivate?: () => void;
   onCancel: () => void;
   /** Done on the last screen, with the latest status per network; also the answer to a no-op. */
   onDone: (result: RecoverySetupResult) => void;
 
   // Status
   isProcessing: boolean;
+  /** The activation transaction is being signed or landing. */
+  isActivating?: boolean;
   status?: string;
   /** What the setup returned; shows the done screen. */
   result?: RecoverySetupResult | null;
 
-  // Gas estimation props (first setup only: an edit is relayed, and JustaLab pays)
+  // Gas estimation props (the activation transaction only: every change is relayed, and JAW pays)
   gasFee?: string;
   gasFeeLoading?: boolean;
   gasEstimationError?: string;

@@ -6,17 +6,20 @@ import {
   type RecoveryChainConfig,
   type RecoveryConfig,
   type RecoveryMethodInput,
+  type RecoveryNetwork,
+  type RecoveryNetworksPlan,
+  type TransactionCall,
 } from '@jaw.id/core';
-import { size, type Hex } from 'viem';
+import { size, type Address, type Hex } from 'viem';
 import { formatAddress } from './formatAddress';
 
 // ============================================================================
 // Recovery setup: the vocabulary the setup and manage screens speak.
 //
-// The sibling of `permissionExecution.ts` for recovery. Core owns the config read, the change
-// planner and the door rule; what lives here is UI vocabulary: the named reasons a setup can't go
-// ahead, the guardrails on the time to cancel, how a wait and a method are labelled, and how a
-// relayed change reads per network.
+// The sibling of `permissionExecution.ts` for recovery. Core owns the networks read and the change
+// planner; what lives here is UI vocabulary: the named reasons a setup can't go ahead, the
+// guardrails on the time to cancel, how a wait and a method are labelled, and how each network
+// reads before and after a relayed change.
 // ============================================================================
 
 const HOUR = 3600;
@@ -27,17 +30,11 @@ export const SHORT_RECOVERY_DELAY_SECONDS = 24 * HOUR;
 
 /** Something worth saying before a recovery setup. Every member blocks Continue. */
 export type RecoverySetupProblem =
-  /** The configs read has no entry for the connected chain: recovery isn't deployed there. */
-  | 'unsupported-chain'
-  /** The configs read itself failed (network, server error, missing key). */
-  | 'lookup-failed';
+  /** The networks read failed (network, server error, missing key, an owner read). */
+  'lookup-failed';
 
 /** Short label and the detail behind it, one sentence pair per problem. */
 export const RECOVERY_SETUP_PROBLEM_TEXT: Record<RecoverySetupProblem, { text: string; detail: string }> = {
-  'unsupported-chain': {
-    text: 'Recovery isn’t available on this network',
-    detail: 'Switch to a network that supports recovery and try again.',
-  },
   'lookup-failed': {
     text: 'Recovery settings couldn’t be loaded',
     detail:
@@ -172,34 +169,101 @@ export function recoveryGuardianRows(
   return rows;
 }
 
-/** The networks an edit reaches: where the account is deployed and the manager is an owner. */
-function editNetworks(chains: RecoveryChainConfig[]): string {
-  return chains
-    .filter((chain) => chain.deployed && chain.enrolled)
-    .map((chain) => chain.chainId)
+/**
+ * Why no network can take a change yet, judged on the connected network, where a transaction would
+ * go. Null while some network can.
+ * - `deploy`: one transaction deploys the account there, with what a change needs.
+ * - `enable`: one transaction adds the owners a change needs there.
+ * - `unsupported-network`: recovery doesn't run on the connected network.
+ * - `not-owner`: the signing key isn't an owner of the account there.
+ * - `not-available`: nothing turns recovery on for this account (created before recovery).
+ */
+export type RecoveryUnavailable = 'deploy' | 'enable' | 'unsupported-network' | 'not-owner' | 'not-available';
+
+export function recoveryUnavailable(plan: RecoveryNetworksPlan, chainId: number): RecoveryUnavailable | null {
+  if (plan.base) return null;
+  const connected = plan.networks.find((network) => network.chainId === chainId);
+  if (!connected) return 'unsupported-network';
+  if (connected.enabledByTransaction) return connected.status === 'not-deployed' ? 'deploy' : 'enable';
+  return connected.status === 'not-owner' ? 'not-owner' : 'not-available';
+}
+
+/** Short label and the detail behind it, for the connected network's name. */
+export const RECOVERY_UNAVAILABLE_TEXT: Record<
+  RecoveryUnavailable,
+  { text: string; detail: (network: string) => string }
+> = {
+  deploy: {
+    text: 'Your account isn’t on any network yet',
+    detail: (network) => `Activate it on ${network} with one transaction, then set up recovery with one signature.`,
+  },
+  enable: {
+    text: 'Recovery needs one transaction first',
+    detail: (network) => `Activate recovery on ${network} with one transaction, then set it up with one signature.`,
+  },
+  'unsupported-network': {
+    text: 'Recovery isn’t available on this network',
+    detail: () => 'Switch to a network that supports recovery and try again.',
+  },
+  'not-owner': {
+    text: 'This passkey can’t change recovery here',
+    detail: (network) => `It isn’t an owner of this account on ${network}.`,
+  },
+  'not-available': {
+    text: 'Recovery isn’t available for this account',
+    detail: () => 'Only accounts created since recovery launched can turn it on.',
+  },
+};
+
+/** Why a network is left out of a change, or null for one it reaches or the account isn't on. */
+export function recoveryNetworkNote(network: RecoveryNetwork): string | null {
+  switch (network.status) {
+    case 'ready':
+    case 'not-deployed':
+      return null;
+    case 'out-of-sync':
+      return 'Different guardians';
+    case 'not-owner':
+      return network.enabledByTransaction ? 'After your next transaction there' : 'Can’t be changed with this passkey';
+    case 'not-available':
+      return network.enabledByTransaction ? 'After your next transaction there' : 'Not available for this account';
+  }
+}
+
+/**
+ * The transaction behind "Activate on <network>": a call to the account itself with nothing in it.
+ * The account's own sends do the rest around any call: deploy the account, and add the owners a
+ * recovery change needs when it lacks them.
+ */
+export function recoveryActivationCalls(account: Address): TransactionCall[] {
+  return [{ to: account, value: 0n, data: '0x' }];
+}
+
+/** The networks a change reaches, as one comparable value. */
+function readyNetworks(plan: RecoveryNetworksPlan): string {
+  return plan.networks
+    .filter((network) => network.status === 'ready')
+    .map((network) => network.chainId)
     .sort((a, b) => a - b)
     .join(',');
 }
 
 /**
- * Whether the plan a confirm screen showed still holds against a fresh configs read: the same
- * door, the same change list on the connected network, the same networks reached. `Account`
- * plans again from its own read when it signs, so a config changed elsewhere in between (another
- * device, another app) would otherwise sign a change list nobody saw.
+ * Whether the plan a confirm screen showed still holds against a fresh networks read: the same
+ * change list from the base network, and the same networks reached. `Account` plans again from its
+ * own read when it signs, so a config changed elsewhere in between (another device, another app)
+ * would otherwise sign a change list nobody saw.
  */
 export function recoveryPlanStillHolds(
-  shown: RecoveryChainConfig[],
-  fresh: RecoveryChainConfig[],
-  chainId: number,
+  shown: RecoveryNetworksPlan,
+  fresh: RecoveryNetworksPlan,
   reviewed: RecoveryConfig
 ): boolean {
-  const before = shown.find((chain) => chain.chainId === chainId);
-  const now = fresh.find((chain) => chain.chainId === chainId);
-  if (!before || !now) return false;
+  if (!shown.base || !fresh.base) return false;
   return (
-    isFirstRecoverySetup(before) === isFirstRecoverySetup(now) &&
-    before.enrolled === now.enrolled &&
-    editNetworks(shown) === editNetworks(fresh) &&
-    JSON.stringify(planRecoveryChanges(before, reviewed)) === JSON.stringify(planRecoveryChanges(now, reviewed))
+    isFirstRecoverySetup(shown.base) === isFirstRecoverySetup(fresh.base) &&
+    readyNetworks(shown) === readyNetworks(fresh) &&
+    JSON.stringify(planRecoveryChanges(shown.base, reviewed)) ===
+      JSON.stringify(planRecoveryChanges(fresh.base, reviewed))
   );
 }

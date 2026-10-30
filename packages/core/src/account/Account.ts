@@ -1,5 +1,13 @@
 import type { Address, Hash, Hex, TypedDataDefinition, TypedData, LocalAccount } from 'viem';
-import { isHex, encodeFunctionData, erc20Abi, createPublicClient, numberToHex, hashTypedData } from 'viem';
+import {
+    isHex,
+    encodeFunctionData,
+    decodeFunctionData,
+    erc20Abi,
+    createPublicClient,
+    numberToHex,
+    hashTypedData,
+} from 'viem';
 import { toWebAuthnAccount, type SmartAccount, type WebAuthnAccount } from 'viem/account-abstraction';
 import {
     createSmartAccount,
@@ -23,7 +31,12 @@ import {
     transformReceiptsToEIP5792,
     type CallStatusResponse,
 } from '../rpc/wallet_sendCalls.js';
-import { type JustanAccountImplementation, sign as signWithOwner } from './toJustanAccount.js';
+import {
+    type JustanAccountImplementation,
+    abi as justanAccountAbi,
+    factoryAbi,
+    sign as signWithOwner,
+} from './toJustanAccount.js';
 import {
     type AccountRecord,
     deriveNewAccountRecord,
@@ -67,23 +80,29 @@ import {
 import {
     type AdminOp,
     type RecoveryConfig,
+    type RecoveryNetworkStatus,
+    type RecoveryNetworksPlan,
     type RecoverySetupResult,
     type RecoveryState,
     DEFAULT_RECOVERY_ADMIN_EXPIRY_SECONDS,
-    buildCancelRecoveryRequestCall,
-    buildRecoverySetupCalls,
     cancelRequestOp,
     diffRecoveryConfig,
     getCeremony,
     getRecoveryConfig,
-    isFirstRecoverySetup,
     listCeremonies,
+    planRecoveryNetworks,
     randomSalt,
     recoveryAdminTypedData,
     submitAdminBatch,
     toOwnerBytes,
 } from '../rpc/recovery.js';
-import { JAW_RPC_URL, JAW_PAYMASTER_URL, jawPaymasterUrl, ERC20_PAYMASTER_ADDRESS } from '../constants.js';
+import {
+    JAW_RPC_URL,
+    JAW_PAYMASTER_URL,
+    jawPaymasterUrl,
+    ERC20_PAYMASTER_ADDRESS,
+    RECOVERY_MANAGER_ADDRESS,
+} from '../constants.js';
 import { standardErrors } from '../errors/errors.js';
 import { type Chain, chains as chainStore, dropChainClients } from '../store/index.js';
 import { logAccountIssuance } from '../analytics/index.js';
@@ -1502,18 +1521,17 @@ export class Account {
      * edits: the methods that may get the account back and how many of them must
      * agree.
      *
-     * On a chain where the account is not enrolled or has no config yet, and for
-     * an EIP-7702 account, this is one userOp through the account door on the
-     * connected chain: enrol the recovery manager, register the methods, set the
-     * threshold, paid like any userOp. Otherwise it is one owner signature over a
-     * chain-free digest, relayed by JAW to every chain the account is deployed
-     * and enrolled on; the result then carries a batch id to poll with
-     * `getAdminBatch` until no chain is in flight.
+     * Always one owner signature over a chain-free digest, relayed by JAW to
+     * every network where the change can land (see `getRecoveryNetworks`): the
+     * account is deployed, the recovery manager and this key are owners, and the
+     * config matches the network the change is planned from. A first setup is
+     * relayed like an edit. The result carries a batch id to poll with
+     * `getAdminBatch` until no network is in flight.
      *
      * @param config - The desired methods and threshold
-     * @param paymasterUrlOverride - Optional paymaster URL for the account-door userOp
-     * @param paymasterContextOverride - Optional paymaster context for the account-door userOp
-     * @returns The door taken and the status per chain; an edit that changes nothing sends nothing
+     * @returns The status per network; a change that changes nothing sends nothing
+     * @throws -32602 when no network can take the change (for example the account is deployed nowhere)
+     * @throws -32603 when a network's owners cannot be read; nothing is signed
      *
      * @example
      * ```typescript
@@ -1526,46 +1544,30 @@ export class Account {
      * });
      * ```
      */
-    async setupRecovery(
-        config: RecoveryConfig,
-        paymasterUrlOverride?: string,
-        paymasterContextOverride?: Record<string, unknown>
-    ): Promise<RecoverySetupResult> {
-        const { chains } = await getRecoveryConfig(this.address, this._apiKey);
-        const current = chains.find((chain) => chain.chainId === this._chain.id);
-        if (!current) {
+    async setupRecovery(config: RecoveryConfig): Promise<RecoverySetupResult> {
+        const { base, networks } = await this.getRecoveryNetworks();
+        if (!base) {
             throw standardErrors.rpc.invalidParams({
-                message: `Recovery is not supported on chain ${this._chain.id}`,
+                message:
+                    'No network can take this recovery change: the account must be deployed on a network where recovery is available and this key is an owner',
             });
         }
 
-        // An EIP-7702 key is not among the account's registered owners, which is
-        // what the admin door checks; the account door is its only door.
-        if (isFirstRecoverySetup(current) || this._localAccount) {
-            const calls = buildRecoverySetupCalls(this.address, current, config);
-            return await this.sendRecoveryCalls(calls, paymasterUrlOverride, paymasterContextOverride);
-        }
-
-        const ops = diffRecoveryConfig(current, config);
+        const ops = diffRecoveryConfig(base, config);
         if (ops.length === 0) return { door: 'relay', chains: [] };
 
-        const chainIds = chains.filter((chain) => chain.deployed && chain.enrolled).map((chain) => chain.chainId);
+        const chainIds = networks.filter((network) => network.status === 'ready').map((network) => network.chainId);
         return await this.relayRecoveryOps(ops, chainIds);
     }
 
     /**
-     * Veto a pending recovery request on every chain it reached. One owner
-     * signature, relayed; an EIP-7702 account cancels on the connected chain
-     * through the account door instead.
+     * Veto a pending recovery request on every network it reached where this
+     * key is an owner. One owner signature, relayed.
      *
      * @param requestId - The ceremony's request id
-     * @returns The door taken and the status per chain
+     * @returns The status per network
      */
-    async cancelRecovery(
-        requestId: Hex,
-        paymasterUrlOverride?: string,
-        paymasterContextOverride?: Record<string, unknown>
-    ): Promise<RecoverySetupResult> {
+    async cancelRecovery(requestId: Hex): Promise<RecoverySetupResult> {
         const ceremony = await getCeremony(requestId, this._apiKey);
         const pending = ceremony.chains
             .filter((chain) => chain.status === 'PENDING' || chain.status === 'REQUESTED')
@@ -1576,20 +1578,37 @@ export class Account {
             });
         }
 
-        if (this._localAccount) {
-            if (!pending.includes(this._chain.id)) {
-                throw standardErrors.rpc.invalidParams({
-                    message: `Recovery request ${requestId} is not pending on chain ${this._chain.id}`,
-                });
-            }
-            return await this.sendRecoveryCalls(
-                [buildCancelRecoveryRequestCall(requestId)],
-                paymasterUrlOverride,
-                paymasterContextOverride
-            );
+        const owned = await this.readRecoveryOwnership(pending);
+        const chainIds = pending.filter((chainId) => owned.get(chainId) === true);
+        if (chainIds.length === 0) {
+            throw standardErrors.rpc.invalidParams({
+                message: `This key is not an owner on any network where recovery request ${requestId} is pending`,
+            });
         }
 
-        return await this.relayRecoveryOps([cancelRequestOp(requestId)], pending);
+        return await this.relayRecoveryOps([cancelRequestOp(requestId)], chainIds);
+    }
+
+    /**
+     * Where a recovery change would be relayed, and why each other network
+     * would not take it: what the recovery screen shows before the owner signs.
+     * A network one ordinary transaction would fix is marked
+     * `enabledByTransaction`.
+     */
+    async getRecoveryNetworks(): Promise<RecoveryNetworksPlan> {
+        const { chains } = await getRecoveryConfig(this.address, this._apiKey);
+        const readable = chains.filter((chain) => chain.deployed && chain.enrolled).map((chain) => chain.chainId);
+        const [owned, clearable] = await Promise.all([
+            this.readRecoveryOwnership(readable),
+            this.recoveryStatusesATransactionClears(),
+        ]);
+        const plan = planRecoveryNetworks(chains, owned, this._chain.id);
+        return {
+            ...plan,
+            networks: plan.networks.map((network) =>
+                clearable.has(network.status) ? { ...network, enabledByTransaction: true } : network
+            ),
+        };
     }
 
     /**
@@ -1620,16 +1639,62 @@ export class Account {
     }
 
     /**
-     * The account door: one userOp on the connected chain, landed before this returns.
+     * Whether this account's signing key is a current owner on each of
+     * `chainIds`, read from the chains in parallel: the recovery manager accepts
+     * an owner signature only from a current owner, and the backend rejects a
+     * whole batch when one network refuses it. A read that fails throws, so the
+     * caller stops before anything is signed.
      * @internal
      */
-    private async sendRecoveryCalls(
-        calls: TransactionCall[],
-        paymasterUrlOverride?: string,
-        paymasterContextOverride?: Record<string, unknown>
-    ): Promise<RecoverySetupResult> {
-        const txHash = await this.sendTransaction(calls, paymasterUrlOverride, paymasterContextOverride);
-        return { door: 'account', chains: [{ chainId: this._chain.id, status: 'COMPLETED', txHash }] };
+    private async readRecoveryOwnership(chainIds: number[]): Promise<Map<number, boolean>> {
+        const ownerBytes = this.recoveryOwnerBytes();
+        const owned = await Promise.all(
+            chainIds.map(async (chainId) => {
+                const publicClient = createPublicClient({
+                    chain: { id: chainId } as Parameters<typeof createPublicClient>[0]['chain'],
+                    transport: jawHttp(Account.rpcUrl(chainId, this._apiKey)),
+                });
+                try {
+                    return await publicClient.readContract({
+                        address: this.address,
+                        abi: justanAccountAbi,
+                        functionName: 'isOwnerBytes',
+                        args: [ownerBytes],
+                    });
+                } catch (error) {
+                    throw standardErrors.rpc.internal({
+                        message: `Could not read the account's owners on chain ${chainId}; try again`,
+                        data: { cause: error instanceof Error ? error.message : String(error) },
+                    });
+                }
+            })
+        );
+        return new Map(chainIds.map((chainId, i) => [chainId, owned[i]]));
+    }
+
+    /**
+     * The network statuses one ordinary transaction from this account clears.
+     * A 7702 account's sends delegate it and add the recovery manager and its
+     * own address; a local-key account's add the manager; a passkey account's
+     * first send deploys it, with the manager only when its starting owners
+     * hold it (recipe v2).
+     * @internal
+     */
+    private async recoveryStatusesATransactionClears(): Promise<Set<RecoveryNetworkStatus>> {
+        if (this._ownerSetup?.kind === 'eip7702') return new Set(['not-deployed', 'not-available', 'not-owner']);
+        if (this._ownerSetup?.kind === 'localKey') return new Set(['not-deployed', 'not-available']);
+
+        const { factoryData } = await this._smartAccount.getFactoryArgs();
+        if (!factoryData) return new Set();
+        const { functionName, args } = decodeFunctionData({ abi: factoryAbi, data: factoryData });
+        if (functionName !== 'createAccount') return new Set();
+        const manager = toOwnerBytes(RECOVERY_MANAGER_ADDRESS).toLowerCase();
+        return args[0].some((owner) => owner.toLowerCase() === manager) ? new Set(['not-deployed']) : new Set();
+    }
+
+    /** The owner bytes the recovery manager knows this account's signing key by. @internal */
+    private recoveryOwnerBytes(): Hex {
+        return this._owner.type === 'webAuthn' ? this._owner.publicKey : toOwnerBytes(this._owner.address);
     }
 
     /**
@@ -1641,8 +1706,7 @@ export class Account {
      */
     private async signRecoveryDigest(hash: Hash): Promise<{ ownerBytes: Hex; proof: Hex }> {
         const proof = await signWithOwner({ hash, owner: this._owner });
-        const ownerBytes = this._owner.type === 'webAuthn' ? this._owner.publicKey : toOwnerBytes(this._owner.address);
-        return { ownerBytes, proof };
+        return { ownerBytes: this.recoveryOwnerBytes(), proof };
     }
 
     // ============================================
@@ -1700,6 +1764,11 @@ export class Account {
     // Private Static Helpers
     // ============================================
 
+    /** The JAW RPC endpoint for a chain. @internal */
+    private static rpcUrl(chainId: number, apiKey?: string): string {
+        return apiKey ? `${JAW_RPC_URL}?chainId=${chainId}&api-key=${apiKey}` : `${JAW_RPC_URL}?chainId=${chainId}`;
+    }
+
     /**
      * Build chain configuration with RPC URL and register it in the global
      * chain store. Registration is required so background ops (e.g. receipt
@@ -1713,13 +1782,9 @@ export class Account {
         paymasterUrl?: string,
         paymasterContext?: Record<string, unknown>
     ): Chain {
-        const rpcUrl = apiKey
-            ? `${JAW_RPC_URL}?chainId=${chainId}&api-key=${apiKey}`
-            : `${JAW_RPC_URL}?chainId=${chainId}`;
-
         const chain: Chain = {
             id: chainId,
-            rpcUrl,
+            rpcUrl: Account.rpcUrl(chainId, apiKey),
             // The context has to ride on the chain alongside the url, the same
             // way `createInitialChains` carries a whole `PaymasterConfig`.
             // Keeping only the url is what stranded `AccountConfig.paymasterContext`:

@@ -551,17 +551,6 @@ function changeToOp(change: RecoveryChange): AdminOp {
     }
 }
 
-function changeToCall(account: Address, change: RecoveryChange): { to: Address; data: Hex } {
-    switch (change.kind) {
-        case 'add':
-            return buildAddRecoveryCall(account, change.method);
-        case 'remove':
-            return buildRemoveRecoveryCall(account, change.recoveryId);
-        case 'threshold':
-            return buildSetRecoveryThresholdCall(account, change.threshold);
-    }
-}
-
 /**
  * The admin-door batch that takes the on-chain config to the desired one, as
  * the owner signs it: one signature, relayed to every enrolled chain.
@@ -571,9 +560,92 @@ export function diffRecoveryConfig(current: RecoveryChainConfig, desired: Recove
 }
 
 /**
+ * Why a network can or cannot take a relayed recovery change:
+ * - `ready`: the change is relayed there.
+ * - `not-deployed`: the account has no code there.
+ * - `not-available`: deployed, but the recovery manager is not an owner (an
+ *   account created before recovery, or a 7702 or local-key account before its
+ *   next transaction there).
+ * - `not-owner`: the key signing the change is not an owner there.
+ * - `out-of-sync`: its guardians or threshold differ from the base network's,
+ *   so the same change would not apply there.
+ */
+export type RecoveryNetworkStatus = 'ready' | 'not-deployed' | 'not-available' | 'not-owner' | 'out-of-sync';
+
+/** One network, whether it can take a relayed recovery change, and its config there. */
+export type RecoveryNetwork = {
+    chainId: number;
+    status: RecoveryNetworkStatus;
+    config: RecoveryChainConfig;
+    /**
+     * One ordinary transaction from the account on this network would give it
+     * what a relayed change needs: it deploys the account with the recovery
+     * manager as an owner, or adds the missing owners. Set by
+     * `Account.getRecoveryNetworks`, which knows how the account gets its owners.
+     */
+    enabledByTransaction?: boolean;
+};
+
+/**
+ * The networks a recovery change goes to. `base` is the config the change is
+ * planned from; absent when no network is ready, so nothing can be relayed.
+ */
+export type RecoveryNetworksPlan = {
+    base?: RecoveryChainConfig;
+    networks: RecoveryNetwork[];
+};
+
+/**
+ * Where one signed recovery change can be relayed. The backend dry-runs a
+ * batch on every network it names and rejects the whole batch if one fails,
+ * so only networks where it passes are `ready`: deployed, the manager an
+ * owner, the signing key an owner, and the same config as the base.
+ *
+ * The base is the connected network when it can take the change, otherwise
+ * the first network that can, in the order given.
+ *
+ * @param signerIsOwner - Whether the signing key owns the account, per chain
+ * id; a deployed, enrolled network missing from it counts as not owned.
+ */
+export function planRecoveryNetworks(
+    chains: RecoveryChainConfig[],
+    signerIsOwner: ReadonlyMap<number, boolean>,
+    connectedChainId: number
+): RecoveryNetworksPlan {
+    const reachable = (chain: RecoveryChainConfig): RecoveryNetworkStatus => {
+        if (!chain.deployed) return 'not-deployed';
+        if (!chain.enrolled) return 'not-available';
+        if (signerIsOwner.get(chain.chainId) !== true) return 'not-owner';
+        return 'ready';
+    };
+
+    const candidates = chains.filter((chain) => reachable(chain) === 'ready');
+    const base = candidates.find((chain) => chain.chainId === connectedChainId) ?? candidates[0];
+
+    const networks = chains.map((config) => {
+        const status = reachable(config);
+        return {
+            chainId: config.chainId,
+            status: status === 'ready' && base && !sameRecoveryConfig(config, base) ? 'out-of-sync' : status,
+            config,
+        } satisfies RecoveryNetwork;
+    });
+
+    return { ...(base ? { base } : {}), networks };
+}
+
+/** Whether two networks hold the same threshold and the same methods, each with the same wait. */
+function sameRecoveryConfig(a: RecoveryChainConfig, b: RecoveryChainConfig): boolean {
+    const methods = (config: RecoveryChainConfig) =>
+        new Set(config.recoveries.map((method) => `${methodKey(method.provider, method.commitment)}:${method.delay}`));
+    const [left, right] = [methods(a), methods(b)];
+    return a.threshold === b.threshold && left.size === right.size && [...left].every((key) => right.has(key));
+}
+
+/**
  * Whether a setup on this chain is the first one: the manager is not an owner
- * yet, or holds no method for the account. A first setup goes through the
- * account door; anything else is an edit the admin door relays.
+ * yet, or holds no method for the account. Anything else is an edit. Both are
+ * relayed the same way; the screens only name them differently.
  */
 export function isFirstRecoverySetup(current: RecoveryChainConfig): boolean {
     return !current.enrolled || current.recoveries.length === 0;
@@ -651,31 +723,6 @@ export function buildCancelRecoveryRequestCall(requestId: Hex): { to: Address; d
             args: [requestId],
         }),
     };
-}
-
-/**
- * The account door: one userOp that enrols the manager when it is not an owner
- * yet, then applies every change the config needs, in the order the admin batch
- * would. The account pays like for any userOp, so this works on a chain where
- * the account has no code yet and the relayer cannot go. It is the first setup
- * on a chain and, for accounts that cannot use the admin door, every edit.
- *
- * @param current - The chain's config from the configs read; absent when the
- * backend lists nothing for the chain, which reads as nothing registered.
- */
-export function buildRecoverySetupCalls(
-    account: Address,
-    current: RecoveryChainConfig | undefined,
-    desired: RecoveryConfig
-): Array<{ to: Address; data: Hex }> {
-    const base = current ?? { chainId: 0, deployed: false, enrolled: false, threshold: 0, recoveries: [] };
-    const calls: Array<{ to: Address; data: Hex }> = [];
-
-    if (!base.enrolled) calls.push(buildEnrollRecoveryCall(account));
-
-    for (const change of planRecoveryChanges(base, desired)) calls.push(changeToCall(account, change));
-
-    return calls;
 }
 
 function apiKeyHeaders(apiKey?: string): { 'x-api-key'?: string } {

@@ -7,7 +7,7 @@ import { recoveryRelayState } from '../utils/recoverySetup';
 
 /** How often a relayed change is polled, and for how long before the screen stops waiting. */
 export const RECOVERY_RELAY_POLL_MS = 3_000;
-export const RECOVERY_RELAY_POLL_TIMEOUT_MS = 120_000;
+export const RECOVERY_RELAY_POLL_TIMEOUT_MS = 300_000;
 
 export interface UseRecoveryRelayStatusResult {
   /** The latest status per network: the starting statuses until the first poll lands. */
@@ -19,7 +19,7 @@ export interface UseRecoveryRelayStatusResult {
 }
 
 /**
- * Polls a relayed admin batch (`getAdminBatch`) until no network is in flight, or for two minutes.
+ * Polls a relayed admin batch (`getAdminBatch`) until no network is in flight, or for five minutes.
  * The batch has no status of its own: it is done when every network's job is.
  *
  * @param batchId - The batch to poll; nothing is polled without one (the account door has none)

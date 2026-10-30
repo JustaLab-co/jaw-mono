@@ -4,7 +4,6 @@ import {
     AdminOpType,
     addRecoveryOp,
     approveCeremony,
-    buildRecoverySetupCalls,
     computeRecoveryId,
     createCeremony,
     diffRecoveryConfig,
@@ -353,46 +352,6 @@ describe('minimumRecoveryDelay', () => {
         minimumRecoveryDelay(recoveries, 1);
 
         expect(recoveries.map((method) => method.delay)).toEqual([72 * HOUR, 24 * HOUR]);
-    });
-});
-
-describe('buildRecoverySetupCalls', () => {
-    const wanted = { recoveries: [A, B].map((commitment) => ({ commitment, delay: 60 })), threshold: 2 };
-
-    it('enrols the manager first on a chain that has not, then adds and sets the threshold', () => {
-        const fresh: RecoveryChainConfig = {
-            chainId: 84_532,
-            deployed: false,
-            enrolled: false,
-            threshold: 0,
-            recoveries: [],
-        };
-
-        const calls = buildRecoverySetupCalls(ACCOUNT, fresh, wanted);
-
-        expect(calls).toHaveLength(4);
-        expect(calls[0].to).toBe(ACCOUNT);
-        expect(calls.slice(1).map((call) => call.to)).toEqual(Array(3).fill(RECOVERY_MANAGER_ADDRESS));
-    });
-
-    it('skips the enrolment on a chain that already has it', () => {
-        const enrolled: RecoveryChainConfig = {
-            chainId: 84_532,
-            deployed: true,
-            enrolled: true,
-            threshold: 0,
-            recoveries: [],
-        };
-
-        expect(buildRecoverySetupCalls(ACCOUNT, enrolled, wanted).map((call) => call.to)).toEqual(
-            Array(3).fill(RECOVERY_MANAGER_ADDRESS)
-        );
-    });
-
-    it('sends nothing on a chain that already holds the config', () => {
-        const same = { recoveries: [A, B, C].map((commitment) => ({ commitment, delay: 60 })), threshold: 2 };
-
-        expect(buildRecoverySetupCalls(ACCOUNT, ON_CHAIN, same)).toEqual([]);
     });
 });
 
