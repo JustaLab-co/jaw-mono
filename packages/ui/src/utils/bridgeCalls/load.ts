@@ -1,4 +1,5 @@
 import { buildHandleJawRpcUrl, JAW_RPC_URL } from '@jaw.id/core';
+import { dappOriginHeader } from '@jaw.id/core/internal';
 import { overlay } from './overlay';
 import { parse, tableProblem } from './parse';
 import { BridgeContracts, snapshotContracts } from './table';
@@ -61,7 +62,7 @@ export function currentContracts(): BridgeContracts {
 async function fetchTable(apiKey: string | undefined, have: number | undefined) {
   const response = await fetch(buildHandleJawRpcUrl(JAW_RPC_URL, apiKey), {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...dappOriginHeader() },
     body: JSON.stringify({
       jsonrpc: '2.0',
       id: 1,
