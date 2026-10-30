@@ -23,6 +23,14 @@ describe('given tokens outside the pinned table', () => {
     expect(await readOne({ symbol: 'USDC', decimals: 6n })).toEqual({ symbol: 'USDC', decimals: 6 });
   });
 
+  it('when the symbol is a bytes32 word, then it is decoded without its null bytes', async () => {
+    expect(await readOne({ symbol: 'MKR', decimals: 18n, bytes32: true })).toEqual({ symbol: 'MKR', decimals: 18 });
+  });
+
+  it('when a bytes32 symbol is not printable text, then the token stays unread', async () => {
+    expect(await readOne({ symbol: 'AA\nPL', decimals: 18n, bytes32: true })).toBeUndefined();
+  });
+
   it.each([
     ['decimals() reverts', { symbol: 'AAPL', revert: 'decimals' }],
     ['symbol() reverts', { symbol: 'AAPL', decimals: 18n, revert: 'symbol' }],

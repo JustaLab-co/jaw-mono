@@ -1,9 +1,12 @@
-import { parseAbi, type Client } from 'viem';
+import { hexToString, parseAbi, type Client } from 'viem';
 import { readContract } from 'viem/actions';
 import { readKey, type TokenReads } from './table';
 import type { TokenRef } from './view';
 
 const ERC20_ABI = parseAbi(['function symbol() view returns (string)', 'function decimals() view returns (uint256)']);
+
+// Older tokens (MKR style) return the symbol as bytes32 instead of a string.
+const BYTES32_SYMBOL_ABI = parseAbi(['function symbol() view returns (bytes32)']);
 
 const MAX_DECIMALS = 36n;
 const TIMEOUT_MS = 5_000;
@@ -11,9 +14,18 @@ const PRINTABLE_SYMBOL = /^[\x20-\x7E]{1,16}$/;
 
 type Read = { symbol: string; decimals: number };
 
+async function readSymbol(client: Client, address: TokenRef['address']): Promise<string> {
+  try {
+    return await readContract(client, { address, abi: ERC20_ABI, functionName: 'symbol' });
+  } catch {
+    const word = await readContract(client, { address, abi: BYTES32_SYMBOL_ABI, functionName: 'symbol' });
+    return hexToString(word, { size: 32 });
+  }
+}
+
 async function readToken(client: Client, address: TokenRef['address']): Promise<Read | undefined> {
   const [symbol, decimals] = await Promise.all([
-    readContract(client, { address, abi: ERC20_ABI, functionName: 'symbol' }),
+    readSymbol(client, address),
     readContract(client, { address, abi: ERC20_ABI, functionName: 'decimals' }),
   ]);
   const trimmed = symbol.trim();
