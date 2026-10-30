@@ -55,7 +55,7 @@ jobs:
 
       - uses: nrwl/nx-set-shas@v4
 
-      # Each project's vitest config sets thresholds at its current coverage,
+      # Each project's vitest config sets thresholds a point under its coverage,
       # so a project that drops below them fails this step. A PR measures only
       # the projects it affects; main measures all of them for the baseline.
       - name: Test with coverage
@@ -84,8 +84,7 @@ jobs:
           path: coverage/**/coverage-summary.json
           retention-days: 90
 
-      # A run that failed before its tests uploads no artifact, so older runs
-      # are tried in turn.
+      # A failed run uploads no artifact, so older runs are tried in turn.
       - name: Download main baseline
         if: ${{ !cancelled() && github.event_name == 'pull_request' }}
         env:
