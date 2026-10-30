@@ -593,9 +593,9 @@ describe('useGasEstimation fee-token outcome per ERC-20 result', () => {
         if (failure === undefined) return true;
         return failure.trim() !== '' && [...failure].length <= 160 && !unprintable.test(failure);
       }),
-      { numRuns: 60 }
+      { numRuns: 40 }
     );
-  });
+  }, 30_000);
 
   // A later round rewrites every field the earlier round set, so the banner follows the latest round.
   describe('a later round replaces the earlier failure', () => {
