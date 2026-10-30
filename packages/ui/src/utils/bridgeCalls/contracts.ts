@@ -203,6 +203,8 @@ const ARC_SOLVERS = [
 const usdc = { symbol: 'USDC', decimals: 6 };
 const weth = { symbol: 'WETH', decimals: 18 };
 const usdg = { symbol: 'USDG', decimals: 6 };
+const usdt = { symbol: 'USDT', decimals: 6 };
+const eure = { symbol: 'EURe', decimals: 18 };
 
 /**
  * Across addresses come from across-protocol/contracts (broadcast/deployed-addresses.json and
@@ -231,6 +233,9 @@ export const BRIDGE_CHAINS: Readonly<Record<number, BridgeChain>> = {
     tokens: {
       '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48': usdc,
       '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2': weth,
+      // EURe has two contracts on Ethereum. Both checked on chain by symbol and decimals.
+      '0x3231Cb76718CDeF2155FC47b5286d82e6eDA273f': eure,
+      '0x39b8B6385416f4cA36a20319F70D28621895279D': eure,
     },
   },
   8453: {
@@ -269,7 +274,12 @@ export const BRIDGE_CHAINS: Readonly<Record<number, BridgeChain>> = {
       erc20Routers: RELAY_ROUTERS,
       solvers: [RELAY_SOLVER],
     },
-    tokens: { '0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85': usdc, [OP_WETH]: weth },
+    // USDT checked on chain by symbol and decimals.
+    tokens: {
+      '0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85': usdc,
+      '0x94b008aA00579c1307B0EF2c499aD98a8ce58e58': usdt,
+      [OP_WETH]: weth,
+    },
   },
   42161: {
     name: 'Arbitrum',

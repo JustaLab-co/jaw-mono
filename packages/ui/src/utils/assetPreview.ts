@@ -26,6 +26,8 @@ export interface AssetDelta {
   direction: 'in' | 'out';
   amountFormatted: string;
   isNative: boolean;
+  /** Symbol and decimals are the token's own claim and nothing here vouches for them. */
+  unverified?: true;
 }
 
 /**

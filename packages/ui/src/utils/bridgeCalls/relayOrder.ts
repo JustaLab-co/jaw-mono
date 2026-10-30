@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { RelayContracts } from './contracts';
 import type { RelayDeposit } from './relay';
 import type { BridgeContracts } from './table';
-import { pinnedToken, tokenAmount, type TokenAmount } from './view';
+import { tokenAmount, tokenOf, type TokenAmount, type TokenRef } from './view';
 
 export const ORDER_TYPES = {
   Order: [
@@ -118,11 +118,17 @@ export type RelayOrder = {
   minimumReceived: TokenAmount;
   refundTo: Address;
 };
-export type OrderUnshown = { kind: 'unshown'; reason: string; outsideTable?: true };
+/** `token` is the one whose symbol and decimals would let the terms show. */
+export type OrderUnshown = { kind: 'unshown'; reason: string; outsideTable?: true; token?: TokenRef };
 
-const unshown = (reason: string, outsideTable?: true): OrderUnshown => ({ kind: 'unshown', reason, outsideTable });
-const includes = (what: string, outsideTable?: true) =>
-  unshown(`This Relay order includes ${what}, so its terms are not shown.`, outsideTable);
+const unshown = (reason: string, outsideTable?: true, token?: TokenRef): OrderUnshown => ({
+  kind: 'unshown',
+  reason,
+  outsideTable,
+  token,
+});
+const includes = (what: string, outsideTable?: true, token?: TokenRef) =>
+  unshown(`This Relay order includes ${what}, so its terms are not shown.`, outsideTable, token);
 const MISMATCH = unshown('The Relay order details do not match this deposit, so this screen does not show them.');
 const UNKNOWN_ROUTE = unshown(
   'This Relay order uses a solver or route this screen does not recognize, so its terms are not shown.',
@@ -185,8 +191,10 @@ function termsOf(contracts: BridgeContracts, order: Order): RelayOrder | OrderUn
   const refundTo = order.inputs[0].refunds.map((refund) => refund.recipient.toLowerCase() as Hex);
   const destination = contracts.relayByProtocolChain(output.chainId)?.chainId;
   if (destination === undefined || !isAddress(recipient)) return undefined;
-  if (!isAddress(currency) || (currency !== zeroAddress && !pinnedToken(contracts, destination, currency))) {
-    return includes('an unrecognized token', true);
+  if (!isAddress(currency)) return includes('an unrecognized token', true);
+  const token = tokenOf(contracts, destination, currency);
+  if (currency !== zeroAddress && !token.known && !token.unverified) {
+    return includes('an unrecognized token', true, { chainId: destination, address: currency });
   }
   if (new Set(refundTo).size !== 1 || !isAddress(refundTo[0])) return undefined;
   return {

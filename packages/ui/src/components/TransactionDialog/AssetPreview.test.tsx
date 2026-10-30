@@ -9,6 +9,7 @@ vi.mock('../../utils/tokenPrice', () => ({ fetchTokenPrice: prices.fetch }));
 
 import { AssetPreview } from './AssetPreview';
 import type { AssetDelta } from '../../utils/assetPreview';
+import type { BridgeTransfer } from '../../utils/bridgeCalls/transfer';
 
 const WARNING = 'Could not simulate this transaction';
 
@@ -240,5 +241,59 @@ describe('AssetPreview rows, prices and tooltips', () => {
     expect(content.getAttribute('data-side')).toBe('top');
     expect(content.textContent).toContain('−1.234567891 USDC');
     vi.unstubAllGlobals();
+  });
+});
+
+describe('AssetPreview bridge receive side for a token read from the chain', () => {
+  const AAPL = '0xaF3D76f1834A1d425780943C99Ea8A608f8a93f9';
+  const SENT = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
+  const robinhood = { name: 'Robinhood Chain', nativeSymbol: 'ETH' };
+  const base = { name: 'Base', nativeSymbol: 'ETH' };
+  const transferTo = (token: BridgeTransfer['send']['token']): BridgeTransfer => ({
+    provider: 'across',
+    title: 'Bridge to Robinhood Chain',
+    send: { chainId: 8453, amount: 10_000_000n, token: { address: SENT, known: true, symbol: 'USDC', decimals: 6 } },
+    origin: base,
+    receive: { kind: 'minimum', amount: { chainId: 4663, amount: 2_500_000_000_000_000_000n, token } },
+    destination: robinhood,
+    details: [],
+  });
+  const read: BridgeTransfer['send']['token'] = {
+    address: AAPL,
+    known: false,
+    unverified: true,
+    symbol: 'AAPL',
+    decimals: 18,
+  };
+  const get = (text: string) => text.slice(text.indexOf('You get'));
+
+  it('shows the amount in the token units with the unverified tag and the short address', async () => {
+    await mount({ bridge: transferTo(read) });
+    const text = get(host.textContent!);
+    expect(text).toContain('AAPL');
+    expect(text).toContain('unverified');
+    expect(text).toContain('0xaF3D...93f9');
+    expect(text).toContain('≥ 2.5');
+    expect(host.textContent).not.toContain('base units');
+  });
+
+  it('does not price a token by the symbol it gave itself, and tags a USDC look-alike the same way', async () => {
+    prices.fetch.mockResolvedValue(1);
+    await mount({ bridge: transferTo({ ...read, symbol: 'USDC', decimals: 6 }) });
+    await settle();
+    expect(prices.fetch.mock.calls.map((c) => c[0])).toEqual(['USDC']);
+    expect(get(host.textContent!)).toContain('unverified');
+    expect(get(host.textContent!)).not.toContain('$');
+  });
+
+  it('leaves a pinned token without the tag', () => {
+    const out = html({ bridge: transferTo({ address: SENT, known: true, symbol: 'USDC', decimals: 6 }) });
+    expect(out).not.toContain('unverified');
+  });
+
+  it('keeps base units for a token that was not read', () => {
+    const out = html({ bridge: transferTo({ address: AAPL, known: false }) });
+    expect(get(out)).toContain('2500000000000000000 base units');
+    expect(out).not.toContain('unverified');
   });
 });

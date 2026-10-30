@@ -117,14 +117,29 @@ describe('given the pinned bridge table of the signing screen', () => {
     expect(JAW_FEE_RECIPIENT).toBe(getAddress(JAW_FEE_RECIPIENT));
   });
 
-  it('then USDC and USDG have 6 decimals except USDC on BSC, and every wrapped native token has 18', () => {
+  it('then USDC, USDG and USDT have 6 decimals except USDC on BSC, and EURe and every wrapped native token have 18', () => {
     for (const chain of chains) {
       for (const [address, token] of Object.entries(chain.tokens)) {
-        const expected = token.symbol === 'WETH' || (token.symbol === 'USDC' && chain.id === 56) ? 18 : 6;
+        const expected =
+          token.symbol === 'WETH' || token.symbol === 'EURe' || (token.symbol === 'USDC' && chain.id === 56) ? 18 : 6;
         expect(token.decimals, `${chain.id} ${address}`).toBe(expected);
-        expect(['USDC', 'USDG', 'WETH'], `${chain.id} ${address}`).toContain(token.symbol);
+        expect(['USDC', 'USDG', 'USDT', 'EURe', 'WETH'], `${chain.id} ${address}`).toContain(token.symbol);
       }
     }
+  });
+
+  it('then USDT on Optimism and both EURe contracts on Ethereum are pinned, and the Robinhood stock tokens are not', () => {
+    expect(BRIDGE_CHAINS[10]?.tokens['0x94b008aA00579c1307B0EF2c499aD98a8ce58e58']).toEqual({
+      symbol: 'USDT',
+      decimals: 6,
+    });
+    for (const address of [
+      '0x3231Cb76718CDeF2155FC47b5286d82e6eDA273f',
+      '0x39b8B6385416f4cA36a20319F70D28621895279D',
+    ] as const) {
+      expect(BRIDGE_CHAINS[1]?.tokens[address]).toEqual({ symbol: 'EURe', decimals: 18 });
+    }
+    expect(BRIDGE_CHAINS[4663]?.tokens['0xaF3D76f1834A1d425780943C99Ea8A608f8a93f9']).toBeUndefined();
   });
 
   it('then the wrapped native of an ETH chain is a known WETH token', () => {
@@ -149,6 +164,6 @@ describe('given the pinned bridge table of the signing screen', () => {
 
   it('then the table matches the reviewed digest, so any changed literal updates this test', () => {
     const digest = createHash('sha256').update(JSON.stringify({ BRIDGE_CHAINS, JAW_FEE_RECIPIENT })).digest('hex');
-    expect(digest).toBe('9126c692f780234873ad7a42dbf927d9828dea980d09a557f6ba7dfa88e34f43');
+    expect(digest).toBe('615d483ace344a15dd0fbdead59b815b11e0da7a521c37ecc2da8d71b0c357ae');
   });
 });
