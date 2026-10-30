@@ -9,6 +9,15 @@ export function getBaseUrl(dev = false) {
     return JAW_BASE_URL;
 }
 
+// The fetch adapter, used where there is no XHR (extension service workers, edge
+// runtimes), adds `User-Agent: axios/<version>`. Our API does not allow that
+// header in CORS, and Firefox sends it, so the preflight would fail there.
+const fetchWithoutUserAgent: typeof fetch = (input, init) => {
+    const request = new Request(input, init);
+    request.headers.delete('user-agent');
+    return fetch(request);
+};
+
 /**
  * The instance of axios with the base URL of Backend API.
  * @param dev - Whether to use the staging environment
@@ -17,6 +26,7 @@ export function getBaseUrl(dev = false) {
 export const backendInstance = (dev = false, customBaseUrl?: string) =>
     axios.create({
         baseURL: customBaseUrl ?? getBaseUrl(dev),
+        env: { fetch: fetchWithoutUserAgent },
     });
 
 /**
