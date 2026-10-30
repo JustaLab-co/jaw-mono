@@ -26,7 +26,7 @@ const CHECK = 'Check it before you confirm.';
 
 const STALE_TABLE = 'This screen could not refresh its list of bridge contracts.';
 
-export type BridgeStep = { alert: string } | null;
+export type BridgeStep = { unreadable: true } | null;
 
 /** `alerts` are red: a bridge call this screen cannot read. `notices` are yellow: worth a look, maybe intended. */
 export type BridgeBatch = { transfer?: BridgeTransfer; steps: BridgeStep[]; alerts: string[]; notices: string[] };
@@ -35,8 +35,24 @@ type Deposit = AcrossDeposit | RelayDeposit;
 type Read = Deposit | BridgeApprove | Unreadable | undefined;
 type Pull = { token: Address; amount: bigint; spender: Address };
 
-export const cannotRead = (provider: BridgeProvider) =>
-  `Cannot read this ${PROVIDER_NAME[provider]} call. Check the raw details before you confirm.`;
+const listed = (steps: number[]) =>
+  steps.length === 1 ? `${steps[0]}` : `${steps.slice(0, -1).join(', ')} and ${steps[steps.length - 1]}`;
+
+// A lone call has no step number on screen, so the line only names the provider.
+export function cannotRead(provider: BridgeProvider, steps: number[], batchSize: number): string {
+  const name = PROVIDER_NAME[provider];
+  if (batchSize === 1) return `Cannot read this ${name} call. Check its raw details before you confirm.`;
+  const many = steps.length > 1;
+  return `Cannot read the ${name} ${many ? 'calls in steps' : 'call in step'} ${listed(steps)}. Check ${many ? 'their' : 'its'} raw details before you confirm.`;
+}
+
+function unreadableAlerts(reads: Read[]): string[] {
+  const stepsBy = new Map<BridgeProvider, number[]>();
+  reads.forEach((read, at) => {
+    if (read?.kind === 'unreadable') stepsBy.set(read.provider, [...(stepsBy.get(read.provider) ?? []), at + 1]);
+  });
+  return [...stepsBy].map(([provider, steps]) => cannotRead(provider, steps, reads.length));
+}
 
 export function readBridgeBatch(
   contracts: BridgeContracts,
@@ -60,7 +76,6 @@ export function readBridgeBatchWithUnread(
   if (reads.every((read) => read === undefined)) return null;
 
   const steps = reads.map(stepOf);
-  const alerts = reads.flatMap((read) => (read?.kind === 'unreadable' ? [cannotRead(read.provider)] : []));
   const deposits = reads.filter((read): read is Deposit => read?.kind === 'deposit');
   const orders = deposits.map((deposit) =>
     deposit.provider === 'relay' ? readRelayOrder(contracts, relayOrder, deposit) : undefined
@@ -85,7 +100,7 @@ export function readBridgeBatchWithUnread(
     batch: {
       transfer: deposits.length === 1 ? transfers[0].transfer : undefined,
       steps,
-      alerts: [...new Set(alerts)],
+      alerts: unreadableAlerts(reads),
       notices: [...new Set(notices)],
     },
     unread: [
@@ -134,7 +149,7 @@ function approveNotices(calls: BridgeCall[], reads: Read[], deposit: Deposit): s
   return notices;
 }
 
-const stepOf = (read: Read): BridgeStep => (read?.kind === 'unreadable' ? { alert: cannotRead(read.provider) } : null);
+const stepOf = (read: Read): BridgeStep => (read?.kind === 'unreadable' ? { unreadable: true } : null);
 
 function pullOf({ send }: Deposit, call: BridgeCall): Pull | undefined {
   if (send.token.address === zeroAddress) return undefined;

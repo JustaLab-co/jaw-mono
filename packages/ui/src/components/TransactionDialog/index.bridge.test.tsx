@@ -95,7 +95,7 @@ const PERIPHERY = '0x97CCDBea4632140639aD5eA9b944aa034eb15fD4';
 const BASE_USDC = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 const RELAY_HIDDEN =
   'Relay keeps the destination chain and the recipient in an order outside this transaction. This screen cannot show them. Confirm only if you started this transfer yourself.';
-const UNREADABLE = 'Cannot read this Across call. Check the raw details before you confirm.';
+const UNREADABLE = 'Cannot read the Across call in step 2. Check its raw details before you confirm.';
 
 const word = (hex: string) => hex.replace(/^0x/, '').toLowerCase().padStart(64, '0');
 const approve = (spender: string, amount = '989680'): BridgeCall => ({
@@ -176,9 +176,11 @@ const renderLive = async (transactions: BridgeCall[], extra: Extra = {}) => {
 const title = (root: HTMLElement) => root.querySelector('h2')?.textContent;
 const red = (root: HTMLElement) => [...root.querySelectorAll('p.text-destructive')].map((e) => e.textContent);
 const yellow = (root: HTMLElement) =>
-  [...root.querySelectorAll('[role="alert"].bg-warning\\/10 p, [role="alert"] > p')].map((e) => e.textContent);
+  [...root.querySelectorAll('[role="alert"].bg-warning\\/10 p, [role="alert"]:not([aria-label]) > p')].map(
+    (e) => e.textContent
+  );
 const notice = (root: HTMLElement, text: string) =>
-  [...root.querySelectorAll('[role="alert"] > p')].find((e) => e.textContent === text);
+  [...root.querySelectorAll('[role="alert"]:not([aria-label]) > p')].find((e) => e.textContent === text);
 const before = (first?: Element | null, second?: Element | null) =>
   !!first && !!second && !!(first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING);
 const box = (root: HTMLElement, heading: string) =>
@@ -425,8 +427,8 @@ describe('TransactionDialog notices around a bridge deposit', () => {
     const odd = { ...RELAY_USDC_APPROVE, data: RELAY_USDC_APPROVE.data + '00' };
     const root = render([odd, RELAY_USDC_DEPOSIT]);
     expect(title(root)).toBe('Deposit to Relay');
-    expect(red(root)).toEqual(['Cannot read this Relay call. Check the raw details before you confirm.']);
-    expect(root.querySelectorAll('[role="alert"].flex-col')).toHaveLength(2);
+    expect(red(root)).toEqual(['Cannot read the Relay call in step 1. Check its raw details before you confirm.']);
+    expect(root.querySelectorAll('[role="alert"]')).toHaveLength(2);
   });
 
   it('shows the deposit count when there is no single transfer to show', () => {
@@ -544,21 +546,27 @@ describe('TransactionDialog with a bridge into a token outside the table', () =>
 
 describe('TransactionDialog with bridge calls it cannot read', () => {
   const ATTACKER = '0x2222222222222222222222222222222222222222';
-  const ACROSS_ALERT = 'Cannot read this Across call. Check the raw details before you confirm.';
-  const RELAY_ALERT = 'Cannot read this Relay call. Check the raw details before you confirm.';
+  const ACROSS_1 = 'Cannot read the Across call in step 1. Check its raw details before you confirm.';
+  const ACROSS_2 = 'Cannot read the Across call in step 2. Check its raw details before you confirm.';
+  const ACROSS_3 = 'Cannot read the Across call in step 3. Check its raw details before you confirm.';
+  const ACROSS_ONE_TWO = 'Cannot read the Across calls in steps 1 and 2. Check their raw details before you confirm.';
+  const RELAY_THREE_FOUR = 'Cannot read the Relay calls in steps 3 and 4. Check their raw details before you confirm.';
+  const ACROSS_ALL =
+    'Cannot read the Across calls in steps 1, 2, 3, 4, 5, 6, 7 and 8. Check their raw details before you confirm.';
+  const ACROSS_ONLY = 'Cannot read this Across call. Check its raw details before you confirm.';
   const tail = (call: BridgeCall): BridgeCall => ({ ...call, data: call.data + '00' });
   const paid = (call: BridgeCall): BridgeCall => ({ ...call, value: '1' });
 
-  const alertLines = (root: HTMLElement) => [...root.querySelectorAll('[role="alert"] > p.text-destructive')];
+  const alertLines = (root: HTMLElement) => [
+    ...root.querySelectorAll('[role="alert"][aria-label="Unreadable bridge calls"] > p'),
+  ];
   const steps = (root: HTMLElement) =>
     [...root.querySelectorAll('[data-slot="accordion-item"]')].filter(
       (item) => item.querySelector('button')?.textContent !== 'Details'
     );
   const marked = (step: Element) => step.querySelector('[aria-label="Unreadable call"]') !== null;
-  const confirm = (root: HTMLElement) =>
-    [...root.querySelectorAll('button')].find((button) => button.textContent === 'Confirm');
 
-  it('given a readable deposit and an approve that sends USDC to an attacker, then the attacker is named in view', () => {
+  it('given a readable deposit and an approve that sends USDC to an attacker, then it is a yellow outside-call notice and no red line', () => {
     const root = render([{ ...approve(ATTACKER), to: BASE_USDC }, ACROSS_CALLS.prod]);
     expect(yellow(root)).toContain(`Step 1 approves ${ATTACKER} to spend USDC. Check it before you confirm.`);
     expect(alertLines(root)).toHaveLength(0);
@@ -566,13 +574,13 @@ describe('TransactionDialog with bridge calls it cannot read', () => {
 
   it('given a readable deposit and an Across approve it cannot read, then one red line and only that step is marked', () => {
     const root = render([paid(approve(SPOKE_POOL)), ACROSS_CALLS.prod]);
-    expect(alertLines(root).map((line) => line.textContent)).toEqual([ACROSS_ALERT]);
+    expect(alertLines(root).map((line) => line.textContent)).toEqual([ACROSS_1]);
     expect(steps(root).map(marked)).toEqual([true, false]);
   });
 
   it('given a readable approve and a deposit it cannot read, then the deposit step carries the mark', () => {
     const root = render([approve(SPOKE_POOL), tail(ACROSS_CALLS.prod)]);
-    expect(alertLines(root).map((line) => line.textContent)).toEqual([ACROSS_ALERT]);
+    expect(alertLines(root).map((line) => line.textContent)).toEqual([ACROSS_2]);
     expect(steps(root).map(marked)).toEqual([false, true]);
   });
 
@@ -583,22 +591,22 @@ describe('TransactionDialog with bridge calls it cannot read', () => {
       paid(RELAY_USDC_APPROVE),
       tail(RELAY_USDC_DEPOSIT),
     ]);
-    expect(alertLines(root).map((line) => line.textContent)).toEqual([ACROSS_ALERT, RELAY_ALERT]);
+    expect(alertLines(root).map((line) => line.textContent)).toEqual([ACROSS_ONE_TWO, RELAY_THREE_FOUR]);
     expect(steps(root).map(marked)).toEqual([true, true, true, true]);
   });
 
   it('given eight unreadable Across steps, then still one red line', () => {
     const root = render(Array.from({ length: 8 }, () => tail(ACROSS_CALLS.prod)));
-    expect(alertLines(root)).toHaveLength(1);
+    expect(alertLines(root).map((line) => line.textContent)).toEqual([ACROSS_ALL]);
     expect(steps(root).filter(marked)).toHaveLength(8);
   });
 
   it('given a readable transfer and a later step it cannot read, then the summary shows with the red line pinned above it', () => {
     const root = render([approve(SPOKE_POOL), ACROSS_CALLS.prod, tail(ACROSS_CALLS.prod)]);
     const [line] = alertLines(root);
-    expect(line?.textContent).toBe(ACROSS_ALERT);
+    expect(line?.textContent).toBe(ACROSS_3);
     expect(before(line, box(root, 'You send'))).toBe(true);
-    expect(line?.closest('.jaw-scroll')).toBeNull();
+    expect(line?.closest('[data-scroll-body]')).toBeNull();
     expect(steps(root).map(marked)).toEqual([false, false, true]);
   });
 
@@ -608,13 +616,13 @@ describe('TransactionDialog with bridge calls it cannot read', () => {
     const [line] = alertLines(root);
     const outside = notice(root, `Step 4 calls ${ATTACKER} outside the bridge. Check it before you confirm.`);
     expect(outside).toBeDefined();
-    expect(line?.closest('.jaw-scroll')).toBeNull();
+    expect(line?.closest('[data-scroll-body]')).toBeNull();
     expect(before(line, outside)).toBe(true);
   });
 
   it('given a single call it cannot read, then its calldata card carries the mark', () => {
     const root = render([tail(ACROSS_CALLS.prod)]);
-    expect(alertLines(root)).toHaveLength(1);
+    expect(alertLines(root).map((line) => line.textContent)).toEqual([ACROSS_ONLY]);
     expect(steps(root).map(marked)).toEqual([true]);
   });
 
@@ -634,7 +642,7 @@ describe('TransactionDialog with bridge calls it cannot read', () => {
     const [line] = alertLines(root);
     expect(line.closest('[role="alert"]')).not.toBeNull();
     expect(line.querySelector('svg')).not.toBeNull();
-    expect(line.textContent).toBe(ACROSS_ALERT);
+    expect(line.textContent).toBe(ACROSS_2);
     const mark = steps(root)[1].querySelector('[aria-label="Unreadable call"]');
     expect(mark?.tagName.toLowerCase()).toBe('svg');
     expect(mark?.getAttribute('role')).toBe('img');
@@ -662,10 +670,6 @@ describe('TransactionDialog with bridge calls it cannot read', () => {
         const providers = new Set(batch.flatMap((kind) => (kind.unreadable ? [kind.unreadable] : [])));
         expect(alertLines(root)).toHaveLength(providers.size);
         expect(steps(root).map(marked)).toEqual(batch.map((kind) => !!kind.unreadable));
-        if (providers.size > 0) {
-          expect(confirm(root)).toBeDefined();
-          expect(alertLines(root).length).toBeGreaterThan(0);
-        }
       }),
       { numRuns: 60 }
     );

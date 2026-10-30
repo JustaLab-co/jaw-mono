@@ -225,7 +225,11 @@ export const TransactionDialog = ({
           </div>
 
           {/* Scrollable body */}
-          <div ref={scrollRef} className="jaw-scroll min-h-0 flex-1 space-y-3 overflow-y-auto px-6 pb-3 pt-6">
+          <div
+            ref={scrollRef}
+            data-scroll-body
+            className="jaw-scroll min-h-0 flex-1 space-y-3 overflow-y-auto px-6 pb-3 pt-6"
+          >
             {/* Native send → one prominent hero amount */}
             {isNativeSend && (
               // The spec sheet frames an ERC-20 supply, so it never measured the native-send hero.
