@@ -418,3 +418,237 @@ describe('useGasEstimation fee-token selection', () => {
     });
   });
 });
+
+// What each fee token says after a round, for every way the ERC-20 leg can end. The dialog
+// derives its block reason from these fields, so a stale or misplaced one changes the banner.
+describe('useGasEstimation fee-token outcome per ERC-20 result', () => {
+  const ZERO_TOKEN = '0x2222222222222222222222222222222222222222' as Address;
+  const usdcNow = () => tokensNow.find((t) => t.symbol === 'USDC')!;
+  const zeroNow = () => tokensNow.find((t) => t.symbol === 'ZERO')!;
+  const empty = (over: Partial<FeeTokenOption> = {}) =>
+    token({ symbol: 'ZERO', address: ZERO_TOKEN, balance: 0n, balanceFormatted: '0', isSelectable: false, ...over });
+  const ethOk = () => makeAccount(async () => '0.0001');
+
+  beforeEach(() => erc20Mock.mockReset());
+
+  it('success: each token gets its own quote and the estimates are exposed', async () => {
+    erc20Mock.mockResolvedValue([usdcEstimate, { ...usdtEstimate, tokenCostFormatted: '0.03' }]);
+    await mount(ethOk(), [nativeEth(10n ** 18n), token({}), token({ symbol: 'USDT', address: USDT })]);
+
+    expect(usdcNow().gasCostFormatted).toBe('0.02');
+    expect(tokensNow.find((t) => t.symbol === 'USDT')?.gasCostFormatted).toBe('0.03');
+    expect(hook.tokenEstimates.map((e) => e.tokenAddress)).toEqual([USDC, USDT]);
+  });
+
+  it('success: a funded token the paymaster did not quote keeps the round healthy', async () => {
+    erc20Mock.mockResolvedValue([]);
+    await mount(ethOk(), [nativeEth(10n ** 18n), token({})]);
+
+    expect(hook.gasEstimationError).toBe('');
+    expect(hook.gasFee).toBe('0.0001');
+  });
+
+  it('success: a token whose balance is gone is never offered, whatever it said before', async () => {
+    erc20Mock.mockResolvedValue([usdcEstimate]);
+    await mount(ethOk(), [
+      nativeEth(10n ** 18n),
+      token({}),
+      empty({ isSelectable: true, gasCostFormatted: '0.02', estimationFailure: 'old' }),
+    ]);
+
+    expect(zeroNow()).toMatchObject({ isSelectable: false, gasCostFormatted: undefined, estimationFailure: undefined });
+  });
+
+  it('works without an onFeeTokensUpdate listener', async () => {
+    erc20Mock.mockResolvedValue([usdcEstimate]);
+    let result!: UseGasEstimationResult;
+    const account = ethOk();
+    const feeTokens = [nativeEth(10n ** 18n), token({})];
+    function Bare() {
+      result = useGasEstimation({ account, transactionCalls: CALLS, chainId: 84532, apiKey: 'k', feeTokens });
+      return null;
+    }
+    root = createRoot(document.createElement('div'));
+    await act(async () => root!.render(createElement(Bare)));
+    await flush();
+    expect(result.gasEstimationError).toBe('');
+    expect(result.gasFee).toBe('0.0001');
+
+    erc20Mock.mockRejectedValue(new Error('execution reverted'));
+    await act(async () => result.refetch());
+    await flush();
+    expect(result.gasEstimationError).toBe('');
+  });
+
+  it('prefund error: funded tokens read Insufficient, empty ones carry nothing, native is untouched', async () => {
+    erc20Mock.mockRejectedValue(new Error("AA21 didn't pay prefund"));
+    await mount(ethOk(), [nativeEth(10n ** 18n), token({}), empty()]);
+
+    expect(usdcNow()).toMatchObject({ gasCostFormatted: 'Insufficient', isSelectable: false });
+    expect(zeroNow()).toMatchObject({ gasCostFormatted: undefined, isSelectable: false });
+    expect(tokensNow.find((t) => t.isNative)?.isSelectable).toBe(true);
+    expect(hook.gasEstimationError).toBe('');
+  });
+
+  it('prefund error naming the amount: the token shows the required amount', async () => {
+    erc20Mock.mockRejectedValue(new Error("AA21 didn't pay prefund: 0.52 USDC required but sender has 0.10 USDC"));
+    await mount(ethOk(), [nativeEth(10n ** 18n), token({})]);
+
+    expect(usdcNow().gasCostFormatted).toBe('0.52');
+  });
+
+  it('other error: funded tokens read Estimation failed with the reason, empty ones carry nothing', async () => {
+    erc20Mock.mockRejectedValue(new Error('execution reverted: Across quote expired\nVersion: viem@2'));
+    await mount(ethOk(), [nativeEth(10n ** 18n), token({}), empty({ isSelectable: true })]);
+
+    expect(usdcNow()).toMatchObject({
+      gasCostFormatted: 'Estimation failed',
+      isSelectable: false,
+      estimationFailure: 'execution reverted: Across quote expired',
+    });
+    expect(zeroNow()).toMatchObject({ gasCostFormatted: undefined, isSelectable: false, estimationFailure: undefined });
+    expect(tokensNow.find((t) => t.isNative)?.isSelectable).toBe(true);
+  });
+
+  it('balance revert on the ERC-20 leg is a shortfall, not an estimation failure', async () => {
+    erc20Mock.mockRejectedValue(new Error('execution reverted: ERC20: transfer amount exceeds balance'));
+    await mount(
+      makeAccount(async () => {
+        throw new Error("AA21 didn't pay prefund");
+      }),
+      [nativeEth(0n), token({})]
+    );
+
+    expect(usdcNow()).toMatchObject({ isSelectable: false, estimationFailure: undefined });
+    expect(hook.gasEstimationError).toBe('Insufficient funds');
+  });
+
+  it('a revert that quotes a prefund-style amount is still an estimation failure', async () => {
+    erc20Mock.mockRejectedValue(new Error('execution reverted: 0.5 USDC required but sender has 9 USDC'));
+    await mount(ethOk(), [nativeEth(0n), token({})]);
+
+    expect(usdcNow()).toMatchObject({
+      gasCostFormatted: 'Estimation failed',
+      estimationFailure: 'execution reverted: 0.5 USDC required but sender has 9 USDC',
+    });
+  });
+
+  it.each([
+    ['an empty message', new Error(''), 'Unknown error'],
+    ['a string', 'paymaster unreachable', 'paymaster unreachable'],
+    ['undefined', undefined, 'Unknown error'],
+  ])('a rejection with %s still records a readable failure', async (_label, reason, expected) => {
+    erc20Mock.mockRejectedValue(reason);
+    await mount(ethOk(), [nativeEth(0n), token({})]);
+
+    expect(usdcNow().estimationFailure).toBe(expected);
+  });
+
+  // A later round rewrites every field the earlier round set, so the banner follows the latest round.
+  describe('a later round replaces the earlier failure', () => {
+    const failFirst = async () => {
+      erc20Mock.mockRejectedValueOnce(new Error('execution reverted'));
+      // USDT stays funded so the ERC-20 leg still runs once USDC is emptied.
+      await mount(ethOk(), [nativeEth(0n), token({}), token({ symbol: 'USDT', address: USDT }), empty()]);
+      expect(usdcNow().estimationFailure).toBe('execution reverted');
+    };
+    const retry = async () => {
+      await act(async () => hook.refetch());
+      await flush();
+    };
+
+    it('by a prefund shortfall', async () => {
+      await failFirst();
+      erc20Mock.mockRejectedValueOnce(new Error("AA21 didn't pay prefund"));
+      await retry();
+      expect(usdcNow()).toMatchObject({ gasCostFormatted: 'Insufficient', estimationFailure: undefined });
+    });
+
+    it('by a balance revert', async () => {
+      await failFirst();
+      erc20Mock.mockRejectedValueOnce(new Error('ERC20: transfer amount exceeds balance'));
+      await retry();
+      expect(usdcNow().estimationFailure).toBeUndefined();
+    });
+
+    it('by a quote', async () => {
+      await failFirst();
+      erc20Mock.mockResolvedValueOnce([usdcEstimate]);
+      await retry();
+      expect(usdcNow()).toMatchObject({ gasCostFormatted: '0.02', isSelectable: true, estimationFailure: undefined });
+    });
+
+    it.each([
+      ['a quote', () => erc20Mock.mockResolvedValueOnce([])],
+      ['a prefund shortfall', () => erc20Mock.mockRejectedValueOnce(new Error("AA21 didn't pay prefund"))],
+      ['another failure', () => erc20Mock.mockRejectedValueOnce(new Error('timeout'))],
+    ])('by %s after the balance ran out', async (_label, next) => {
+      await failFirst();
+      await act(async () =>
+        setTokensExternally(tokensNow.map((t) => (t.symbol === 'USDC' ? { ...t, balance: 0n } : t)))
+      );
+      next();
+      await retry();
+      expect(usdcNow()).toMatchObject({ isSelectable: false, estimationFailure: undefined });
+    });
+  });
+
+  describe('ordering', () => {
+    type Deferred<T> = { promise: Promise<T>; resolve: (v: T) => void; reject: (e: unknown) => void };
+    const deferred = <T>(): Deferred<T> => {
+      let resolve!: (v: T) => void;
+      let reject!: (e: unknown) => void;
+      const promise = new Promise<T>((res, rej) => ((resolve = res), (reject = rej)));
+      return { promise, resolve, reject };
+    };
+
+    it.each(['erc20 first', 'native first'])('legs settling %s give the same result', async (order) => {
+      const eth = deferred<string>();
+      const erc20 = deferred<(typeof usdcEstimate)[]>();
+      erc20Mock.mockImplementationOnce(() => erc20.promise);
+      root = createRoot(document.createElement('div'));
+      await act(async () => {
+        root!.render(
+          createElement(Probe, { account: makeAccount(() => eth.promise), initialTokens: [nativeEth(0n), token({})] })
+        );
+      });
+      const failErc20 = () => erc20.reject(new Error('execution reverted'));
+      const failEth = () => eth.reject(new Error("AA21 didn't pay prefund"));
+      for (const settle of order === 'erc20 first' ? [failErc20, failEth] : [failEth, failErc20]) {
+        await act(async () => settle());
+        await flush();
+      }
+
+      expect(usdcNow().estimationFailure).toBe('execution reverted');
+      expect(hook.gasEstimationError).toBe('Insufficient funds');
+      expect(hook.gasFeeLoading).toBe(false);
+    });
+
+    it.each([
+      ['a stale failure after a newer success', 'reject', 'resolve'],
+      ['a stale success after a newer failure', 'resolve', 'reject'],
+    ])('ignores %s', async (_label, first, second) => {
+      const legs = [deferred<(typeof usdcEstimate)[]>(), deferred<(typeof usdcEstimate)[]>()];
+      erc20Mock.mockImplementationOnce(() => legs[0].promise).mockImplementationOnce(() => legs[1].promise);
+      const settle = (d: Deferred<(typeof usdcEstimate)[]>, how: string) =>
+        how === 'resolve' ? d.resolve([usdcEstimate]) : d.reject(new Error('execution reverted'));
+      root = createRoot(document.createElement('div'));
+      await act(async () => {
+        root!.render(createElement(Probe, { account: ethOk(), initialTokens: [nativeEth(0n), token({})] }));
+      });
+      await flush();
+      await act(async () => hook.refetch());
+      await flush();
+
+      // The retry settles first, then the round it replaced.
+      await act(async () => settle(legs[1], second));
+      await flush();
+      await act(async () => settle(legs[0], first));
+      await flush();
+
+      const failed = second === 'reject';
+      expect(usdcNow().estimationFailure).toBe(failed ? 'execution reverted' : undefined);
+      expect(usdcNow().isSelectable).toBe(!failed);
+    });
+  });
+});
