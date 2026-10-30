@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { act } from 'react';
-import { createRoot } from 'react-dom/client';
+import { createRoot, type Root } from 'react-dom/client';
 import type { ReactNode } from 'react';
 import { decodeFunctionData, encodeFunctionData, parseAbi, type Hex } from 'viem';
 import fc from 'fast-check';
@@ -140,12 +140,18 @@ const render = (transactions: BridgeCall[], extra: Extra = {}) => {
   return root;
 };
 
+// Unmounted after each test, so no pending render outlives the jsdom environment.
+const live: Root[] = [];
+afterEach(() => act(() => live.splice(0).forEach((root) => root.unmount())));
+
 // Prices arrive in an effect, which static markup never runs.
 const renderLive = async (transactions: BridgeCall[], extra: Extra = {}) => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   const root = document.createElement('div');
+  const react = createRoot(root);
+  live.push(react);
   await act(async () => {
-    createRoot(root).render(
+    react.render(
       <TransactionDialog
         open
         onOpenChange={() => undefined}
