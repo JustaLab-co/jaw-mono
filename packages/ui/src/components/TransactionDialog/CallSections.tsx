@@ -1,6 +1,6 @@
 'use client';
 
-import { Code } from 'lucide-react';
+import { Code, TriangleAlert } from 'lucide-react';
 import { AccordionContent, AccordionItem, AccordionTrigger } from '../ui/accordion';
 import { CopyButton } from '../CopyButton';
 import { Eyebrow, InlineWarning, PartyRow, Row, ValueAmount } from '../primitives';
@@ -201,5 +201,23 @@ export function BridgeDetails({ details }: { details: readonly Detail[] }) {
         </dl>
       </AccordionContent>
     </AccordionItem>
+  );
+}
+
+/** One small line per notice, so a bridge batch keeps its send and receive in view. */
+export function BridgeNotices({ messages }: { messages: readonly string[] }) {
+  if (messages.length === 0) return null;
+  return (
+    <div role="alert" className="flex flex-col gap-1">
+      {messages.map((message) => (
+        <p
+          key={message}
+          className="text-foreground text-body-sm border-warning flex items-start gap-1.5 border-l-2 pl-2 [overflow-wrap:anywhere]"
+        >
+          <TriangleAlert className="text-warning mt-0.5 size-3 flex-none" strokeWidth={2} />
+          {message}
+        </p>
+      ))}
+    </div>
   );
 }

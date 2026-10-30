@@ -26,8 +26,8 @@ import { callTitle } from './DecodedCalldata';
 import { resolveBlockReason } from '../../utils/transactionFailure';
 import { allowanceFlag } from '../../utils/allowances';
 import { isBlockingPermissionProblem, PERMISSION_PROBLEM_TEXT } from '../../utils/permissionExecution';
-import { BatchStep, BridgeDetails, NAME_SOURCES, SingleCallData } from './CallSections';
-import { InlineWarning, PartyRow, Row, ValueAmount, WarningNotice } from '../primitives';
+import { BatchStep, BridgeDetails, BridgeNotices, NAME_SOURCES, SingleCallData } from './CallSections';
+import { InlineWarning, PartyRow, Row, ValueAmount } from '../primitives';
 import { NetworkFeeRow } from '../NetworkFeeRow';
 
 export const TransactionDialog = ({
@@ -134,8 +134,6 @@ export const TransactionDialog = ({
   // unpayable state; the in-flight remainder of this gate renders there as "Estimating...".
   const erc20CannotPay =
     isPayingWithErc20 && (!selectedFeeToken?.gasCostMaxFormatted || !selectedFeeToken?.isSelectable);
-  const canConfirm =
-    !isProcessing && !gasFeeLoading && !blockReason && !erc20CannotPay && !permissionBlocks && bridgeSettled;
 
   // Reverts, but gas estimated fine, so it stays submittable: warn rather than block.
   const softRevertWarning = !blockReason && !permissionBlocks && !!assetPreviewWillRevert;
@@ -157,12 +155,21 @@ export const TransactionDialog = ({
     apiKey
   );
   // Under a permission the granter's funds move; until it is known, the batch is not read.
-  const bridge = useBridgeBatch(
+  const { bridge, settled: tokensRead } = useBridgeBatch(
     bridgeContracts,
     transactions,
     isPermissioned ? onBehalfOf : walletAddress,
-    capabilities?.jawRelayOrder
+    capabilities?.jawRelayOrder,
+    apiKey
   );
+  const canConfirm =
+    !isProcessing &&
+    !gasFeeLoading &&
+    !blockReason &&
+    !erc20CannotPay &&
+    !permissionBlocks &&
+    bridgeSettled &&
+    tokensRead;
   const transfer = bridge?.transfer;
   const title =
     transfer?.title ?? (isNativeSend ? "You're Sending" : (callTitle(singleCallDecode) ?? 'Review Transaction'));
@@ -327,7 +334,6 @@ export const TransactionDialog = ({
                 <InlineWarning text={alert} />
               </div>
             ))}
-            {bridge && <WarningNotice messages={bridge.notices} />}
 
             {/* Asset changes — a native send shows the same information in its hero. */}
             {!isNativeSend && (
@@ -345,6 +351,8 @@ export const TransactionDialog = ({
                 apiKey={apiKey}
               />
             )}
+
+            {bridge && <BridgeNotices messages={bridge.notices} />}
 
             {transfer && (
               <Accordion type="single" collapsible>

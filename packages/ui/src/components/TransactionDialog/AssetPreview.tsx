@@ -78,6 +78,14 @@ function TokenAddress({ address }: { address: string }) {
   );
 }
 
+function UnverifiedTag() {
+  return (
+    <span className="text-warning border-warning/40 text-body-xs flex-none rounded border px-1 font-normal">
+      unverified
+    </span>
+  );
+}
+
 function AssetRow({
   delta,
   nativeSymbol,
@@ -121,7 +129,10 @@ function AssetRow({
           chain={chain}
         />
         <div className="flex min-w-0 flex-1 flex-col">
-          <span className="text-foreground text-symbol truncate">{symbol}</span>
+          <span className="text-foreground text-symbol flex min-w-0 items-center gap-1">
+            <span className="truncate">{symbol}</span>
+            {delta.unverified && <UnverifiedTag />}
+          </span>
           {!delta.isNative && <TokenAddress address={delta.address} />}
         </div>
       </div>
@@ -219,7 +230,7 @@ function DeltaColumn({
             delta={d}
             nativeSymbol={nativeSymbol}
             chainId={chainId}
-            price={prices[symbolFor(d, nativeSymbol)]}
+            price={d.unverified ? undefined : prices[symbolFor(d, nativeSymbol)]}
             chain={chain}
             prefix={prefix}
           />
@@ -234,7 +245,7 @@ const SIMULATION_FAILED =
 
 // An unknown token has no decimals to scale by, so it gets no delta and PlainRow shows base units.
 const sentDeltas = ({ amount, token }: TokenAmount): AssetDelta[] =>
-  token.known
+  token.known || token.unverified
     ? [
         {
           address: token.address,
@@ -244,6 +255,7 @@ const sentDeltas = ({ amount, token }: TokenAmount): AssetDelta[] =>
           direction: 'out',
           amountFormatted: formatUnits(amount, token.decimals),
           isNative: token.address === zeroAddress,
+          unverified: token.known ? undefined : true,
         },
       ]
     : [];
@@ -259,7 +271,7 @@ function floorAmount(exact: string): string {
 }
 
 const receivedDeltas = (receive: Received): AssetDelta[] =>
-  receive.amount.token.known
+  receive.amount.token.known || receive.amount.token.unverified
     ? sentDeltas(receive.amount).map((delta) => ({
         ...delta,
         direction: 'in',
@@ -280,14 +292,14 @@ function PlainRow({
   children: ReactNode;
 }) {
   const short = formatAddress(token.address);
-  const symbol = token.known ? token.symbol : short;
+  const symbol = token.known || token.unverified ? token.symbol : short;
   const native = token.address === zeroAddress;
   return (
     <div className="flex flex-row items-start gap-1.5">
       <TokenWithChain chainId={chainId} address={native ? ethAddress : token.address} symbol={symbol} chain={chain} />
       <div className="flex min-w-0 flex-1 flex-col">
         <span className="text-foreground text-symbol truncate">{symbol}</span>
-        {token.known && !native && <TokenAddress address={token.address} />}
+        {(token.known || token.unverified) && !native && <TokenAddress address={token.address} />}
         {children}
       </div>
     </div>
@@ -339,7 +351,7 @@ function BridgeColumns({
           chainId={destination}
           nativeSymbol={bridge.destination.nativeSymbol}
         >
-          {!receive.amount.token.known && (
+          {!receive.amount.token.known && !receive.amount.token.unverified && (
             <PlainRow chainId={destination} token={receive.amount.token} chain={badge(bridge.destination, destination)}>
               <span className="text-value text-positive break-all font-mono">
                 ≥ <SubText>{`${receive.amount.amount} base units`}</SubText>
@@ -369,7 +381,12 @@ export const AssetPreview = ({
   const bridgeOut = bridge && (!error && assetsOut.length > 0 ? assetsOut : sentDeltas(bridge.send));
   const bridgeIn = bridge?.receive ? receivedDeltas(bridge.receive) : [];
   const shown = bridgeOut ? bridgeOut : [...assetsOut, ...assetsIn];
-  const symbols = [...shown.map((d) => symbolFor(d, nativeSymbol)), ...bridgeIn.map((d) => d.symbol ?? '')]
+  // An unverified symbol is the token's own word, so it never keys a price.
+  const trusted = (list: AssetDelta[]) => list.filter((d) => !d.unverified);
+  const symbols = [
+    ...trusted(shown).map((d) => symbolFor(d, nativeSymbol)),
+    ...trusted(bridgeIn).map((d) => d.symbol ?? ''),
+  ]
     .filter(Boolean)
     .sort()
     .join(',');
