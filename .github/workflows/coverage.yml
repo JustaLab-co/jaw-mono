@@ -1,0 +1,137 @@
+name: Coverage
+
+# On main, records every project's coverage as the baseline. On a pull request,
+# compares against the newest baseline, comments the table on the PR and fails
+# when a metric drops. It is its own workflow because release-and-deploy.yml
+# calls ci.yml with read-only permissions, and commenting needs
+# pull-requests: write.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to a PR supersedes the old run, so two runs never post two
+# comments. A baseline run on main is never cancelled.
+concurrency:
+  group: coverage-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.3
+
+      - name: Cache bun dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+
+      - run: bun install --frozen-lockfile
+
+      - name: Test the coverage diff script
+        run: node --test tools/coverage-diff/compare.test.js
+
+      - uses: nrwl/nx-set-shas@v4
+
+      # Each project's vitest config sets thresholds a point under its coverage,
+      # so a project that drops below them fails this step. A PR measures only
+      # the projects it affects; main measures all of them for the baseline.
+      - name: Test with coverage
+        run: bunx nx ${{ github.event_name == 'pull_request' && 'affected' || 'run-many' }} -t test --coverage
+
+      - name: Coverage summary
+        if: ${{ !cancelled() }}
+        run: |
+          {
+            echo "### Coverage"
+            echo "| Project | Lines | Branches | Functions | Statements |"
+            echo "|---|---|---|---|---|"
+            for f in $(find coverage -name coverage-summary.json 2>/dev/null | sort); do
+              jq -r --arg p "${f#coverage/}" \
+                '.total | select(.lines.pct | type == "number") | "| \($p | rtrimstr("/coverage-summary.json")) | \(.lines.pct)% | \(.branches.pct)% | \(.functions.pct)% | \(.statements.pct)% |"' "$f"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Only a passing run becomes the baseline: a failed test leaves a summary
+      # lower than the code deserves, and PRs would compare against it.
+      - name: Upload baseline
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-baseline
+          path: coverage/**/coverage-summary.json
+          retention-days: 90
+
+      # A failed run uploads no artifact, so older runs are tried in turn.
+      - name: Download main baseline
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for id in $(gh run list -R "$GITHUB_REPOSITORY" -w coverage.yml -b main -e push -s completed -L 10 --json databaseId -q '.[].databaseId'); do
+            gh run download "$id" -R "$GITHUB_REPOSITORY" -n coverage-baseline -D coverage-baseline && exit 0
+          done
+          echo "::warning::No coverage-baseline artifact found on main"
+
+      - name: Compare coverage
+        id: coverage-diff
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        run: |
+          node tools/coverage-diff/compare.js coverage coverage-baseline > coverage-diff.md
+          cat coverage-diff.md >> "$GITHUB_STEP_SUMMARY"
+
+      # A PR from a fork gets a read-only token, so it gets no comment; the
+      # table is still in the job summary and a drop still fails the job.
+      - name: Comment coverage on PR
+        if: >-
+          ${{ !cancelled() && steps.coverage-diff.outcome == 'success' &&
+          github.event.pull_request.head.repo.full_name == github.repository }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          [ -s coverage-diff.md ] || exit 0
+          id=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
+            -q '.[] | select(.body | startswith("<!-- coverage-diff -->")) | .id' | sed -n 1p)
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -F body=@coverage-diff.md >/dev/null
+          else
+            gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" -F body=@coverage-diff.md >/dev/null
+          fi
+
+      # The label is read live, so adding it and re-running this job is enough.
+      - name: Fail if coverage dropped
+        if: ${{ !cancelled() && steps.coverage-diff.outputs.dropped == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          labels=$(gh pr view "$PR" -R "$GITHUB_REPOSITORY" --json labels -q '.labels[].name')
+          if grep -qx coverage-drop-ok <<< "$labels"; then
+            echo "::warning::Coverage dropped against main, allowed by the coverage-drop-ok label"
+            exit 0
+          fi
+          echo "::error::Coverage dropped against main. See the PR comment for the projects."
+          exit 1
