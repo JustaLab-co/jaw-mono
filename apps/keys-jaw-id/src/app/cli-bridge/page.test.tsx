@@ -39,6 +39,7 @@ vi.mock('@jaw.id/core', async (original) => ({
   },
 }));
 
+import { createHmac } from 'node:crypto';
 import CLIBridgePage from './page';
 
 class FakeSocket {
@@ -775,5 +776,88 @@ describe('cli-bridge page refuses frames it cannot handle', () => {
     });
 
     expect(ws.sent.at(-1)).toEqual({ type: 'pong' });
+  });
+});
+
+describe('cli-bridge page proves the link secret', () => {
+  const LINK_SECRET = Buffer.alloc(32, 9).toString('base64url');
+  const hmac = (session: string, clientKey: string, pageKey: string) =>
+    createHmac('sha256', Buffer.alloc(32, 9))
+      .update(`jaw-bridge-key/1\n${session}\n${clientKey}\n${pageKey}`)
+      .digest('hex');
+
+  async function open(fragment: string, wrap: (el: React.ReactElement) => React.ReactElement = (el) => el) {
+    const cli = (cliKeys = await generateKeyPair());
+    const pk = await exportKeyToHexString('public', cli.publicKey);
+    window.location.hash = `pk=${pk}${fragment}`;
+    await act(async () => root.render(wrap(<CLIBridgePage />)));
+    return { cli, pk };
+  }
+
+  it('given a link with no secret, the key exchange carries no proof', async () => {
+    const { cli } = await open('');
+    const ws = await connect(1, cli);
+
+    expect(ws.sent[0].type).toBe('key_exchange');
+    expect(ws.sent[0]).not.toHaveProperty('proof');
+  });
+
+  it('given a link with a secret, the key exchange proves it for this session and both keys', async () => {
+    const { cli, pk } = await open(`&s=${LINK_SECRET}`);
+    const ws = await connect(1, cli);
+
+    const frame = ws.sent[0];
+    expect(frame.proof).toBe(hmac('s1', pk, frame.publicKey as string));
+  });
+
+  it('given a link opened under StrictMode, each socket sends one key exchange with the valid proof', async () => {
+    const { cli, pk } = await open(`&s=${LINK_SECRET}`, (el) => <StrictMode>{el}</StrictMode>);
+    await vi.waitFor(() => expect(FakeSocket.all.length).toBeGreaterThan(0));
+    await connect(FakeSocket.all.length, cli);
+
+    for (const ws of FakeSocket.all) {
+      const exchanges = ws.sent.filter((f) => f.type === 'key_exchange');
+      if (ws.readyState === 1 && ws.sent.length > 0) {
+        expect(exchanges).toHaveLength(1);
+        expect(exchanges[0].proof).toBe(hmac('s1', pk, exchanges[0].publicKey as string));
+      }
+    }
+    expect(host.textContent).not.toContain('damaged');
+    expect(host.textContent).not.toContain('no longer active');
+  });
+
+  it('given a link read, the address has no fragment and the page does not show the secret', async () => {
+    const { cli } = await open(`&s=${LINK_SECRET}`);
+    await connect(1, cli);
+
+    expect(window.location.hash).toBe('');
+    expect(host.textContent).not.toContain(LINK_SECRET);
+  });
+
+  it.each([
+    ['characters outside base64url', 'not-a-secret!'],
+    ['a non-canonical encoding', Buffer.alloc(32, 9).toString('base64url').slice(0, -1) + 'd'],
+  ])('given a secret with %s, the page says the link is damaged and connects nothing', async (_, s) => {
+    await open(`&s=${encodeURIComponent(s)}`);
+
+    expect(host.textContent).toContain('This link is damaged. Ask the agent for a new one.');
+    expect(FakeSocket.all).toHaveLength(0);
+    expect(window.location.hash).toBe('');
+  });
+
+  it('given a damaged secret under StrictMode, the page still says damaged', async () => {
+    await open('&s=not-a-secret!', (el) => <StrictMode>{el}</StrictMode>);
+
+    expect(host.textContent).toContain('This link is damaged. Ask the agent for a new one.');
+    expect(host.textContent).not.toContain('no longer active');
+  });
+
+  it('given a secret and no key, the page says the link is no longer active and clears the fragment', async () => {
+    window.location.hash = `s=${LINK_SECRET}`;
+    await act(async () => root.render(<CLIBridgePage />));
+
+    expect(host.textContent).toContain('This link is no longer active. Ask the agent for a new one.');
+    expect(FakeSocket.all).toHaveLength(0);
+    expect(window.location.hash).toBe('');
   });
 });
