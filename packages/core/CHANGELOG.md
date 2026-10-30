@@ -1,3 +1,13 @@
+## 1.10.1 (2026-10-30)
+
+### 🩹 Fixes
+
+- **core:** refuse a grant call whose selector and functionSignature disagree ([#598](https://github.com/JustaLab-co/jaw-mono/pull/598))
+
+### ❤️ Thank You
+
+- Leo Franklin @LeoFranklin015
+
 ## 1.10.0 (2026-10-29)
 
 ### 🚀 Features
