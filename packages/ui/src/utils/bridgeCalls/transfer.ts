@@ -146,8 +146,7 @@ function labelOf(contracts: BridgeContracts, chainId: number): ChainLabel {
 
 function amountText({ amount, token }: Pick<TokenAmount, 'amount' | 'token'>): string {
   if (!token.known && !token.unverified) return `${groupNumber(amount.toString())} base units`;
-  const text = `${groupNumber(formatUnits(amount, token.decimals))} ${token.symbol}`;
-  return token.known ? text : `${text} (unverified)`;
+  return `${groupNumber(formatUnits(amount, token.decimals))} ${token.symbol}`;
 }
 
 function accountDetail(label: string, address: Address, account: Address): Detail {

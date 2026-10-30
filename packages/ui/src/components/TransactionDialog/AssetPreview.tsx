@@ -78,14 +78,6 @@ function TokenAddress({ address }: { address: string }) {
   );
 }
 
-function UnverifiedTag() {
-  return (
-    <span className="text-warning border-warning/40 text-body-xs flex-none rounded border px-1 font-normal">
-      unverified
-    </span>
-  );
-}
-
 function AssetRow({
   delta,
   nativeSymbol,
@@ -129,10 +121,7 @@ function AssetRow({
           chain={chain}
         />
         <div className="flex min-w-0 flex-1 flex-col">
-          <span className="text-foreground text-symbol flex min-w-0 items-center gap-1">
-            <span className="truncate">{symbol}</span>
-            {delta.unverified && <UnverifiedTag />}
-          </span>
+          <span className="text-foreground text-symbol truncate">{symbol}</span>
           {!delta.isNative && <TokenAddress address={delta.address} />}
         </div>
       </div>

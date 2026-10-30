@@ -267,28 +267,23 @@ describe('AssetPreview bridge receive side for a token read from the chain', () 
   };
   const get = (text: string) => text.slice(text.indexOf('You get'));
 
-  it('shows the amount in the token units with the unverified tag and the short address', async () => {
+  it('shows the amount in the token units with the symbol untagged and the short address', async () => {
     await mount({ bridge: transferTo(read) });
     const text = get(host.textContent!);
     expect(text).toContain('AAPL');
-    expect(text).toContain('unverified');
+    expect(text).not.toContain('unverified');
     expect(text).toContain('0xaF3D...93f9');
     expect(text).toContain('≥ 2.5');
     expect(host.textContent).not.toContain('base units');
   });
 
-  it('does not price a token by the symbol it gave itself, and tags a USDC look-alike the same way', async () => {
+  it('does not price a token by the symbol it gave itself, so a USDC look-alike shows no dollar value', async () => {
     prices.fetch.mockResolvedValue(1);
     await mount({ bridge: transferTo({ ...read, symbol: 'USDC', decimals: 6 }) });
     await settle();
     expect(prices.fetch.mock.calls.map((c) => c[0])).toEqual(['USDC']);
-    expect(get(host.textContent!)).toContain('unverified');
+    expect(get(host.textContent!)).toContain('USDC');
     expect(get(host.textContent!)).not.toContain('$');
-  });
-
-  it('leaves a pinned token without the tag', () => {
-    const out = html({ bridge: transferTo({ address: SENT, known: true, symbol: 'USDC', decimals: 6 }) });
-    expect(out).not.toContain('unverified');
   });
 
   it('keeps base units for a token that was not read', () => {

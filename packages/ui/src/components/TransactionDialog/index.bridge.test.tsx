@@ -493,12 +493,12 @@ describe('TransactionDialog with a bridge into a token outside the table', () =>
     chain.hang = false;
   });
 
-  it('shows the amount in the token units, tagged unverified, warns, and leaves Confirm enabled', async () => {
+  it('shows the amount in the token units, warns, and leaves Confirm enabled', async () => {
     chain.tokens[BOUGHT] = { symbol: 'AAPL', decimals: 18n };
     const root = await renderLive(batch);
     const get = column(root, 'They get via Across');
     expect(get).toContain('AAPL');
-    expect(get).toContain('unverified');
+    expect(get).not.toContain('unverified');
     expect(get).toMatch(/≥ 0\.0128/);
     expect(root.textContent).not.toContain('base units');
     await open(root);
