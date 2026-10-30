@@ -54,6 +54,15 @@ test('ignores a drop within the tolerance', () => {
   assert.strictEqual(r.output, '');
 });
 
+test('ignores a drop of exactly the tolerance', () => {
+  const r = run((head, base) => {
+    writeSummary(base, 'apps/proxy', full(80.01));
+    writeSummary(head, 'apps/proxy', full(79.91));
+  });
+  assert.strictEqual(r.output, '');
+  assert.match(r.stdout, /79\.91% \(-0\.10\)/);
+});
+
 test('marks projects missing from the baseline as new', () => {
   const r = run((head) => writeSummary(head, 'libs/cls', full(100)));
   assert.strictEqual(r.output, '');

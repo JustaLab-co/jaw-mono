@@ -83,7 +83,7 @@ These hold for every change, however small. A diff that needs to break one is a 
 
 CI runs `bunx nx affected -t lint test typecheck build api-check e2e`, so a change to core also runs the tests of everything that depends on it. `test` depends on `^build` in `nx.json`, so `nx test` builds the packages it imports first instead of reading a stale local `dist`.
 
-The Coverage workflow runs the affected suites of a PR, and every suite on main, with `--coverage`. Each project's vitest config sets `coverage.thresholds` at its current coverage, so a project that falls below them fails. On a PR it also compares each project against the latest run on main, comments the table, and fails when a metric drops more than 0.1 points, unless the PR has the `coverage-drop-ok` label. Raise a threshold when coverage goes up; never lower one to make a run pass.
+The Coverage workflow runs the affected suites of a PR, and every suite on main, with `--coverage`. Each project's vitest config sets `coverage.thresholds` about a point under its coverage, so a project that falls below them fails. On a PR it also compares each project against the latest passing run on main, comments the table, and fails when a metric drops more than 0.1 points, unless the PR has the `coverage-drop-ok` label. The label does not lift a threshold: a PR that goes under one lowers it in the config, where the reviewer sees it. Raise a threshold when coverage goes up.
 
 ## Architecture
 

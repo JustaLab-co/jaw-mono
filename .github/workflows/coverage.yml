@@ -62,7 +62,7 @@ jobs:
         run: bunx nx ${{ github.event_name == 'pull_request' && 'affected' || 'run-many' }} -t test --coverage
 
       - name: Coverage summary
-        if: always()
+        if: ${{ !cancelled() }}
         run: |
           {
             echo "### Coverage"
@@ -74,10 +74,10 @@ jobs:
             done
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # A failing project still writes its summary, so the baseline is uploaded
-      # even when a test fails.
+      # Only a passing run becomes the baseline: a failed test leaves a summary
+      # lower than the code deserves, and PRs would compare against it.
       - name: Upload baseline
-        if: always() && github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: coverage-baseline
@@ -87,7 +87,7 @@ jobs:
       # A run that failed before its tests uploads no artifact, so older runs
       # are tried in turn.
       - name: Download main baseline
-        if: always() && github.event_name == 'pull_request'
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -98,11 +98,17 @@ jobs:
 
       - name: Compare coverage
         id: coverage-diff
-        if: always() && github.event_name == 'pull_request'
-        run: node tools/coverage-diff/compare.js coverage coverage-baseline > coverage-diff.md
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        run: |
+          node tools/coverage-diff/compare.js coverage coverage-baseline > coverage-diff.md
+          cat coverage-diff.md >> "$GITHUB_STEP_SUMMARY"
 
+      # A PR from a fork gets a read-only token, so it gets no comment; the
+      # table is still in the job summary and a drop still fails the job.
       - name: Comment coverage on PR
-        if: always() && steps.coverage-diff.outcome == 'success'
+        if: >-
+          ${{ !cancelled() && steps.coverage-diff.outcome == 'success' &&
+          github.event.pull_request.head.repo.full_name == github.repository }}
         env:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number }}
@@ -118,7 +124,7 @@ jobs:
 
       # The label is read live, so adding it and re-running this job is enough.
       - name: Fail if coverage dropped
-        if: always() && steps.coverage-diff.outputs.dropped == 'true'
+        if: ${{ !cancelled() && steps.coverage-diff.outputs.dropped == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number }}

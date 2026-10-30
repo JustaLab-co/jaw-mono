@@ -26,11 +26,17 @@ function readSummaries(dir) {
   return byProject;
 }
 
+// Rounded to the two decimals istanbul reports, so a drop of exactly the
+// tolerance is not flagged by floating-point error.
+function diff(now, before) {
+  return Math.round((now - before) * 100) / 100;
+}
+
 // Istanbul reports pct as the string "Unknown" for a metric with nothing to count.
 function cell(now, before) {
   if (typeof now.pct !== 'number') return 'n/a';
   if (typeof before?.pct !== 'number') return `${now.pct}% (new)`;
-  const delta = now.pct - before.pct;
+  const delta = diff(now.pct, before.pct);
   return `${now.pct}% (${delta >= 0 ? '+' : ''}${delta.toFixed(2)})`;
 }
 
@@ -45,7 +51,7 @@ for (const project of Object.keys(head).sort()) {
     const now = head[project][m];
     const before = base[project]?.[m];
     const comparable = typeof now.pct === 'number' && typeof before?.pct === 'number';
-    if (comparable && now.pct < before.pct - TOLERANCE) dropped.push(`\`${project}\` ${m}`);
+    if (comparable && diff(now.pct, before.pct) < -TOLERANCE) dropped.push(`\`${project}\` ${m}`);
     return cell(now, before);
   });
   rows.push(`| ${project} | ${cells.join(' | ')} |`);
