@@ -143,7 +143,13 @@ const renderLive = async (transactions: BridgeCall[], extra: Extra = {}) => {
 const title = (root: HTMLElement) => root.querySelector('h2')?.textContent;
 const red = (root: HTMLElement) => [...root.querySelectorAll('.text-destructive')].map((e) => e.textContent);
 const yellow = (root: HTMLElement) =>
-  [...root.querySelectorAll('[role="alert"].bg-warning\\/10 p')].map((e) => e.textContent);
+  [...root.querySelectorAll('[role="alert"].bg-warning\\/10 p, [role="alert"] > p')].map((e) => e.textContent);
+const notice = (root: HTMLElement, text: string) =>
+  [...root.querySelectorAll('[role="alert"] > p')].find((e) => e.textContent === text);
+const before = (first?: Element | null, second?: Element | null) =>
+  !!first && !!second && !!(first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING);
+const box = (root: HTMLElement, heading: string) =>
+  [...root.querySelectorAll('.text-heading')].find((e) => e.textContent === heading)?.closest('.rounded-box');
 const column = (root: HTMLElement, heading: string) =>
   [...root.querySelectorAll('.text-heading')].find((e) => e.textContent === heading)?.closest('.rounded-box')
     ?.textContent ?? '';
@@ -318,6 +324,87 @@ describe('TransactionDialog with a bridge deposit', () => {
     const root = render([approve(SPOKE_POOL), ACROSS_CALLS.prod], { assetPreviewError: true });
     expect(yellow(root)[0]).toContain('Could not simulate this transaction');
     expect(column(root, 'You get via Across')).toContain('≥ 9.9609');
+  });
+});
+
+describe('TransactionDialog notices around a bridge deposit', () => {
+  const ATTACKER = '0x2222222222222222222222222222222222222222';
+  const USDBC = '0xd9aAEc86B65D86f6A7B5B1b0c42FFA531710b6CA';
+  const APPROVE_UNKNOWN =
+    'This batch approves a token this screen does not know. Check its address before you confirm.';
+  const OUTSIDE = `Step 3 calls ${ATTACKER} outside the bridge. Check it before you confirm.`;
+  const extraCall: BridgeCall = { chainId: 8453, to: ATTACKER, data: '0x12345678' };
+
+  it('shows a notice at once, with no click, in a small alert line with a warning icon', () => {
+    const root = render([RELAY_USDC_APPROVE, RELAY_USDC_DEPOSIT]);
+    const line = notice(root, RELAY_HIDDEN);
+    expect(line?.closest('[role="alert"]')).not.toBeNull();
+    expect(line?.className).toContain('text-body-sm');
+    expect(line?.className).toContain('border-warning');
+    expect(line?.querySelector('svg')).not.toBeNull();
+    expect(root.querySelector('[data-slot="accordion-item"].bg-warning\\/10')).toBeNull();
+    expect(root.querySelector('[role="alert"].bg-warning\\/10')).toBeNull();
+  });
+
+  it('shows RELAY_HIDDEN and the pairing notices together, none folded', () => {
+    const root = render([approve(SPOKE_POOL), RELAY_USDC_DEPOSIT]);
+    expect(yellow(root)).toEqual([RELAY_HIDDEN, 'This approval is for a different contract than the deposit.']);
+  });
+
+  it('names a call outside the bridge next to a clean looking deposit', () => {
+    const root = render([approve(SPOKE_POOL), ACROSS_CALLS.prod, extraCall]);
+    expect(title(root)).toBe('Bridge to Arbitrum');
+    expect(yellow(root)).toEqual([OUTSIDE]);
+    expect(red(root)).toEqual([]);
+  });
+
+  it.each([
+    ['empty', ''],
+    ['0x', '0x'],
+    ['too short', '0x1234'],
+  ])('says a step with a `to` that is %s cannot be read, without breaking the dialog', (_, to) => {
+    const root = render([approve(SPOKE_POOL), ACROSS_CALLS.prod, { chainId: 8453, to, data: '0x12345678' }]);
+    expect(yellow(root)).toEqual([
+      'Step 3 does not call an address this screen can read. Check it before you confirm.',
+    ]);
+  });
+
+  it('puts the send and receive columns before the notices', () => {
+    const root = render([approve(SPOKE_POOL), ACROSS_CALLS.prod, extraCall]);
+    const line = notice(root, OUTSIDE);
+    expect(before(box(root, 'You send'), line)).toBe(true);
+    expect(before(box(root, 'You get via Across'), line)).toBe(true);
+  });
+
+  it('keeps a red alert above You send', () => {
+    const broken = { ...ACROSS_CALLS.prod, data: ACROSS_CALLS.prod.data + '00' };
+    const root = render([approve(SPOKE_POOL), broken, RELAY_USDC_DEPOSIT]);
+    expect(before(root.querySelector('.text-destructive'), box(root, 'You send'))).toBe(true);
+  });
+
+  it('shows the deposit count when there is no single transfer to show', () => {
+    const root = render([approve(SPOKE_POOL), ACROSS_CALLS.prod, ACROSS_CALLS.prod]);
+    expect(root.textContent).not.toContain('You get');
+    expect(yellow(root)).toEqual(['This batch has 2 bridge deposits. Check each step before you confirm.']);
+  });
+
+  it('shows the notice for an approve of an unknown token with no deposit', () => {
+    const root = render([{ ...approve(SPOKE_POOL), to: USDBC }]);
+    expect(yellow(root)).toContain(APPROVE_UNKNOWN);
+  });
+
+  it('shows an unpaired approve notice in view', () => {
+    const root = render([ACROSS_CALLS.prod, approve(SPOKE_POOL)]);
+    expect(yellow(root)).toEqual([
+      'This batch has an approval that the deposit does not use. Check its token, amount and spender.',
+    ]);
+  });
+
+  it('leaves a transaction that is not a bridge call without bridge notices', () => {
+    const root = render([approve(OTHER)], { assetPreviewError: true });
+    expect(root.querySelector('[role="alert"] > p')).toBeNull();
+    expect(yellow(root)).toHaveLength(1);
+    expect(yellow(root)[0]).toContain('Could not simulate this transaction');
   });
 });
 

@@ -26,8 +26,8 @@ import { callTitle } from './DecodedCalldata';
 import { resolveBlockReason } from '../../utils/transactionFailure';
 import { allowanceFlag } from '../../utils/allowances';
 import { isBlockingPermissionProblem, PERMISSION_PROBLEM_TEXT } from '../../utils/permissionExecution';
-import { BatchStep, BridgeDetails, NAME_SOURCES, SingleCallData } from './CallSections';
-import { InlineWarning, PartyRow, Row, ValueAmount, WarningNotice } from '../primitives';
+import { BatchStep, BridgeDetails, BridgeNotices, NAME_SOURCES, SingleCallData } from './CallSections';
+import { InlineWarning, PartyRow, Row, ValueAmount } from '../primitives';
 import { NetworkFeeRow } from '../NetworkFeeRow';
 
 export const TransactionDialog = ({
@@ -327,7 +327,6 @@ export const TransactionDialog = ({
                 <InlineWarning text={alert} />
               </div>
             ))}
-            {bridge && <WarningNotice messages={bridge.notices} />}
 
             {/* Asset changes — a native send shows the same information in its hero. */}
             {!isNativeSend && (
@@ -345,6 +344,8 @@ export const TransactionDialog = ({
                 apiKey={apiKey}
               />
             )}
+
+            {bridge && <BridgeNotices messages={bridge.notices} />}
 
             {transfer && (
               <Accordion type="single" collapsible>

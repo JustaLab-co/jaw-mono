@@ -30,7 +30,6 @@ export const PROVIDER_NAME: Record<BridgeProvider, string> = { across: 'Across',
 const notThisAccount = (who: string, address: Address) => `${who} is not this account: ${getAddress(address)}.`;
 const unknownToken = (address: Address) =>
   `This screen does not know the token ${address}. Check it before you confirm.`;
-const FEE_NOT_JAW = 'The fee goes to an address JAW does not know.';
 const RELAY_HIDDEN =
   'Relay keeps the destination chain and the recipient in an order outside this transaction. This screen cannot show them. Confirm only if you started this transfer yourself.';
 
@@ -49,7 +48,6 @@ function acrossTransfer(contracts: BridgeContracts, deposit: AcrossDeposit, acco
   const notices: string[] = [];
   if (!isAddressEqual(deposit.recipient, account)) notices.push(notThisAccount('The recipient', deposit.recipient));
   if (!isAddressEqual(deposit.refundTo, account)) notices.push(notThisAccount('The refund address', deposit.refundTo));
-  if (fee && !fee.jaw) notices.push(FEE_NOT_JAW);
   const received = deposit.receive.amount.token;
   const unknown = [deposit.send.token, received].filter((token) => !token.known);
   for (const token of unknown) notices.push(unknownToken(token.address));
