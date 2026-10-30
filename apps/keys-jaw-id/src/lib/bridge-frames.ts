@@ -7,7 +7,10 @@ export type BridgeInit = {
   appName?: string;
   apiKey?: string;
   paymaster?: { url: string; context?: Record<string, unknown> };
+  client?: string;
 };
+
+export const BRIDGE_CLIENT_PATTERN = /^[a-z0-9-]{1,32}\/[A-Za-z0-9.+_-]{1,64}$/;
 
 export type BridgeRequest = { id: string; method: string; params: unknown[] };
 
@@ -46,6 +49,7 @@ export function parseInit(inner: Record<string, unknown>, chains: readonly numbe
   }
 
   const init: BridgeInit = { chainId };
+  if (typeof inner.client === 'string' && BRIDGE_CLIENT_PATTERN.test(inner.client)) init.client = inner.client;
   if (ens !== undefined) init.ens = ens as string;
   if (appName !== undefined) init.appName = appName as string;
   if (apiKey !== undefined) init.apiKey = apiKey as string;

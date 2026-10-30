@@ -1,0 +1,22 @@
+{
+  "sentBy": ["@jaw.id/cli 0.4.0 to 0.7.2"],
+  "clients": [
+    {
+      "family": "cli",
+      "versions": "0.4.0 to 0.7.2",
+      "current": false
+    }
+  ],
+  "frame": {
+    "type": "init",
+    "apiKey": "fake-api-key",
+    "chainId": 84532,
+    "ens": "alice.jaw.eth"
+  },
+  "expect": {
+    "appName": "JAW CLI",
+    "defaultChainId": 84532,
+    "apiKey": "fake-api-key",
+    "ens": "alice.jaw.eth"
+  }
+}

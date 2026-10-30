@@ -1,132 +1,34 @@
 // @vitest-environment jsdom
 import { act, StrictMode } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
-import {
-  decrypt,
-  deriveSharedSecret,
-  encrypt,
-  exportKeyToHexString,
-  generateKeyPair,
-  importKeyFromHexString,
-} from '@jaw.id/core';
+import { decrypt, exportKeyToHexString, generateKeyPair } from '@jaw.id/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const created = vi.hoisted(() => ({
-  appNames: [] as string[],
-  handlerOptions: [] as unknown[],
-  session: 's1',
-  /** The whole query when a test opens the page at another URL than a session link. */
-  query: null as string | null,
-  request: (async () => null) as (args: { method: string; params: unknown[] }) => Promise<unknown>,
-}));
-vi.mock('next/navigation', () => ({
-  useSearchParams: () => new URLSearchParams(created.query ?? `session=${created.session}&relay=ws://relay.test`),
-}));
-vi.mock('@jaw.id/ui', () => ({
-  ReactUIHandler: class {
-    constructor(options?: unknown) {
-      created.handlerOptions.push(options);
-    }
-  },
-}));
-vi.mock('@jaw.id/core', async (original) => ({
-  ...(await original<object>()),
-  JAW: {
-    create: (config: { appName: string }) => {
-      created.appNames.push(config.appName);
-      return { provider: { request: (args: { method: string; params: unknown[] }) => created.request(args) } };
-    },
-  },
-}));
+vi.mock('next/navigation', async () => (await import('./harness-state')).navigationMock);
+vi.mock('@jaw.id/ui', async () => (await import('./harness-state')).uiMock);
+vi.mock('@jaw.id/core', async (original) => (await import('./harness-state')).coreMock(await original<object>()));
 
 import { createHmac } from 'node:crypto';
 import CLIBridgePage from './page';
+import {
+  FakeSocket,
+  answers,
+  cliKeys,
+  connect,
+  created,
+  deliver,
+  host,
+  init,
+  rememberCliKeys,
+  root,
+  secret,
+  setUp,
+  start,
+  tearDown,
+  unb64,
+} from './test-harness';
 
-class FakeSocket {
-  static OPEN = 1;
-  static all: FakeSocket[] = [];
-  readyState = 1;
-  sent: Record<string, unknown>[] = [];
-  onopen?: () => void;
-  onmessage?: (e: { data: string }) => void;
-  onclose?: (e: { code: number }) => void;
-  onerror?: () => void;
-  constructor(public url: string) {
-    FakeSocket.all.push(this);
-  }
-  send(data: string) {
-    this.sent.push(JSON.parse(data));
-  }
-  close = vi.fn();
-}
-
-const b64 = (buf: ArrayBuffer | Uint8Array) => btoa(String.fromCharCode(...new Uint8Array(buf)));
-const unb64 = (s: string) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
-
-let host: HTMLDivElement;
-let root: Root;
-let secret: CryptoKey;
-let cliKeys: CryptoKeyPair;
-
-async function connect(count: number, cli: CryptoKeyPair) {
-  await vi.waitFor(() => expect(FakeSocket.all).toHaveLength(count));
-  const ws = FakeSocket.all[count - 1];
-  await act(async () => ws.onopen!());
-  const pageKey = ws.sent[0].publicKey as string;
-  secret = await deriveSharedSecret(cli.privateKey, await importKeyFromHexString('public', pageKey));
-  return ws;
-}
-
-async function start() {
-  const cli = (cliKeys = await generateKeyPair());
-  window.location.hash = `pk=${await exportKeyToHexString('public', cli.publicKey)}`;
-  await act(async () => root.render(<CLIBridgePage />));
-  return connect(1, cli);
-}
-
-async function init(ws: FakeSocket, payload: Record<string, unknown>) {
-  const { iv, cipherText } = await encrypt(
-    secret,
-    JSON.stringify({ type: 'init', chainId: 84532, apiKey: 'k', ...payload })
-  );
-  const before = ws.sent.length;
-  await act(async () => {
-    await ws.onmessage!({ data: JSON.stringify({ type: 'encrypted', iv: b64(iv), ciphertext: b64(cipherText) }) });
-  });
-  await vi.waitFor(() => expect(ws.sent.length).toBeGreaterThan(before));
-  const reply = ws.sent.at(-1)!;
-  return JSON.parse(
-    await decrypt(secret, {
-      iv: unb64(reply.iv as string),
-      cipherText: unb64(reply.ciphertext as string).buffer as ArrayBuffer,
-    })
-  );
-}
-
-// jsdom hands out ArrayBuffers of its own realm, which WebCrypto refuses; a Buffer is accepted.
-const realDecrypt = crypto.subtle.decrypt.bind(crypto.subtle);
-vi.spyOn(crypto.subtle, 'decrypt').mockImplementation((alg, key, data) =>
-  realDecrypt(alg, key, data instanceof ArrayBuffer ? Buffer.from(new Uint8Array(data)) : data)
-);
-
-beforeEach(() => {
-  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-  FakeSocket.all = [];
-  created.appNames = [];
-  created.handlerOptions = [];
-  created.session = 's1';
-  created.query = null;
-  created.request = async () => null;
-  vi.stubGlobal('WebSocket', FakeSocket);
-  host = document.createElement('div');
-  document.body.append(host);
-  root = createRoot(host);
-});
-afterEach(() => {
-  act(() => root.unmount());
-  host.remove();
-  vi.unstubAllGlobals();
-});
+beforeEach(setUp);
+afterEach(tearDown);
 
 describe('cli-bridge page app name', () => {
   it('a new session on the same page takes the name of its client', async () => {
@@ -207,29 +109,6 @@ describe('cli-bridge page app name', () => {
     expect(host.textContent).toContain('Claude disconnected. You can close this tab.');
   });
 });
-
-async function deliver(ws: FakeSocket, payload: Record<string, unknown>) {
-  const { iv, cipherText } = await encrypt(secret, JSON.stringify(payload));
-  await act(async () => {
-    await ws.onmessage!({ data: JSON.stringify({ type: 'encrypted', iv: b64(iv), ciphertext: b64(cipherText) }) });
-  });
-}
-
-async function answers(ws: FakeSocket, id: string) {
-  const opened = await Promise.all(
-    ws.sent
-      .filter((m) => m.type === 'encrypted')
-      .map(async (m) =>
-        JSON.parse(
-          await decrypt(secret, {
-            iv: unb64(m.iv as string),
-            cipherText: unb64(m.ciphertext as string).buffer as ArrayBuffer,
-          })
-        )
-      )
-  );
-  return opened.filter((m) => m.type === 'rpc_response' && m.id === id);
-}
 
 describe('cli-bridge page answers a repeated request', () => {
   const sign = { type: 'rpc_request', id: 'r1', method: 'personal_sign', params: ['0x68656c6c6f', '0xabc'] };
@@ -508,7 +387,7 @@ describe('cli-bridge page with nobody on the other side', () => {
   });
 
   it('given a link opened under StrictMode, the page keeps its key and connects', async () => {
-    const cli = (cliKeys = await generateKeyPair());
+    const cli = rememberCliKeys(await generateKeyPair());
     window.location.hash = `pk=${await exportKeyToHexString('public', cli.publicKey)}`;
 
     await act(async () =>
@@ -787,7 +666,7 @@ describe('cli-bridge page proves the link secret', () => {
       .digest('hex');
 
   async function open(fragment: string, wrap: (el: React.ReactElement) => React.ReactElement = (el) => el) {
-    const cli = (cliKeys = await generateKeyPair());
+    const cli = rememberCliKeys(await generateKeyPair());
     const pk = await exportKeyToHexString('public', cli.publicKey);
     window.location.hash = `pk=${pk}${fragment}`;
     await act(async () => root.render(wrap(<CLIBridgePage />)));
@@ -859,5 +738,77 @@ describe('cli-bridge page proves the link secret', () => {
     expect(host.textContent).toContain('This link is no longer active. Ask the agent for a new one.');
     expect(FakeSocket.all).toHaveLength(0);
     expect(window.location.hash).toBe('');
+  });
+});
+
+describe('cli-bridge page reports its client', () => {
+  const posts = (fetchMock: ReturnType<typeof vi.fn>) =>
+    fetchMock.mock.calls.filter(([url]) => url === '/api/bridge-client');
+
+  it('posts the client once and not again for the same or a different value', async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true, status: 204 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const ws = await start();
+
+    await init(ws, { client: 'jaw-cli/0.7.2' });
+    await init(ws, { client: 'jaw-cli/0.7.2' });
+    await init(ws, { client: 'jaw-mcp/abc1234' });
+
+    const sent = posts(fetchMock);
+    expect(sent).toHaveLength(1);
+    expect(sent[0][1]).toMatchObject({ method: 'POST', body: JSON.stringify({ client: 'jaw-cli/0.7.2' }) });
+  });
+
+  it('still answers ready and requests when fetch throws', async () => {
+    vi.stubGlobal('fetch', () => {
+      throw new Error('blocked');
+    });
+    created.request = async () => '0x14a34';
+    const ws = await start();
+
+    const ready = await init(ws, { client: 'jaw-cli/0.7.2' });
+    await deliver(ws, { type: 'rpc_request', id: 'r9', method: 'eth_chainId', params: [] });
+
+    expect(ready.type).toBe('ready');
+    await vi.waitFor(async () => expect(await answers(ws, 'r9')).toHaveLength(1));
+  });
+
+  it('posts nothing when init carries no client', async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true, status: 204 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const ws = await start();
+
+    await init(ws, {});
+
+    expect(posts(fetchMock)).toHaveLength(0);
+  });
+
+  it('posts nothing for a client value that does not match', async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true, status: 204 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const ws = await start();
+
+    await init(ws, { client: 'not a client' });
+
+    expect(posts(fetchMock)).toHaveLength(0);
+  });
+
+  it('still answers ready and requests when the post fails', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new Error('offline');
+      })
+    );
+    created.request = async () => '0x1';
+    const ws = await start();
+
+    const ready = await init(ws, { client: 'jaw-cli/0.7.2' });
+
+    expect(ready).toMatchObject({ type: 'ready', chainId: 84532 });
+    await deliver(ws, { type: 'rpc_request', id: 'r1', method: 'eth_chainId', params: [] });
+    await vi.waitFor(async () =>
+      expect(await answers(ws, 'r1')).toEqual([{ type: 'rpc_response', id: 'r1', success: true, data: '0x1' }])
+    );
   });
 });

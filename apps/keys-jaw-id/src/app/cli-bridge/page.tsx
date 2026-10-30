@@ -146,6 +146,7 @@ function CLIBridgeContent() {
     let cancelled = false;
     let unanswered: ReturnType<typeof setTimeout> | undefined;
     answersRef.current = new Map();
+    let clientPosted = false;
 
     (async () => {
       try {
@@ -223,7 +224,7 @@ function CLIBridgeContent() {
                     return;
                   }
                   setState('connected');
-                  const { chainId, ens, paymaster } = parsed;
+                  const { chainId, ens, paymaster, client } = parsed;
                   const name = (appNameRef.current ??= resolveBridgeAppName(parsed.appName));
                   setAppName(name);
 
@@ -284,6 +285,10 @@ function CLIBridgeContent() {
                     ...(sentApiKey ? {} : { apiKey }),
                   });
                   ws!.send(JSON.stringify(readyEnvelope));
+                  if (client && !clientPosted) {
+                    clientPosted = true;
+                    reportBridgeClient(client);
+                  }
                   break;
                 }
 
@@ -490,6 +495,18 @@ function canonical(value: unknown): string {
     return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonical(v)}`).join(',')}}`;
   }
   return JSON.stringify(value) ?? 'null';
+}
+
+function reportBridgeClient(client: string) {
+  try {
+    fetch('/api/bridge-client', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ client }),
+    }).catch(() => undefined);
+  } catch {
+    // The count is optional; the bridge carries on without it.
+  }
 }
 
 type RpcResponse = Record<string, unknown> & { type: 'rpc_response'; id: string };

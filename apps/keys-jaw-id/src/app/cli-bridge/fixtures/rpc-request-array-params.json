@@ -1,0 +1,33 @@
+{
+  "sentBy": [
+    "@jaw.id/cli 0.4.0 to 0.7.2",
+    "@jaw.id/cli >= the release after 0.7.2",
+    "@jaw-mono/mcp images built before jaw-agent #17 and #18"
+  ],
+  "clients": [
+    {
+      "family": "cli",
+      "versions": "0.4.0 to 0.7.2",
+      "current": false
+    },
+    {
+      "family": "cli",
+      "versions": "after 0.7.2",
+      "current": true
+    },
+    {
+      "family": "mcp",
+      "versions": "images built before jaw-agent #17 and #18",
+      "current": false
+    }
+  ],
+  "frame": {
+    "type": "rpc_request",
+    "id": "0b5d1f0e-6c1a-4a0e-9d52-2f6d8c1a7e11",
+    "method": "personal_sign",
+    "params": ["0x68656c6c6f", "0x1111111111111111111111111111111111111111"]
+  },
+  "expect": {
+    "params": ["0x68656c6c6f", "0x1111111111111111111111111111111111111111"]
+  }
+}

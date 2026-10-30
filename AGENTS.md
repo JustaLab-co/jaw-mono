@@ -58,6 +58,14 @@ bunx nx release
 
 `.github/risky-paths` lists, one glob per line, the code that builds the calls an owner signs. A change touching it needs a person to read it, so keep it in its own small PR. Its entries are mirrored in `.github/CODEOWNERS`.
 
+## Bridge wire contract
+
+The `/cli-bridge` page in `apps/keys-jaw-id` talks to CLIs and servers already installed, and those update on their own schedule. Keys never drops the handling of a frame or a field an installed client still sends, and a change to what it accepts is additive. A client sends something new only after keys handles it and that version is deployed.
+
+`apps/keys-jaw-id/src/app/cli-bridge/fixtures/` holds each shape a client really sends, one file per shape, and `wire-contract.test.tsx` replays every file through the real page. A fixture is never edited to match the code, and removing one is a decision recorded in the PR that removes it. `fixtures/README.md` says how to add one.
+
+The support floor is `@jaw.id/cli` 0.4.0 and later, and every `@jaw-mono/mcp` image still deployable. A published shape is retired only with a minimum supported CLI version announced in the CLI release notes. Shapes from clients that send `client` can be retired when the `bridge client` logs show none for 30 days.
+
 ## Testing invariants
 
 These hold for every change, however small. A diff that needs to break one is a decision for a person to make in the PR description, not something to route around.
@@ -85,7 +93,7 @@ The CLI, the agent package and the hosted MCP server live in the private repo Ju
 ### Applications (`apps/`)
 
 - **playground** - Next.js demo app exercising the SDK via @jaw.id/wagmi (the `jaw()` connector wired through wagmi)
-- **keys-jaw-id** - Next.js keys management application (keys.jaw.id). Its `/cli-bridge` page answers a request repeated under the same id with the answer it already gave, so a server that lost its relay socket can ask again without a second dialog, and says a link is no longer active when no server answers it
+- **keys-jaw-id** - Next.js keys management application (keys.jaw.id). Its `/cli-bridge` page answers a request repeated under the same id with the answer it already gave, so a server that lost its relay socket can ask again without a second dialog, and says a link is no longer active when no server answers it. A bridge init may carry `client` (`name/version`), which is self-reported: it can be spoofed and is never trusted or used for access. The page posts it once per page load to `/api/bridge-client`, which logs it in the `bridge client` line; read the counts with a Vercel logs search for `"msg":"bridge client"` on the keys project, grouped by `client`
 - **docs** - Documentation site built with Vocs
 
 ### Smart Contracts (`contracts/`)

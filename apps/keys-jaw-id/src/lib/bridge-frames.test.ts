@@ -129,3 +129,23 @@ describe('parseRequest', () => {
     expect(parseRequest({ id: 'r1', method: 'eth_chainId', params: null })).toMatchObject({ params: [] });
   });
 });
+
+describe('parseInit client', () => {
+  it.each(['jaw-cli/0.7.2', 'jaw-mcp/abc1234'])('keeps %s', (client) => {
+    expect(parseInit({ type: 'init', chainId: 1, client }, chains)).toEqual({ chainId: 1, client });
+  });
+
+  it.each([
+    ['a number', 7],
+    ['an empty string', ''],
+    ['a value too long', `${'a'.repeat(33)}/1.0`],
+    ['a value with spaces', 'jaw cli/1.0'],
+    ['a value with a newline', 'jaw-cli/1.0\nx'],
+    ['no slash', 'jaw-cli'],
+    ['null', null],
+  ])('drops %s without refusing the init', (_, client) => {
+    const result = parseInit({ type: 'init', chainId: 1, client }, chains);
+    expect(result).toEqual({ chainId: 1 });
+    expect(Object.keys(result)).toEqual(['chainId']);
+  });
+});

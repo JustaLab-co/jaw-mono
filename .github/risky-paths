@@ -3,3 +3,5 @@
 packages/ui/src/utils/bridgeCalls/parse.ts
 packages/ui/src/utils/bridgeCalls/load.ts
 packages/ui/src/hooks/useBridgeContracts.ts
+apps/keys-jaw-id/src/app/cli-bridge/fixtures/**
+apps/keys-jaw-id/src/lib/bridge-frames.ts
