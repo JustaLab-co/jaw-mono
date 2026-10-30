@@ -30,6 +30,8 @@ export interface TransactionDialogProps {
   gasFee: string;
   gasFeeLoading: boolean;
   gasEstimationError: string;
+  /** Re-runs fee estimation; offered when estimation failed rather than the balance falling short. */
+  onRetryEstimation?: () => void;
   sponsored: boolean;
 
   // Asset preview (simulated balance changes)

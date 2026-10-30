@@ -1546,6 +1546,7 @@ function TransactionDialogWrapper({
     selectedFeeToken,
     setSelectedFeeToken,
     isPayingWithErc20,
+    refetch: retryEstimation,
   } = useGasEstimation({
     account,
     transactionCalls,
@@ -1784,6 +1785,7 @@ function TransactionDialogWrapper({
       gasFee={gasFee}
       gasFeeLoading={gasFeeLoading}
       gasEstimationError={gasEstimationError}
+      onRetryEstimation={retryEstimation}
       sponsored={isSponsored}
       assetsOut={assetsOut}
       assetsIn={assetsIn}
@@ -1913,6 +1915,7 @@ function SendTransactionDialogWrapper({
     selectedFeeToken,
     setSelectedFeeToken,
     isPayingWithErc20,
+    refetch: retryEstimation,
   } = useGasEstimation({
     account,
     transactionCalls,
@@ -2143,6 +2146,7 @@ function SendTransactionDialogWrapper({
       gasFee={gasFee}
       gasFeeLoading={gasFeeLoading}
       gasEstimationError={gasEstimationError}
+      onRetryEstimation={retryEstimation}
       sponsored={isSponsored}
       assetsOut={assetsOut}
       assetsIn={assetsIn}
@@ -2277,6 +2281,7 @@ function PermissionDialogWrapper({
     selectedFeeToken,
     setSelectedFeeToken,
     isPayingWithErc20,
+    refetch: retryEstimation,
   } = useGasEstimation({
     account,
     transactionCalls,
@@ -2676,6 +2681,7 @@ function PermissionDialogWrapper({
       gasFee={gasFee}
       gasFeeLoading={gasFeeLoading}
       gasEstimationError={gasEstimationError}
+      onRetryEstimation={retryEstimation}
       sponsored={isSponsored}
       mainnetRpcUrl={getMainnetRpcUrl(apiKey)}
       // Fee token props for ERC-20 paymaster
@@ -2947,6 +2953,7 @@ function RevokePermissionDialogWrapper({
     selectedFeeToken,
     setSelectedFeeToken,
     isPayingWithErc20,
+    refetch: retryEstimation,
   } = useGasEstimation({
     account,
     transactionCalls,
@@ -3341,6 +3348,7 @@ function RevokePermissionDialogWrapper({
       gasFee={gasFee}
       gasFeeLoading={gasFeeLoading}
       gasEstimationError={gasEstimationError}
+      onRetryEstimation={retryEstimation}
       sponsored={isSponsored}
       // Fee token props for ERC-20 paymaster
       feeTokens={feeTokens}

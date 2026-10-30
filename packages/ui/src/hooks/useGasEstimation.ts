@@ -103,6 +103,12 @@ function isPrefundError(error: unknown): boolean {
   return PREFUND_ERRORS.some((msg) => error.message.toLowerCase().includes(msg.toLowerCase()));
 }
 
+/** The first line of an error, which is the reason viem leads with. */
+function describeFailure(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  return message.split('\n')[0] || 'Unknown error';
+}
+
 // ============================================================================
 // Hook Implementation
 // ============================================================================
@@ -334,6 +340,7 @@ export function useGasEstimation({
           if (token.balance === 0n) {
             return {
               ...token,
+              estimationFailure: undefined,
               gasCostFormatted: undefined, // No estimate available
               gasCostMaxFormatted: undefined,
               isSelectable: false,
@@ -345,6 +352,7 @@ export function useGasEstimation({
           if (estimate) {
             return {
               ...token,
+              estimationFailure: undefined,
               gasCostFormatted: estimate.tokenCostFormatted,
               gasCostMaxFormatted: estimate.tokenCostMaxFormatted,
               isSelectable: estimate.hasSufficientBalance,
@@ -369,6 +377,7 @@ export function useGasEstimation({
             if (token.balance === 0n) {
               return {
                 ...token,
+                estimationFailure: undefined,
                 gasCostFormatted: undefined,
                 gasCostMaxFormatted: undefined,
                 isSelectable: false,
@@ -386,6 +395,7 @@ export function useGasEstimation({
 
             return {
               ...token,
+              estimationFailure: undefined,
               gasCostFormatted,
               gasCostMaxFormatted: undefined,
               isSelectable: false,
@@ -394,6 +404,9 @@ export function useGasEstimation({
         } else {
           // Unexpected error - log it and show estimation failed
           console.error('[useGasEstimation] ERC-20 estimation failed:', erc20Result.reason);
+          // A balance revert is a real shortfall and keeps reading as one.
+          const estimationFailure =
+            classifyRevert(erc20Result.reason) === 'balance' ? undefined : describeFailure(erc20Result.reason);
           updatedFeeTokens = currentFeeTokens.map((token) => {
             if (token.isNative) return token;
 
@@ -401,6 +414,7 @@ export function useGasEstimation({
             if (token.balance === 0n) {
               return {
                 ...token,
+                estimationFailure: undefined,
                 gasCostFormatted: undefined,
                 gasCostMaxFormatted: undefined,
                 isSelectable: false,
@@ -412,6 +426,7 @@ export function useGasEstimation({
               gasCostFormatted: 'Estimation failed',
               gasCostMaxFormatted: undefined,
               isSelectable: false,
+              estimationFailure,
             };
           });
         }

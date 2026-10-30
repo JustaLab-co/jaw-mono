@@ -199,6 +199,51 @@ describe('useGasEstimation fee-token selection', () => {
     expect(tokensNow.find((t) => !t.isNative)?.isSelectable).toBe(false);
   });
 
+  it('ETH empty and the USDC estimation reverts: the USDC option carries the reason', async () => {
+    erc20Mock.mockRejectedValue(new Error('execution reverted: Across quote expired\nVersion: viem'));
+    await mount(
+      makeAccount(async () => {
+        throw new Error("UserOperation reverted during simulation: AA21 didn't pay prefund");
+      }),
+      [nativeEth(0n), token({})]
+    );
+
+    expect(console.error).toHaveBeenCalledWith(
+      '[useGasEstimation] ERC-20 estimation failed:',
+      expect.objectContaining({ message: expect.stringContaining('Across quote expired') })
+    );
+    expect(tokensNow.find((t) => !t.isNative)?.estimationFailure).toBe('execution reverted: Across quote expired');
+  });
+
+  it('a prefund error on the USDC leg is a shortfall and carries no estimation failure', async () => {
+    erc20Mock.mockRejectedValue(new Error("AA21 didn't pay prefund"));
+    await mount(
+      makeAccount(async () => {
+        throw new Error("AA21 didn't pay prefund");
+      }),
+      [nativeEth(0n), token({})]
+    );
+
+    expect(tokensNow.find((t) => !t.isNative)?.estimationFailure).toBeUndefined();
+    expect(hook.gasEstimationError).toBe('Insufficient funds');
+  });
+
+  it('a retry that succeeds clears the failure', async () => {
+    erc20Mock.mockRejectedValueOnce(new Error('execution reverted'));
+    await mount(
+      makeAccount(async () => {
+        throw new Error("AA21 didn't pay prefund");
+      }),
+      [nativeEth(0n), token({})]
+    );
+    expect(tokensNow.find((t) => !t.isNative)?.estimationFailure).toBeDefined();
+
+    erc20Mock.mockResolvedValue([usdcEstimate]);
+    await act(async () => hook.refetch());
+    await flush();
+    expect(tokensNow.find((t) => !t.isNative)?.estimationFailure).toBeUndefined();
+  });
+
   it('balance-classified revert: reports Insufficient funds even with a proven USDC available', async () => {
     erc20Mock.mockResolvedValue([usdcEstimate]);
     await mount(

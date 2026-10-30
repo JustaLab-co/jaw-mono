@@ -114,6 +114,33 @@ describe('resolveBlockReason', () => {
     expect(resolveBlockReason(input({ gasEstimationError: 'Failed to estimate gas' }))).toBe('will-fail');
   });
 
+  it('reports a failed fee estimation on a funded token as estimation-failed, not funds', () => {
+    // ETH is empty, so its leg ends in "Insufficient funds"; USDC has a balance but its estimation reverted.
+    expect(
+      resolveBlockReason(
+        input({
+          hasSelectablePaymentOption: false,
+          gasEstimationError: INSUFFICIENT_FUNDS_ERROR,
+          feeEstimationFailure: 'execution reverted',
+        })
+      )
+    ).toBe('estimation-failed');
+  });
+
+  it('keeps funds when the asset itself is short, whatever the estimation said', () => {
+    expect(
+      resolveBlockReason(
+        input({ hasSelectablePaymentOption: false, feeEstimationFailure: 'execution reverted', revertCause: 'balance' })
+      )
+    ).toBe('funds');
+  });
+
+  it('keeps funds when no fee token reports an estimation failure', () => {
+    expect(
+      resolveBlockReason(input({ hasSelectablePaymentOption: false, gasEstimationError: INSUFFICIENT_FUNDS_ERROR }))
+    ).toBe('funds');
+  });
+
   it('does not invent a block from a revert cause alone', () => {
     // A balance revert with a healthy estimate stays submittable — it is a warning, not a block.
     expect(resolveBlockReason(input({ revertCause: 'balance' }))).toBeNull();

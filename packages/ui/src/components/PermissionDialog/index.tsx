@@ -51,6 +51,7 @@ export const PermissionDialog = ({
   gasFee,
   gasFeeLoading = false,
   gasEstimationError = '',
+  onRetryEstimation,
   sponsored = false,
   feeTokens,
   feeTokensLoading,
@@ -108,8 +109,10 @@ export const PermissionDialog = ({
     !feeTokens || feeTokens.length === 0 ? true : feeTokens.some((t) => t.isSelectable);
 
   // Same rule as the transaction screen, so a blocked fee reads identically on both.
+  const feeEstimationFailure = feeTokens?.find((t) => t.estimationFailure)?.estimationFailure;
   const blockReason = resolveBlockReason({
     hasSelectablePaymentOption,
+    feeEstimationFailure,
     gasEstimationError,
     sponsored,
     isPayingWithErc20: !!isPayingWithErc20,
@@ -332,6 +335,8 @@ export const PermissionDialog = ({
               showFeeTokenSelector={showFeeTokenSelector}
               isPayingWithErc20={isPayingWithErc20}
               hasSelectablePaymentOption={hasSelectablePaymentOption}
+              estimationFailureDetail={feeEstimationFailure}
+              onRetryEstimation={onRetryEstimation}
               disabled={isProcessing}
             />
 

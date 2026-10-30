@@ -48,6 +48,8 @@ export type BlockReason =
   | 'funds'
   /** Estimation failed, so no userOp can be built. */
   | 'will-fail'
+  /** The account holds a fee token, but the paymaster estimation for it failed for another reason. */
+  | 'estimation-failed'
   | null;
 
 export interface BlockReasonInput {
@@ -57,6 +59,8 @@ export interface BlockReasonInput {
   sponsored: boolean;
   isPayingWithErc20: boolean;
   revertCause?: RevertCause;
+  /** Why a fee token with a balance could not be estimated, when it was not a shortfall. */
+  feeEstimationFailure?: string;
 }
 
 /** Funding outranks a revert: "add funds" is actionable, and a shortfall usually caused the revert. */
@@ -66,9 +70,13 @@ export function resolveBlockReason({
   sponsored,
   isPayingWithErc20,
   revertCause,
+  feeEstimationFailure,
 }: BlockReasonInput): BlockReason {
   const gasError = !!gasEstimationError && !sponsored && !isPayingWithErc20;
   if (hasSelectablePaymentOption && !gasError) return null;
+
+  // The unselectable token has a balance, so "add funds" would be the wrong remedy.
+  if (!hasSelectablePaymentOption && feeEstimationFailure && revertCause !== 'balance') return 'estimation-failed';
 
   const shortfall =
     !hasSelectablePaymentOption || gasEstimationError === INSUFFICIENT_FUNDS_ERROR || revertCause === 'balance';

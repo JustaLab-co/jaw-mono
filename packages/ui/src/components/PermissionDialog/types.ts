@@ -93,6 +93,8 @@ export interface PermissionDialogProps {
   gasFee?: string;
   gasFeeLoading?: boolean;
   gasEstimationError?: string;
+  /** Re-runs fee estimation; offered when estimation failed rather than the balance falling short. */
+  onRetryEstimation?: () => void;
   sponsored?: boolean;
 
   // Fee token selection (for ERC-20 paymaster)

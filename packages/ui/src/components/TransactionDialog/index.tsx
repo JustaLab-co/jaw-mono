@@ -39,6 +39,7 @@ export const TransactionDialog = ({
   gasFee,
   gasFeeLoading,
   gasEstimationError,
+  onRetryEstimation,
   sponsored,
   assetsOut,
   assetsIn,
@@ -107,8 +108,10 @@ export const TransactionDialog = ({
   });
   const displayWalletAddress = getDisplayAddress(wallet.name, walletAddress);
 
+  const feeEstimationFailure = feeTokens?.find((t) => t.estimationFailure)?.estimationFailure;
   const blockReason = resolveBlockReason({
     hasSelectablePaymentOption,
+    feeEstimationFailure,
     gasEstimationError,
     sponsored,
     isPayingWithErc20: !!isPayingWithErc20,
@@ -432,6 +435,8 @@ export const TransactionDialog = ({
               showFeeTokenSelector={showFeeTokenSelector}
               isPayingWithErc20={isPayingWithErc20}
               hasSelectablePaymentOption={hasSelectablePaymentOption}
+              estimationFailureDetail={feeEstimationFailure}
+              onRetryEstimation={onRetryEstimation}
               disabled={isProcessing}
             />
 
