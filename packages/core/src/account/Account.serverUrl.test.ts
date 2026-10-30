@@ -7,8 +7,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Hex } from 'viem';
 import { Account } from './Account.js';
 import { createMemoryStorage } from '../storage-manager/index.js';
+import { deriveAccountRecordV1 } from './accountRecord.js';
 import {
     createPasskeyUtils,
+    fetchAccountRecordFromBackend,
     importPasskeyUtils,
     lookupPasskeyFromBackend,
     registerPasskeyInBackend,
@@ -20,6 +22,7 @@ vi.mock('../passkey-manager/utils.js', async (importOriginal) => ({
     importPasskeyUtils: vi.fn(),
     registerPasskeyInBackend: vi.fn(),
     lookupPasskeyFromBackend: vi.fn(),
+    fetchAccountRecordFromBackend: vi.fn(),
 }));
 
 vi.mock('./smartAccount.js', async (importOriginal) => ({
@@ -55,6 +58,7 @@ beforeEach(() => {
         publicKey: PUBLIC_KEY,
         displayName: 'alice',
     });
+    vi.mocked(fetchAccountRecordFromBackend).mockResolvedValue(deriveAccountRecordV1(PUBLIC_KEY));
 });
 
 describe('Account and the passkey server', () => {
@@ -62,7 +66,7 @@ describe('Account and the passkey server', () => {
         await Account.create(config(SERVER), { username: 'alice' });
 
         expect(registerPasskeyInBackend).toHaveBeenCalledWith(
-            { credentialId: 'cred-1', publicKey: PUBLIC_KEY, displayName: 'alice' },
+            { credentialId: 'cred-1', publicKey: PUBLIC_KEY, displayName: 'alice', accountVersion: 2 },
             'k1',
             false,
             SERVER
@@ -75,6 +79,7 @@ describe('Account and the passkey server', () => {
         const [, , apiKey, serverUrl] = vi.mocked(importPasskeyUtils).mock.calls[0];
         expect({ apiKey, serverUrl }).toEqual({ apiKey: 'k1', serverUrl: SERVER });
         expect(lookupPasskeyFromBackend).toHaveBeenCalledWith('cred-1', 'k1', false, SERVER);
+        expect(fetchAccountRecordFromBackend).toHaveBeenCalledWith('cred-1', 'k1', false, SERVER);
     });
 
     it('uses the JAW server when none is configured', async () => {

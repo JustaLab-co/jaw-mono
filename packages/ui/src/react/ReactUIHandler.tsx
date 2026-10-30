@@ -16,6 +16,7 @@ import {
   SendTransactionUIRequest,
   PermissionUIRequest,
   RevokePermissionUIRequest,
+  SetupRecoveryUIRequest,
   AddFundsUIRequest,
   WalletSignUIRequest,
   Account,
@@ -28,9 +29,12 @@ import {
   buildGrantPermissionCall,
   buildRevokePermissionCall,
   buildErc20PaymasterContext,
+  isFirstRecoverySetup,
   type Chain,
   type SignInWithEthereumCapabilityRequest,
   type PaymasterConfig,
+  type RecoveryConfig,
+  type RecoverySetupResult,
   ensureIntNumber,
   standardErrorCodes,
 } from '@jaw.id/core';
@@ -49,6 +53,7 @@ import { TransactionDialog } from '../components/TransactionDialog';
 import { PermissionDialog } from '../components/PermissionDialog';
 import { isWildcard } from '../components/PermissionDialog/Sections';
 import { toDialogCalls } from '../components/PermissionDialog/calls';
+import { RecoveryDialog } from '../components/RecoveryDialog';
 import { ConnectDialog } from '../components/ConnectDialog';
 import { AddFundsDialog } from '../components/AddFundsDialog';
 import { ResponsiveDialogAnchor } from '../components/DialogPresentation';
@@ -64,6 +69,8 @@ import { useSpenderPrefund, describeSpenderPrefund } from '../hooks/useSpenderPr
 import { useAssetPreview } from '../hooks/useAssetPreview';
 import { usePermissionExecution } from '../hooks/usePermissionExecution';
 import { usePermissionRevocation } from '../hooks/usePermissionRevocation';
+import { useRecoveryNetworks } from '../hooks/useRecoveryNetworks';
+import { recoveryActivationCalls, recoveryPlanStillHolds, recoveryUnavailable } from '../utils/recoverySetup';
 import { useFunctionSignatures } from '../hooks/useFunctionSignatures';
 import { fetchTokenBalance, isNativeToken } from '../utils/tokenBalance';
 import { resolvePaymaster } from '../utils/resolvePaymaster';
@@ -78,6 +85,15 @@ import { getSystemColorScheme, useColorScheme } from '../theme/use-color-scheme.
 // How long signing dialogs hold the "Signed ✓" tick after delivery (dApp promise is
 // already resolved by then — see handleApprove — so it never delays the dApp).
 const SIGNED_TICK_MS = 850;
+
+// How long the recovery outcome screen stays up after the dApp has its answer, unless the user
+// closes it first: long enough to watch a relayed change land (polling stops at five minutes).
+const RECOVERY_OUTCOME_HOLD_MS = 5 * 60_000;
+
+// After the activation transaction lands, the networks are read again until one can take the
+// change: the read is live, and a node a block behind can still answer with the old state.
+const RECOVERY_ACTIVATION_READS = 5;
+const RECOVERY_ACTIVATION_READ_INTERVAL_MS = 2_000;
 
 // ============================================================================
 // Chain Utilities
@@ -436,6 +452,7 @@ export class ReactUIHandler implements UIHandler {
       'eth_sendTransaction',
       'wallet_grantPermissions',
       'wallet_revokePermissions',
+      'wallet_setupRecovery',
       'wallet_sign',
       'wallet_addFunds',
     ].includes(request.type);
@@ -679,6 +696,22 @@ export class ReactUIHandler implements UIHandler {
           <RevokePermissionDialogWrapper
             key={request.id}
             request={request as RevokePermissionUIRequest}
+            onApprove={onApprove}
+            onReject={onReject}
+            onSubmissionInFlight={onSubmissionInFlight}
+            apiKey={this.config.apiKey}
+            defaultChainId={this.config.defaultChainId}
+            paymasters={this.config.paymasters}
+            appName={this.config.appName}
+            appLogoUrl={this.config.appLogoUrl}
+          />
+        );
+
+      case 'wallet_setupRecovery':
+        return (
+          <RecoveryDialogWrapper
+            key={request.id}
+            request={request as SetupRecoveryUIRequest}
             onApprove={onApprove}
             onReject={onReject}
             onSubmissionInFlight={onSubmissionInFlight}
@@ -3343,6 +3376,353 @@ function RevokePermissionDialogWrapper({
       gasEstimationError={gasEstimationError}
       sponsored={isSponsored}
       // Fee token props for ERC-20 paymaster
+      feeTokens={feeTokens}
+      feeTokensLoading={feeTokensLoading}
+      selectedFeeToken={selectedFeeToken}
+      onFeeTokenSelect={setSelectedFeeToken}
+      showFeeTokenSelector={!isSponsored && feeTokens.length > 0}
+      isPayingWithErc20={isPayingWithErc20}
+      nativeCurrencySymbol={viemChain?.nativeCurrency?.symbol}
+    />
+  );
+}
+
+// RecoveryDialogWrapper - handles wallet_setupRecovery (setup and edit, R15, R16, R18)
+//
+// The PermissionDialogWrapper shape: the app sends the end state, the screen shows it and the user
+// approves, then an outcome per network. A first setup and an edit are both one signature, relayed
+// by JAW to every network that can take it; `Account.getRecoveryNetworks` says which, the read
+// `Account.setupRecovery` makes too. When none can yet, the screen offers one transaction on the
+// connected network (the fee row below), then reads the networks again.
+function RecoveryDialogWrapper({
+  request,
+  onApprove,
+  onReject,
+  onSubmissionInFlight,
+  apiKey,
+  defaultChainId,
+  paymasters,
+  appName,
+  appLogoUrl,
+}: {
+  request: SetupRecoveryUIRequest;
+  onApprove: (data: any, holdMs?: number) => void;
+  onReject: (error?: Error) => void;
+  onSubmissionInFlight?: (inFlight: boolean) => void;
+  apiKey?: string;
+  defaultChainId?: number;
+  paymasters?: Record<number, PaymasterConfig>;
+  appName?: string;
+  appLogoUrl?: string | null;
+}) {
+  const [open, setOpen] = useState(true);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [isActivating, setIsActivating] = useState(false);
+  const [status, setStatus] = useState<string>('');
+  const [account, setAccount] = useState<Account | null>(null);
+  const [feeTokens, setFeeTokens] = useState<FeeTokenOption[]>([]);
+  const [feeTokensLoading, setFeeTokensLoading] = useState(true);
+  const [result, setResult] = useState<RecoverySetupResult | null>(null);
+  // Synchronous re-entry guard: isProcessing disables the buttons only after a
+  // re-render, which is too soft a gate for a change to who can take over the account.
+  const submittingRef = useRef(false);
+
+  // Recovery is account-level: the request carries the connected chain, where an activation
+  // transaction would go.
+  const chainId = request.data.chainId || defaultChainId || 1;
+  const viemChain = SUPPORTED_CHAINS.find((c) => c.id === chainId);
+  const networkName = viemChain?.name || 'Unknown Network';
+
+  const { plan, loading: isLoadingConfig, problem, reload } = useRecoveryNetworks({ account });
+  const isFirstSetup = !plan?.base || isFirstRecoverySetup(plan.base);
+  const unavailable = plan ? recoveryUnavailable(plan, chainId) : null;
+  const needsActivation = unavailable === 'deploy' || unavailable === 'enable';
+
+  // What the app asked for, shown and signed as it is.
+  const desired = useMemo<RecoveryConfig>(
+    () => ({ recoveries: request.data.recoveries, threshold: request.data.threshold }),
+    [request.data.recoveries, request.data.threshold]
+  );
+
+  const { url: effectivePaymasterUrl, context: effectivePaymasterContext } = useMemo(
+    () => resolvePaymaster(request.data.capabilities?.paymasterService, paymasters?.[chainId]),
+    [request.data.capabilities?.paymasterService, paymasters, chainId]
+  );
+  const isSponsored = !!effectivePaymasterUrl;
+
+  // The activation transaction, priced and sent as one object. A recovery change is relayed and
+  // costs the user nothing, so there is nothing else to price.
+  const transactionCalls = useMemo(
+    () => (needsActivation ? recoveryActivationCalls(request.data.address) : []),
+    [needsActivation, request.data.address]
+  );
+
+  const {
+    gasFee,
+    gasFeeLoading,
+    gasEstimationError,
+    tokenEstimates,
+    selectedFeeToken,
+    setSelectedFeeToken,
+    isPayingWithErc20,
+  } = useGasEstimation({
+    account,
+    transactionCalls,
+    chainId,
+    apiKey,
+    feeTokens,
+    // Nothing to price unless the activation transaction is on screen.
+    isSponsored: isSponsored || transactionCalls.length === 0,
+    address: request.data.address,
+    onFeeTokensUpdate: setFeeTokens,
+  });
+
+  const computedPaymasterUrl = useMemo(() => {
+    if (effectivePaymasterUrl) return effectivePaymasterUrl;
+    if (selectedFeeToken && !selectedFeeToken.isNative) {
+      return jawPaymasterUrl(chainId, apiKey);
+    }
+    return undefined;
+  }, [effectivePaymasterUrl, selectedFeeToken, chainId, apiKey]);
+
+  const computedPaymasterContext = useMemo(() => {
+    if (selectedFeeToken && !selectedFeeToken.isNative) {
+      const estimate = tokenEstimates.find(
+        (e) => e.tokenAddress.toLowerCase() === selectedFeeToken.address.toLowerCase()
+      );
+      if (estimate) {
+        return buildErc20PaymasterContext(estimate);
+      }
+      // No estimate yet: omit `gas` so Account.createErc20ApprovalCall estimates
+      // the worst-case ceiling itself.
+      return { token: selectedFeeToken.address };
+    }
+    return effectivePaymasterContext;
+  }, [selectedFeeToken, effectivePaymasterContext, tokenEstimates]);
+
+  // Fetch fee tokens from capabilities (same pattern as PermissionDialogWrapper)
+  useEffect(() => {
+    let isMounted = true;
+
+    const fetchFeeTokensData = async () => {
+      if (!viemChain || !apiKey || effectivePaymasterUrl) {
+        setFeeTokensLoading(false);
+        return;
+      }
+
+      try {
+        setFeeTokensLoading(true);
+        const capabilities = await handleGetCapabilitiesRequest(
+          { method: 'wallet_getCapabilities', params: [] },
+          apiKey || '',
+          true // showTestnets
+        );
+
+        const chainIdHex = `0x${chainId.toString(16)}` as `0x${string}`;
+        const feeTokenCap = capabilities?.[chainIdHex]?.feeToken;
+
+        if (!feeTokenCap?.supported || !feeTokenCap?.tokens?.length) {
+          if (isMounted) setFeeTokensLoading(false);
+          return;
+        }
+
+        const rpcUrl =
+          buildChainConfigFromApiKey(chainId, apiKey).rpcUrl ||
+          viemChain?.rpcUrls?.default?.http?.[0] ||
+          `https://eth.llamarpc.com`;
+
+        const tokensWithBalances = await Promise.all(
+          feeTokenCap.tokens.map(async (token) => {
+            const tokenIsNative = isNativeToken(token.address);
+            try {
+              const balance = await fetchTokenBalance(token.address, request.data.address, rpcUrl, chainId);
+              const balanceFormatted = formatUnits(balance, token.decimals);
+              // For native token (ETH): selectable if any balance (gas estimation will catch insufficient)
+              // For ERC-20 tokens: require at least 0.5 units
+              const isSelectable = tokenIsNative ? balance > 0n : parseFloat(balanceFormatted) >= 0.5;
+              return {
+                uid: token.uid,
+                symbol: token.symbol,
+                address: token.address,
+                decimals: token.decimals,
+                balance,
+                balanceFormatted,
+                isNative: tokenIsNative,
+                isSelectable,
+                logoURI: token.logoURI,
+              } as FeeTokenOption;
+            } catch (error) {
+              console.warn(`Failed to fetch balance for ${token.symbol}:`, error);
+              return {
+                uid: token.uid,
+                symbol: token.symbol,
+                address: token.address,
+                decimals: token.decimals,
+                balance: 0n,
+                balanceFormatted: '0',
+                isNative: tokenIsNative,
+                isSelectable: false,
+                logoURI: token.logoURI,
+              } as FeeTokenOption;
+            }
+          })
+        );
+
+        if (isMounted) setFeeTokens(tokensWithBalances);
+      } catch (error) {
+        console.warn('[RecoveryDialogWrapper] Failed to fetch fee tokens:', error);
+      } finally {
+        if (isMounted) setFeeTokensLoading(false);
+      }
+    };
+
+    fetchFeeTokensData();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [chainId, apiKey, request.data.address, effectivePaymasterUrl, viemChain]);
+
+  // Initialize account (on the stable paymaster url, as PermissionDialogWrapper does)
+  useEffect(() => {
+    let isMounted = true;
+
+    const initializeAccount = async () => {
+      try {
+        const restoredAccount = await getAccountForSigning(apiKey, chainId, effectivePaymasterUrl);
+        if (isMounted) {
+          setAccount(restoredAccount);
+        }
+      } catch (error) {
+        console.error('[RecoveryDialogWrapper] Error initializing account:', error);
+      }
+    };
+
+    initializeAccount();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [apiKey, chainId, effectivePaymasterUrl]);
+
+  const handleConfirm = async () => {
+    if (submittingRef.current) return;
+    if (!account) {
+      console.error('[RecoveryDialogWrapper] Account not initialized');
+      return;
+    }
+
+    submittingRef.current = true;
+    setIsProcessing(true);
+    onSubmissionInFlight?.(true);
+    setStatus(isFirstSetup ? 'Setting up recovery...' : 'Updating recovery...');
+    try {
+      // Account plans again from its own read when it signs. Refuse when that plan is no longer
+      // the one this screen showed, so nothing is signed that the user did not see.
+      const fresh = await account.getRecoveryNetworks();
+      if (!plan || !recoveryPlanStillHolds(plan, fresh, desired)) {
+        throw new Error('Recovery settings changed since this screen opened. Close this and try again.');
+      }
+
+      // The config the screen rendered, relayed.
+      const setup = await account.setupRecovery(desired);
+      // Answered now, while the submission is still marked in flight: once the change has landed,
+      // nothing after it (closing the window, a crash on the outcome screen) may report a
+      // rejection. The outcome screen stays up as information until Done; a relayed batch is the
+      // dApp's to poll with `getAdminBatch`.
+      onApprove(setup, RECOVERY_OUTCOME_HOLD_MS);
+      setStatus('');
+      setResult(setup);
+    } catch (error) {
+      console.error('Recovery setup failed:', error);
+      const errorObj = error instanceof Error ? error : new Error(String(error));
+      setStatus(`Error: ${errorObj.message}`);
+      // Check if user cancelled passkey prompt (NotAllowedError)
+      if (errorObj.name === 'NotAllowedError') {
+        onReject(UIError.userRejected('User cancelled the passkey prompt'));
+      } else {
+        onReject(new UIError(standardErrorCodes.rpc.internal as UIErrorCode, errorObj.message));
+      }
+    } finally {
+      // Order matters: onApprove/onReject settled above, so clearing the in-flight
+      // flag here never opens a window where a boundary crash could mis-settle.
+      onSubmissionInFlight?.(false);
+      submittingRef.current = false;
+      setIsProcessing(false);
+    }
+  };
+
+  // The one transaction that lets the connected network take a change. It answers nothing: the
+  // request stays open, and a failure stays on screen for another try or Cancel.
+  const handleActivate = async () => {
+    if (submittingRef.current || !account) return;
+    submittingRef.current = true;
+    setIsActivating(true);
+    setStatus('');
+    try {
+      await account.sendTransaction(transactionCalls, computedPaymasterUrl, computedPaymasterContext);
+      for (let read = 1; read <= RECOVERY_ACTIVATION_READS; read++) {
+        const fresh = await reload();
+        if (fresh?.base || read === RECOVERY_ACTIVATION_READS) break;
+        await new Promise((resolve) => setTimeout(resolve, RECOVERY_ACTIVATION_READ_INTERVAL_MS));
+      }
+    } catch (error) {
+      console.error('Recovery activation failed:', error);
+      setStatus(`Error: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      submittingRef.current = false;
+      setIsActivating(false);
+    }
+  };
+
+  // After a change, the dApp already has its answer and this only closes the screen. A config
+  // already in place reaches here unsigned, and this is its answer.
+  const handleDone = (latest: RecoverySetupResult) => {
+    setOpen(false);
+    onApprove(latest);
+  };
+
+  const handleCancel = () => {
+    // The disabled/dismissable gates commit a render late; a same-tick cancel must
+    // not settle "rejected" while the signed change proceeds and lands on chain.
+    if (submittingRef.current) return;
+    // Closing the outcome screen is Done: the change already happened.
+    if (result) return handleDone(result);
+    setOpen(false);
+    onReject(UIError.userRejected());
+  };
+
+  return (
+    <RecoveryDialog
+      open={open}
+      onOpenChange={(newOpen) => {
+        if (!newOpen) handleCancel();
+        else setOpen(newOpen);
+      }}
+      accountAddress={request.data.address}
+      origin={typeof window !== 'undefined' ? window.location.origin : 'unknown'}
+      appName={appName}
+      appLogoUrl={appLogoUrl}
+      config={desired}
+      plan={plan}
+      isLoadingConfig={isLoadingConfig}
+      problem={problem}
+      networkName={networkName}
+      chainId={chainId}
+      apiKey={apiKey}
+      onConfirm={handleConfirm}
+      onActivate={handleActivate}
+      onCancel={handleCancel}
+      onDone={handleDone}
+      isProcessing={isProcessing}
+      isActivating={isActivating}
+      status={status}
+      result={result}
+      gasFee={gasFee}
+      gasFeeLoading={gasFeeLoading}
+      gasEstimationError={gasEstimationError}
+      sponsored={isSponsored}
+      mainnetRpcUrl={getMainnetRpcUrl(apiKey)}
       feeTokens={feeTokens}
       feeTokensLoading={feeTokensLoading}
       selectedFeeToken={selectedFeeToken}

@@ -839,6 +839,8 @@ function KeysJawIdAppContent({
         requestType = SDKRequestType.GRANT_PERMISSIONS;
       } else if (method === 'wallet_revokePermissions') {
         requestType = SDKRequestType.REVOKE_PERMISSIONS;
+      } else if (method === 'wallet_setupRecovery') {
+        requestType = SDKRequestType.SETUP_RECOVERY;
       } else if (method === 'wallet_addFunds') {
         requestType = SDKRequestType.ADD_FUNDS;
       } else if (method === 'wallet_connect') {
@@ -1128,7 +1130,8 @@ function KeysJawIdAppContent({
                     pendingRequest?.type === SDKRequestType.SIGN_TYPED_DATA ||
                     pendingRequest?.type === SDKRequestType.SEND_TRANSACTION ||
                     pendingRequest?.type === SDKRequestType.GRANT_PERMISSIONS ||
-                    pendingRequest?.type === SDKRequestType.REVOKE_PERMISSIONS
+                    pendingRequest?.type === SDKRequestType.REVOKE_PERMISSIONS ||
+                    pendingRequest?.type === SDKRequestType.SETUP_RECOVERY
                   ) {
                     // If there's a pending sign message, typed data, transaction, or permission request,
                     // the modal will be shown in the priority logic above since user is now authenticated
@@ -1222,7 +1225,8 @@ function KeysJawIdAppContent({
                     pendingRequest?.type === SDKRequestType.SIGN_TYPED_DATA ||
                     pendingRequest?.type === SDKRequestType.SEND_TRANSACTION ||
                     pendingRequest?.type === SDKRequestType.GRANT_PERMISSIONS ||
-                    pendingRequest?.type === SDKRequestType.REVOKE_PERMISSIONS
+                    pendingRequest?.type === SDKRequestType.REVOKE_PERMISSIONS ||
+                    pendingRequest?.type === SDKRequestType.SETUP_RECOVERY
                   ) {
                     // If there's a pending sign message, typed data, transaction, or permission request,
                     // the modal will be shown in the priority logic above since user is now authenticated

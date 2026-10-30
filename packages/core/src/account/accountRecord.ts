@@ -52,35 +52,89 @@ export const ACCOUNT_RECIPE_V1 = {
 };
 
 /**
- * The v1 record for a passkey public key: owners `[publicKey, permissionsManager]`,
- * nonce 0, and the address the factory's CREATE2 deploys that to. Computed
- * locally, the same way `factory.getAddress` does, so it needs no RPC.
+ * The recipe of accounts created once the recovery module shipped: v1's owners
+ * followed by the recovery manager, so recovery works on any network the
+ * account is deployed on, with no setup transaction. Frozen like v1.
  */
-export function deriveAccountRecordV1(publicKey: Hex): AccountRecord {
-    const { version, factory, initCodeHash, permissionsManager, nonce } = ACCOUNT_RECIPE_V1;
-    const owners: Hex[] = [publicKey.toLowerCase() as Hex, pad(permissionsManager).toLowerCase() as Hex];
+export const ACCOUNT_RECIPE_V2 = {
+    ...ACCOUNT_RECIPE_V1,
+    version: 2,
+    recoveryManager: '0x9D1df5AeBE2CdBe6051687C0ab2c788890907E45',
+} as const satisfies {
+    version: number;
+    factory: Address;
+    initCodeHash: Hex;
+    permissionsManager: Address;
+    recoveryManager: Address;
+    nonce: bigint;
+};
+
+/**
+ * The record for `owners` under a recipe: the address the factory's CREATE2
+ * deploys them to. Computed locally, the same way `factory.getAddress` does,
+ * so it needs no RPC.
+ */
+function deriveRecord(
+    { version, factory, initCodeHash, nonce }: { version: number; factory: Address; initCodeHash: Hex; nonce: bigint },
+    owners: Hex[]
+): AccountRecord {
     const salt = keccak256(encodeAbiParameters([{ type: 'bytes[]' }, { type: 'uint256' }], [owners, nonce]));
     const address = getContractAddress({ opcode: 'CREATE2', from: factory, salt, bytecodeHash: initCodeHash });
 
     return { address, version, factory, owners, nonce: nonce.toString() };
 }
 
+/** The v1 record for a passkey public key: owners `[publicKey, permissionsManager]`, nonce 0. */
+export function deriveAccountRecordV1(publicKey: Hex): AccountRecord {
+    const { permissionsManager } = ACCOUNT_RECIPE_V1;
+    return deriveRecord(ACCOUNT_RECIPE_V1, [
+        publicKey.toLowerCase() as Hex,
+        pad(permissionsManager).toLowerCase() as Hex,
+    ]);
+}
+
+/** The v2 record for a passkey public key: owners `[publicKey, permissionsManager, recoveryManager]`, nonce 0. */
+export function deriveAccountRecordV2(publicKey: Hex): AccountRecord {
+    const { permissionsManager, recoveryManager } = ACCOUNT_RECIPE_V2;
+    return deriveRecord(ACCOUNT_RECIPE_V2, [
+        publicKey.toLowerCase() as Hex,
+        pad(permissionsManager).toLowerCase() as Hex,
+        pad(recoveryManager).toLowerCase() as Hex,
+    ]);
+}
+
 /**
- * Whether `record` is exactly the v1 record of `publicKey`. Recomputing the
- * address from the record's own owners is not enough: owners
- * `[publicKey, someoneElse]` give a valid CREATE2 address that someone else
- * co-owns. While v1 is the only recipe and nothing rotates, the only record a
- * key can have is the one it derives.
+ * The record a new account is created with. The one place that picks the
+ * recipe for new accounts; existing accounts keep the record they were
+ * created with.
+ */
+export function deriveNewAccountRecord(publicKey: Hex): AccountRecord {
+    return deriveAccountRecordV2(publicKey);
+}
+
+/** The record `publicKey` derives under recipe `version`, or undefined for a version no recipe has. */
+function deriveRecordOfVersion(version: unknown, publicKey: Hex): AccountRecord | undefined {
+    if (version === ACCOUNT_RECIPE_V1.version) return deriveAccountRecordV1(publicKey);
+    if (version === ACCOUNT_RECIPE_V2.version) return deriveAccountRecordV2(publicKey);
+    return undefined;
+}
+
+/**
+ * Whether `record` is exactly the record `publicKey` derives under the recipe
+ * the record names. Recomputing the address from the record's own owners is
+ * not enough: owners `[publicKey, someoneElse]` give a valid CREATE2 address
+ * that someone else co-owns. While nothing rotates, the only records a key can
+ * have are the ones its recipes derive.
  *
  * Total: a record comes from a server response or localStorage, so any field
  * may be missing or of the wrong type, and such a record is rejected rather
  * than thrown on.
  */
 export function isAccountRecordOf(record: AccountRecord, publicKey: Hex): boolean {
-    const expected = deriveAccountRecordV1(publicKey);
-    const owners: unknown = record?.owners;
+    const expected = deriveRecordOfVersion(record?.version, publicKey);
+    if (!expected) return false;
+    const owners: unknown = record.owners;
     return (
-        record?.version === expected.version &&
         sameHex(record.address, expected.address) &&
         sameHex(record.factory, expected.factory) &&
         record.nonce === expected.nonce &&
@@ -96,8 +150,13 @@ function sameHex(value: unknown, expected: Hex): boolean {
 
 /**
  * The record to use for `publicKey`: the stored one when there is one and it
- * checks out, otherwise the one its key derives. A stored record's addresses
- * are returned checksummed whatever their casing, like a derived one's.
+ * checks out, otherwise the v1 record its key derives. A stored record's
+ * addresses are returned checksummed whatever their casing, like a derived one's.
+ *
+ * The derived v1 record is right only for a stored device entry saved before
+ * records existed: every account created since stores its record, and a v2
+ * account has no other way to be found. A caller that may hold a v2 account
+ * must have its record, from storage or the backend, before it gets here.
  *
  * FALLBACK, VALID ONLY WHILE NO ACCOUNT ROTATES. Deriving from the signer's
  * public key gives the right address only for a key that created its account.

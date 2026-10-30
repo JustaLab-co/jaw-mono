@@ -1,6 +1,14 @@
 import type { Address, Hash, Hex, TypedDataDefinition, TypedData, LocalAccount } from 'viem';
-import { isHex, encodeFunctionData, erc20Abi, createPublicClient, numberToHex } from 'viem';
-import { toWebAuthnAccount, type SmartAccount } from 'viem/account-abstraction';
+import {
+    isHex,
+    encodeFunctionData,
+    decodeFunctionData,
+    erc20Abi,
+    createPublicClient,
+    numberToHex,
+    hashTypedData,
+} from 'viem';
+import { toWebAuthnAccount, type SmartAccount, type WebAuthnAccount } from 'viem/account-abstraction';
 import {
     createSmartAccount,
     createSmartAccountForAddress,
@@ -14,6 +22,7 @@ import {
     getBundlerClient,
     createSmartAccountEip7702,
     type BundledTransactionResult,
+    type OwnerSetup,
 } from './smartAccount.js';
 import {
     storeCallStatus,
@@ -22,12 +31,23 @@ import {
     transformReceiptsToEIP5792,
     type CallStatusResponse,
 } from '../rpc/wallet_sendCalls.js';
-import type { JustanAccountImplementation } from './toJustanAccount.js';
-import { type AccountRecord, deriveAccountRecordV1, resolveAccountRecord } from './accountRecord.js';
+import {
+    type JustanAccountImplementation,
+    abi as justanAccountAbi,
+    factoryAbi,
+    sign as signWithOwner,
+} from './toJustanAccount.js';
+import {
+    type AccountRecord,
+    deriveNewAccountRecord,
+    isAccountRecordOf,
+    resolveAccountRecord,
+} from './accountRecord.js';
 import { jawHttp } from '../utils/jawHttp.js';
 import { withoutApiKey } from '../utils/redact.js';
 import {
     PasskeyManager,
+    PasskeyLookupError,
     type PasskeyAccount,
     type NativePasskeyGetFn,
     type NativePasskeyCreateFn,
@@ -57,7 +77,33 @@ import {
     type CallPermissionDetail,
     type SpendPermissionDetail,
 } from '../rpc/permissions.js';
-import { JAW_RPC_URL, JAW_PAYMASTER_URL, jawPaymasterUrl, ERC20_PAYMASTER_ADDRESS } from '../constants.js';
+import {
+    type AdminOp,
+    type RecoveryConfig,
+    type RecoveryNetworkStatus,
+    type RecoveryNetworksPlan,
+    type RecoverySetupResult,
+    type RecoveryState,
+    DEFAULT_RECOVERY_ADMIN_EXPIRY_SECONDS,
+    cancelRequestOp,
+    diffRecoveryConfig,
+    getCeremony,
+    getRecoveryConfig,
+    listCeremonies,
+    planRecoveryNetworks,
+    randomSalt,
+    recoveryAdminTypedData,
+    submitAdminBatch,
+    toOwnerBytes,
+} from '../rpc/recovery.js';
+import {
+    JAW_RPC_URL,
+    JAW_PAYMASTER_URL,
+    jawPaymasterUrl,
+    ERC20_PAYMASTER_ADDRESS,
+    RECOVERY_MANAGER_ADDRESS,
+} from '../constants.js';
+import { standardErrors } from '../errors/errors.js';
 import { type Chain, chains as chainStore, dropChainClients } from '../store/index.js';
 import { logAccountIssuance } from '../analytics/index.js';
 
@@ -172,6 +218,14 @@ export class Account {
     private readonly _passkeyAccount: PasskeyAccount | null;
     private readonly _apiKey?: string;
     private readonly _localAccount: LocalAccount | null;
+    /**
+     * The key that signs for this account: the passkey, or the local key. Kept
+     * for the signatures the smart account's own wrapper must not touch, such as
+     * the recovery manager's owner proof.
+     */
+    private readonly _owner: WebAuthnAccount | LocalAccount;
+    /** The owners this account's own sends add when it lacks them; none for a passkey account. */
+    private readonly _ownerSetup: OwnerSetup | undefined;
 
     /**
      * Private constructor - use static factory methods to create instances
@@ -180,6 +234,7 @@ export class Account {
         smartAccount: SmartAccount,
         chain: Chain,
         apiKey: string | undefined,
+        owner: WebAuthnAccount | LocalAccount,
         passkeyAccount?: PasskeyAccount,
         localAccount?: LocalAccount
     ) {
@@ -188,6 +243,12 @@ export class Account {
         this._passkeyAccount = passkeyAccount ?? null;
         this._apiKey = apiKey;
         this._localAccount = localAccount ?? null;
+        this._owner = owner;
+        this._ownerSetup = localAccount
+            ? { kind: 'eip7702', localAccount }
+            : owner.type === 'local'
+              ? { kind: 'localKey' }
+              : undefined;
     }
 
     // ============================================
@@ -239,6 +300,33 @@ export class Account {
             derived.filter((entry): entry is NonNullable<typeof entry> => entry !== null)
         );
         return accounts;
+    }
+
+    /**
+     * The backend's record of the account a credential signs for, for a
+     * credential this device has no entry for. The backend's record is the only
+     * way to find the account: deriving one from the key gives the v1 address,
+     * which for a newer account is a different, empty one. A failed lookup, or a
+     * record that is not this key's, throws so the user can retry.
+     */
+    private static async fetchAccountRecordOf(
+        passkeyManager: PasskeyManager,
+        credentialId: string,
+        publicKey: Hex
+    ): Promise<AccountRecord> {
+        let fetched: AccountRecord;
+        try {
+            fetched = await passkeyManager.fetchAccountRecord(credentialId);
+        } catch (error) {
+            throw new PasskeyLookupError(
+                `Failed to look up the account for this passkey: ${error instanceof Error ? error.message : 'Unknown error'}`,
+                error
+            );
+        }
+        if (!isAccountRecordOf(fetched, publicKey)) {
+            throw new PasskeyLookupError('The account returned for this passkey does not belong to it');
+        }
+        return resolveAccountRecord(fetched, publicKey);
     }
 
     /**
@@ -339,7 +427,7 @@ export class Account {
             // Store auth state
             passkeyManager.storeAuthState(address, credentialId);
 
-            return new Account(smartAccount, chain, apiKey, passkeyAccount);
+            return new Account(smartAccount, chain, apiKey, webAuthnAccount, passkeyAccount);
         }
 
         // No credentialId provided - restore from existing auth state if available
@@ -366,7 +454,7 @@ export class Account {
                 );
                 Account.persistRecordIfMissing(passkeyManager, currentAccount, record);
 
-                return new Account(smartAccount, chain, apiKey, currentAccount);
+                return new Account(smartAccount, chain, apiKey, webAuthnAccount, currentAccount);
             }
         }
 
@@ -433,7 +521,11 @@ export class Account {
 
         const chain = Account.buildChainConfig(chainId, apiKey, paymasterUrl, paymasterContext);
         const bundlerClient = getBundlerClient(chain);
-        const record = resolveAccountRecord(passkeyAccount?.account, publicKey);
+        // An entry stored before records existed derives its v1 record; a
+        // credential with no entry on this device asks the backend.
+        const record = passkeyAccount
+            ? resolveAccountRecord(passkeyAccount.account, publicKey)
+            : await Account.fetchAccountRecordOf(passkeyManager, credentialId, publicKey);
         const smartAccount = await createSmartAccount(
             webAuthnAccount,
             bundlerClient as JustanAccountImplementation['client'],
@@ -450,7 +542,7 @@ export class Account {
             isImported: false,
         };
 
-        return new Account(smartAccount, chain, apiKey, accountMetadata);
+        return new Account(smartAccount, chain, apiKey, webAuthnAccount, accountMetadata);
     }
 
     /**
@@ -495,7 +587,7 @@ export class Account {
         const chain = Account.buildChainConfig(chainId, apiKey, paymasterUrl, paymasterContext);
 
         const bundlerClient = getBundlerClient(chain);
-        const record = deriveAccountRecordV1(publicKey);
+        const record = deriveNewAccountRecord(publicKey);
         const smartAccount = await createSmartAccount(
             webAuthnAccount,
             bundlerClient as JustanAccountImplementation['client'],
@@ -509,7 +601,7 @@ export class Account {
         // Log account issuance for analytics (fire-and-forget)
         logAccountIssuance({ address, type: 'create', apiKey });
 
-        return new Account(smartAccount, chain, apiKey, passkeyAccount);
+        return new Account(smartAccount, chain, apiKey, webAuthnAccount, passkeyAccount);
     }
 
     /**
@@ -546,15 +638,11 @@ export class Account {
 
         const chain = Account.buildChainConfig(chainId, apiKey, paymasterUrl, paymasterContext);
 
-        // A failed lookup falls back to deriving the record, which is only safe
-        // while no account rotates: see resolveAccountRecord.
-        let fetched: AccountRecord | undefined;
-        try {
-            fetched = await passkeyManager.fetchAccountRecord(importResult.credential.id);
-        } catch {
-            fetched = undefined;
-        }
-        const record = resolveAccountRecord(fetched, importResult.credential.publicKey);
+        const record = await Account.fetchAccountRecordOf(
+            passkeyManager,
+            importResult.credential.id,
+            importResult.credential.publicKey
+        );
 
         const bundlerClient = getBundlerClient(chain);
         const smartAccount = await createSmartAccount(
@@ -575,7 +663,7 @@ export class Account {
         // Log account issuance for analytics (fire-and-forget)
         logAccountIssuance({ address, type: 'import', apiKey });
 
-        return new Account(smartAccount, chain, apiKey, passkeyAccount);
+        return new Account(smartAccount, chain, apiKey, webAuthnAccount, passkeyAccount);
     }
 
     /**
@@ -630,7 +718,7 @@ export class Account {
         // Log account issuance for analytics (fire-and-forget)
         logAccountIssuance({ address, type: 'fromLocalAccount', apiKey });
 
-        return new Account(smartAccount, chain, apiKey, undefined, isEip7702 ? localAccount : undefined);
+        return new Account(smartAccount, chain, apiKey, localAccount, undefined, isEip7702 ? localAccount : undefined);
     }
 
     // ============================================
@@ -903,13 +991,13 @@ export class Account {
 
         // If using JAW ERC-20 paymaster, prepend approval call if needed
         const paymaster = this.resolveEffectivePaymaster(paymasterUrlOverride, paymasterContextOverride);
-        const localAccount = isOverride ? undefined : (this._localAccount ?? undefined);
+        const ownerSetup = isOverride ? undefined : this._ownerSetup;
         const approvalCall = await this.createErc20ApprovalCall(
             paymaster.url,
             paymaster.context,
             formattedCalls,
             smartAccount,
-            localAccount
+            ownerSetup
         );
         const finalCalls = approvalCall ? [approvalCall, ...formattedCalls] : formattedCalls;
 
@@ -920,7 +1008,7 @@ export class Account {
             paymaster.url,
             paymaster.context,
             this._apiKey,
-            localAccount
+            ownerSetup
         );
     }
 
@@ -968,8 +1056,8 @@ export class Account {
 
         const paymaster = this.resolveEffectivePaymaster(paymasterUrlOverride, paymasterContextOverride);
 
-        // Don't pass localAccount when overriding address — target is a standard smart account, not EIP-7702
-        const localAccount = isOverride ? undefined : (this._localAccount ?? undefined);
+        // No owner setup when overriding the address: the target is another account, not this one
+        const ownerSetup = isOverride ? undefined : this._ownerSetup;
 
         let result: BundledTransactionResult;
 
@@ -997,7 +1085,7 @@ export class Account {
                 paymaster.context,
                 [permissionCall],
                 smartAccount,
-                localAccount
+                ownerSetup
             );
 
             result = await sendSmartAccountCallsWithPermission(
@@ -1008,19 +1096,19 @@ export class Account {
                 this._apiKey,
                 paymaster.url,
                 paymaster.context,
-                localAccount,
+                ownerSetup,
                 approvalCall ?? undefined,
                 permissionCall,
                 options.onSigned
             );
         } else {
-            // Standard execution (EIP-7702 handled inside sendSmartAccountCalls)
+            // Standard execution (owner setup handled inside sendSmartAccountCalls)
             const approvalCall = await this.createErc20ApprovalCall(
                 paymaster.url,
                 paymaster.context,
                 formattedCalls,
                 smartAccount,
-                localAccount
+                ownerSetup
             );
             const finalCalls = approvalCall ? [approvalCall, ...formattedCalls] : formattedCalls;
             result = await sendSmartAccountCalls(
@@ -1029,7 +1117,7 @@ export class Account {
                 this._chain,
                 paymaster.url,
                 paymaster.context,
-                localAccount,
+                ownerSetup,
                 options?.onSigned
             );
         }
@@ -1425,6 +1513,203 @@ export class Account {
     }
 
     // ============================================
+    // Recovery
+    // ============================================
+
+    /**
+     * Set up or edit recovery. The caller passes the desired end state, not the
+     * edits: the methods that may get the account back and how many of them must
+     * agree.
+     *
+     * Always one owner signature over a chain-free digest, relayed by JAW to
+     * every network where the change can land (see `getRecoveryNetworks`): the
+     * account is deployed, the recovery manager and this key are owners, and the
+     * config matches the network the change is planned from. A first setup is
+     * relayed like an edit. The result carries a batch id to poll with
+     * `getAdminBatch` until no network is in flight.
+     *
+     * @param config - The desired methods and threshold
+     * @returns The status per network; a change that changes nothing sends nothing
+     * @throws -32602 when no network can take the change (for example the account is deployed nowhere)
+     * @throws -32603 when a network's owners cannot be read; nothing is signed
+     *
+     * @example
+     * ```typescript
+     * const result = await account.setupRecovery({
+     *   recoveries: [
+     *     { commitment: toOwnerBytes('0xguardian…'), delay: 48 * 3600 },
+     *     { commitment: toOwnerBytes('0xbackup…'), delay: 48 * 3600 },
+     *   ],
+     *   threshold: 2,
+     * });
+     * ```
+     */
+    async setupRecovery(config: RecoveryConfig): Promise<RecoverySetupResult> {
+        const { base, networks } = await this.getRecoveryNetworks();
+        if (!base) {
+            throw standardErrors.rpc.invalidParams({
+                message:
+                    'No network can take this recovery change: the account must be deployed on a network where recovery is available and this key is an owner',
+            });
+        }
+
+        const ops = diffRecoveryConfig(base, config);
+        if (ops.length === 0) return { door: 'relay', chains: [] };
+
+        const chainIds = networks.filter((network) => network.status === 'ready').map((network) => network.chainId);
+        return await this.relayRecoveryOps(ops, chainIds);
+    }
+
+    /**
+     * Veto a pending recovery request on every network it reached where this
+     * key is an owner. One owner signature, relayed.
+     *
+     * @param requestId - The ceremony's request id
+     * @returns The status per network
+     */
+    async cancelRecovery(requestId: Hex): Promise<RecoverySetupResult> {
+        const ceremony = await getCeremony(requestId, this._apiKey);
+        const pending = ceremony.chains
+            .filter((chain) => chain.status === 'PENDING' || chain.status === 'REQUESTED')
+            .map((chain) => chain.chainId);
+        if (pending.length === 0) {
+            throw standardErrors.rpc.invalidParams({
+                message: `Recovery request ${requestId} is not pending on any chain`,
+            });
+        }
+
+        const owned = await this.readRecoveryOwnership(pending);
+        const chainIds = pending.filter((chainId) => owned.get(chainId) === true);
+        if (chainIds.length === 0) {
+            throw standardErrors.rpc.invalidParams({
+                message: `This key is not an owner on any network where recovery request ${requestId} is pending`,
+            });
+        }
+
+        return await this.relayRecoveryOps([cancelRequestOp(requestId)], chainIds);
+    }
+
+    /**
+     * Where a recovery change would be relayed, and why each other network
+     * would not take it: what the recovery screen shows before the owner signs.
+     * A network one ordinary transaction would fix is marked
+     * `enabledByTransaction`.
+     */
+    async getRecoveryNetworks(): Promise<RecoveryNetworksPlan> {
+        const { chains } = await getRecoveryConfig(this.address, this._apiKey);
+        const readable = chains.filter((chain) => chain.deployed && chain.enrolled).map((chain) => chain.chainId);
+        const [owned, clearable] = await Promise.all([
+            this.readRecoveryOwnership(readable),
+            this.recoveryStatusesATransactionClears(),
+        ]);
+        const plan = planRecoveryNetworks(chains, owned, this._chain.id);
+        return {
+            ...plan,
+            networks: plan.networks.map((network) =>
+                clearable.has(network.status) ? { ...network, enabledByTransaction: true } : network
+            ),
+        };
+    }
+
+    /**
+     * The account's recovery config on every supported chain, and its
+     * ceremonies not executed anywhere: what a veto banner needs.
+     */
+    async getRecovery(): Promise<RecoveryState> {
+        const [{ chains }, pending] = await Promise.all([
+            getRecoveryConfig(this.address, this._apiKey),
+            listCeremonies(this.address, { executed: false }, this._apiKey),
+        ]);
+        return { chains, pending };
+    }
+
+    /**
+     * The admin door: sign the ops once, chain-free, and hand them to the relayer.
+     * @internal
+     */
+    private async relayRecoveryOps(ops: AdminOp[], chainIds: number[]): Promise<RecoverySetupResult> {
+        const account = this.address;
+        const salt = randomSalt();
+        const expiry = Math.floor(Date.now() / 1000) + DEFAULT_RECOVERY_ADMIN_EXPIRY_SECONDS;
+        const { ownerBytes, proof } = await this.signRecoveryDigest(
+            hashTypedData(recoveryAdminTypedData({ account, ops, salt, expiry }))
+        );
+        const batch = await submitAdminBatch({ account, ops, salt, expiry, ownerBytes, proof, chainIds }, this._apiKey);
+        return { door: 'relay', batchId: batch.id, chains: batch.chains };
+    }
+
+    /**
+     * Whether this account's signing key is a current owner on each of
+     * `chainIds`, read from the chains in parallel: the recovery manager accepts
+     * an owner signature only from a current owner, and the backend rejects a
+     * whole batch when one network refuses it. A read that fails throws, so the
+     * caller stops before anything is signed.
+     * @internal
+     */
+    private async readRecoveryOwnership(chainIds: number[]): Promise<Map<number, boolean>> {
+        const ownerBytes = this.recoveryOwnerBytes();
+        const owned = await Promise.all(
+            chainIds.map(async (chainId) => {
+                const publicClient = createPublicClient({
+                    chain: { id: chainId } as Parameters<typeof createPublicClient>[0]['chain'],
+                    transport: jawHttp(Account.rpcUrl(chainId, this._apiKey)),
+                });
+                try {
+                    return await publicClient.readContract({
+                        address: this.address,
+                        abi: justanAccountAbi,
+                        functionName: 'isOwnerBytes',
+                        args: [ownerBytes],
+                    });
+                } catch (error) {
+                    throw standardErrors.rpc.internal({
+                        message: `Could not read the account's owners on chain ${chainId}; try again`,
+                        data: { cause: error instanceof Error ? error.message : String(error) },
+                    });
+                }
+            })
+        );
+        return new Map(chainIds.map((chainId, i) => [chainId, owned[i]]));
+    }
+
+    /**
+     * The network statuses one ordinary transaction from this account clears.
+     * A 7702 account's sends delegate it and add the recovery manager and its
+     * own address; a local-key account's add the manager; a passkey account's
+     * first send deploys it, with the manager only when its starting owners
+     * hold it (recipe v2).
+     * @internal
+     */
+    private async recoveryStatusesATransactionClears(): Promise<Set<RecoveryNetworkStatus>> {
+        if (this._ownerSetup?.kind === 'eip7702') return new Set(['not-deployed', 'not-available', 'not-owner']);
+        if (this._ownerSetup?.kind === 'localKey') return new Set(['not-deployed', 'not-available']);
+
+        const { factoryData } = await this._smartAccount.getFactoryArgs();
+        if (!factoryData) return new Set();
+        const { functionName, args } = decodeFunctionData({ abi: factoryAbi, data: factoryData });
+        if (functionName !== 'createAccount') return new Set();
+        const manager = toOwnerBytes(RECOVERY_MANAGER_ADDRESS).toLowerCase();
+        return args[0].some((owner) => owner.toLowerCase() === manager) ? new Set(['not-deployed']) : new Set();
+    }
+
+    /** The owner bytes the recovery manager knows this account's signing key by. @internal */
+    private recoveryOwnerBytes(): Hex {
+        return this._owner.type === 'webAuthn' ? this._owner.publicKey : toOwnerBytes(this._owner.address);
+    }
+
+    /**
+     * The owner proof the recovery manager verifies: the account's own key over a
+     * raw digest, in the bytes the account itself accepts for that key, without
+     * the owner-index wrapper. A passkey yields the WebAuthn assertion with the
+     * digest as challenge; a local key yields a 65-byte ECDSA signature.
+     * @internal
+     */
+    private async signRecoveryDigest(hash: Hash): Promise<{ ownerBytes: Hex; proof: Hex }> {
+        const proof = await signWithOwner({ hash, owner: this._owner });
+        return { ownerBytes: this.recoveryOwnerBytes(), proof };
+    }
+
+    // ============================================
     // Private Instance Helpers
     // ============================================
 
@@ -1479,6 +1764,11 @@ export class Account {
     // Private Static Helpers
     // ============================================
 
+    /** The JAW RPC endpoint for a chain. @internal */
+    private static rpcUrl(chainId: number, apiKey?: string): string {
+        return apiKey ? `${JAW_RPC_URL}?chainId=${chainId}&api-key=${apiKey}` : `${JAW_RPC_URL}?chainId=${chainId}`;
+    }
+
     /**
      * Build chain configuration with RPC URL and register it in the global
      * chain store. Registration is required so background ops (e.g. receipt
@@ -1492,13 +1782,9 @@ export class Account {
         paymasterUrl?: string,
         paymasterContext?: Record<string, unknown>
     ): Chain {
-        const rpcUrl = apiKey
-            ? `${JAW_RPC_URL}?chainId=${chainId}&api-key=${apiKey}`
-            : `${JAW_RPC_URL}?chainId=${chainId}`;
-
         const chain: Chain = {
             id: chainId,
-            rpcUrl,
+            rpcUrl: Account.rpcUrl(chainId, apiKey),
             // The context has to ride on the chain alongside the url, the same
             // way `createInitialChains` carries a whole `PaymasterConfig`.
             // Keeping only the url is what stranded `AccountConfig.paymasterContext`:
@@ -1610,7 +1896,7 @@ export class Account {
         paymasterContext?: Record<string, unknown>,
         calls?: Array<{ to: Address; value?: bigint; data?: Hex }>,
         smartAccount?: SmartAccount,
-        localAccount?: LocalAccount
+        ownerSetup?: OwnerSetup
     ): Promise<{ to: Address; value?: bigint; data: Hex } | null> {
         const account = smartAccount ?? this._smartAccount;
         // Only add approval if using JAW ERC-20 paymaster
@@ -1665,14 +1951,14 @@ export class Account {
                 };
 
                 // Include dummy approval in estimation to get accurate gas limits,
-                // and let the send's own preparation add what it would add: on a
-                // 7702 account not yet owning the permission manager that is an
-                // extra owner-setup call, whose gas the ceiling has to cover too.
+                // and let the send's own preparation add what it would add: on an
+                // account lacking an owner its setup adds (7702 or local key), the
+                // owner-setup calls, whose gas the ceiling has to cover too.
                 const { calls: callsWithApproval, authorization } = await prepareCallsForExecution(
                     account,
                     [dummyApprovalCall, ...calls],
                     this._chain,
-                    localAccount
+                    ownerSetup
                 );
 
                 // Prepare a UserOp to get gas estimates

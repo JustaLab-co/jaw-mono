@@ -22,6 +22,7 @@ export * from './displayFormat';
 export * from './functionSignature';
 export * from './transactionFailure';
 export * from './permissionExecution';
+export * from './recoverySetup';
 export * from './assetPreview';
 export * from './eip681';
 export * from './qrPath';

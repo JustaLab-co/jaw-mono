@@ -6,7 +6,7 @@ import { sdkstore } from '../store/index.js';
 import { SDK_VERSION } from '../sdk-info.js';
 import { handleGetAssetsRequest } from '../rpc/wallet_getAssets.js';
 import { handleGetCallsHistoryRequest } from '../rpc/wallet_getCallsHistory.js';
-import { handleGetPermissionsRequest, handleGetCapabilitiesRequest } from '../rpc/index.js';
+import { handleGetPermissionsRequest, handleGetRecoveryRequest, handleGetCapabilitiesRequest } from '../rpc/index.js';
 import type { RequestArguments } from '../provider/index.js';
 
 vi.mock('../rpc/wallet_getAssets.js', async (importOriginal) => {
@@ -22,6 +22,7 @@ vi.mock('../rpc/index.js', async (importOriginal) => {
     return {
         ...actual,
         handleGetPermissionsRequest: vi.fn().mockResolvedValue([]),
+        handleGetRecoveryRequest: vi.fn().mockResolvedValue({ chains: [], pending: [] }),
         handleGetCapabilitiesRequest: vi.fn().mockResolvedValue({}),
     };
 });
@@ -58,12 +59,13 @@ function seedConnected(apiKey?: string) {
     return new TestSigner({ metadata: { name: 'test', defaultChainId: 1 } as never, callback: null });
 }
 
-// Third argument per method: the history and permission reads inject the
-// connected account, the other two pass the testnet preference.
+// Third argument per method: the history, permission and recovery reads inject
+// the connected account, the other two pass the testnet preference.
 const reads = [
     { method: 'wallet_getCallsHistory', handler: vi.mocked(handleGetCallsHistoryRequest), third: ACCOUNT },
     { method: 'wallet_getAssets', handler: vi.mocked(handleGetAssetsRequest), third: false },
     { method: 'wallet_getPermissions', handler: vi.mocked(handleGetPermissionsRequest), third: ACCOUNT },
+    { method: 'wallet_getRecovery', handler: vi.mocked(handleGetRecoveryRequest), third: ACCOUNT },
     { method: 'wallet_getCapabilities', handler: vi.mocked(handleGetCapabilitiesRequest), third: false },
 ] as const;
 

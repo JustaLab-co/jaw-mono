@@ -1,5 +1,6 @@
 export {
   getPermissionsQueryKey,
+  getRecoveryQueryKey,
   getAssetsQueryKey,
   getCapabilitiesQueryKey,
   getCallsHistoryQueryKey,

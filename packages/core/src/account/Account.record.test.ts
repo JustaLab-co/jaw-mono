@@ -7,10 +7,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Hex } from 'viem';
 import { Account } from './Account.js';
 import { createSmartAccount } from './smartAccount.js';
-import { deriveAccountRecordV1, type AccountRecord } from './accountRecord.js';
+import { deriveAccountRecordV1, deriveAccountRecordV2, type AccountRecord } from './accountRecord.js';
 import { createMemoryStorage } from '../storage-manager/index.js';
 import type { PasskeyAccount } from '../passkey-manager/index.js';
 import {
+    PasskeyLookupError,
     authenticateWithWebAuthnUtils,
     createPasskeyUtils,
     fetchAccountRecordFromBackend,
@@ -43,6 +44,8 @@ vi.mock('../analytics/index.js', () => ({ logAccountIssuance: vi.fn() }));
 const PUBLIC_KEY =
     '0x885d083da109f4ea0b626025ee5886d869f51817afad5a380f2b1fa9a35bccf8d52b9347c47495158ef458c338cdd15f7a902d357541d0e19d0b19e8f7ea0fd8' as Hex;
 const ADDRESS = '0x1f4201aED7443a59a3f849E6A07dbF438FFB6C62';
+// factory.getAddress([publicKey, permissionsManager, recoveryManager], 0) on Base
+const ADDRESS_V2 = '0x201bcE6e444BA385F9c79d972D6b8E7dCc58e98c';
 const OTHER_PUBLIC_KEY =
     '0xdebc6e2f6d482a438e57b6f3c243c6d3899115b664a81a0da8c34e062748442745c98f217813ed30da51350a533b81210a98709f513f8707e113aba0f1a8e5c8' as Hex;
 
@@ -166,13 +169,40 @@ describe('Account.get restoring the signed-in session', () => {
 });
 
 describe('Account.restore', () => {
-    it('derives the record when the credential is not stored on this device, and stores nothing', async () => {
+    // A device that keeps nothing (in-memory storage after a restart) has only
+    // the key, which derives the v1 address: for a v2 account a different,
+    // empty one. The backend holds the record, as on import.
+    it('uses the backend record when the credential is not stored on this device, and stores nothing', async () => {
         const storage = storageWith([]);
+        vi.mocked(fetchAccountRecordFromBackend).mockResolvedValue(deriveAccountRecordV2(PUBLIC_KEY));
 
         const account = await Account.restore(config(storage), CREDENTIAL_ID, PUBLIC_KEY);
 
-        expect(account.address).toBe(ADDRESS);
+        expect(account.address).toBe(ADDRESS_V2);
+        expect(fetchAccountRecordFromBackend).toHaveBeenCalledWith(CREDENTIAL_ID, 'k1', false, undefined);
         expect(storedAccounts(storage)).toEqual([]);
+    });
+
+    it('fails when the credential is not stored on this device and the backend lookup fails', async () => {
+        vi.mocked(fetchAccountRecordFromBackend).mockRejectedValue(new Error('503'));
+
+        await expect(Account.restore(config(storageWith([])), CREDENTIAL_ID, PUBLIC_KEY)).rejects.toBeInstanceOf(
+            PasskeyLookupError
+        );
+    });
+
+    it('fails when the credential is not stored on this device and the backend record is not this key’s', async () => {
+        vi.mocked(fetchAccountRecordFromBackend).mockResolvedValue(deriveAccountRecordV2(OTHER_PUBLIC_KEY));
+
+        await expect(Account.restore(config(storageWith([])), CREDENTIAL_ID, PUBLIC_KEY)).rejects.toBeInstanceOf(
+            PasskeyLookupError
+        );
+    });
+
+    it('does not call the backend for a credential stored on this device', async () => {
+        await Account.restore(config(storageWith([storedEntry({ address: ADDRESS })])), CREDENTIAL_ID, PUBLIC_KEY);
+
+        expect(fetchAccountRecordFromBackend).not.toHaveBeenCalled();
     });
 
     it('stores the record on a stored entry that has none', async () => {
@@ -193,7 +223,7 @@ describe('Account.restore', () => {
 });
 
 describe('Account.create', () => {
-    it('creates the account from its v1 record and stores the record with it', async () => {
+    it('creates the account from its v2 record, registers that version and stores the record with it', async () => {
         const storage = storageWith([]);
         vi.mocked(createPasskeyUtils).mockResolvedValue({
             credentialId: CREDENTIAL_ID,
@@ -203,13 +233,19 @@ describe('Account.create', () => {
 
         const account = await Account.create(config(storage), { username: 'alice' });
 
-        expect(account.address).toBe(ADDRESS);
-        expect(recordUsed()).toEqual(deriveAccountRecordV1(PUBLIC_KEY));
-        expect(registerPasskeyInBackend).toHaveBeenCalled();
+        expect(account.address).toBe(ADDRESS_V2);
+        expect(recordUsed()).toEqual(deriveAccountRecordV2(PUBLIC_KEY));
+        // The backend derives the record itself; the version tells it which recipe.
+        expect(vi.mocked(registerPasskeyInBackend).mock.calls[0][0]).toEqual({
+            credentialId: CREDENTIAL_ID,
+            publicKey: PUBLIC_KEY,
+            displayName: 'alice',
+            accountVersion: 2,
+        });
         expect(storedAccounts(storage)[0]).toMatchObject({
             credentialId: CREDENTIAL_ID,
-            address: ADDRESS,
-            account: deriveAccountRecordV1(PUBLIC_KEY),
+            address: ADDRESS_V2,
+            account: deriveAccountRecordV2(PUBLIC_KEY),
         });
     });
 });
@@ -240,14 +276,25 @@ describe('Account.import', () => {
         expect(storedAccounts(storage)[0].account).toEqual(record);
     });
 
-    it('derives the record when the backend lookup fails, as before records existed', async () => {
+    it('uses a v2 record the backend returns', async () => {
         const storage = storageWith([]);
-        vi.mocked(fetchAccountRecordFromBackend).mockRejectedValue(new Error('503'));
+        vi.mocked(fetchAccountRecordFromBackend).mockResolvedValue(deriveAccountRecordV2(PUBLIC_KEY));
 
         const account = await Account.import(config(storage));
 
-        expect(account.address).toBe(ADDRESS);
-        expect(recordUsed()).toEqual(deriveAccountRecordV1(PUBLIC_KEY));
+        expect(account.address).toBe(ADDRESS_V2);
+        expect(storedAccounts(storage)[0].account).toEqual(deriveAccountRecordV2(PUBLIC_KEY));
+    });
+
+    // Deriving would open the v1 address, which for a v2 account is a different,
+    // empty one, with no error. The user retries instead.
+    it('fails, and stores nothing, when the backend lookup fails', async () => {
+        const storage = storageWith([]);
+        vi.mocked(fetchAccountRecordFromBackend).mockRejectedValue(new Error('503'));
+
+        await expect(Account.import(config(storage))).rejects.toBeInstanceOf(PasskeyLookupError);
+        expect(storedAccounts(storage)).toEqual([]);
+        expect(storage.getItem('authState')).toBeFalsy();
     });
 
     it('checksums the address of a record the backend returns in lowercase', async () => {
@@ -265,13 +312,12 @@ describe('Account.import', () => {
         expect(storage.getItem<{ address: string }>('authState')?.address).toBe(ADDRESS);
     });
 
-    it('derives the record when the backend returns one that is not this key’s', async () => {
+    it('fails, and stores nothing, when the backend returns a record that is not this key’s', async () => {
         const storage = storageWith([]);
         vi.mocked(fetchAccountRecordFromBackend).mockResolvedValue(deriveAccountRecordV1(OTHER_PUBLIC_KEY));
 
-        const account = await Account.import(config(storage));
-
-        expect(account.address).toBe(ADDRESS);
+        await expect(Account.import(config(storage))).rejects.toBeInstanceOf(PasskeyLookupError);
+        expect(storedAccounts(storage)).toEqual([]);
     });
 });
 

@@ -297,6 +297,7 @@ export class PasskeyManager {
                 credentialId,
                 publicKey,
                 displayName: name.trim(),
+                ...(account ? { accountVersion: account.version } : {}),
             },
             this.apiKey,
             dev,

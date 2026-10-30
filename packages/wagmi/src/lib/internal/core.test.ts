@@ -3,7 +3,7 @@ import { createConfig, http } from '@wagmi/core';
 import { arbitrum, mainnet } from 'viem/chains';
 import type { EIP1193Parameters } from 'viem';
 
-import { addFunds, getPermissions, sign } from './core.js';
+import { addFunds, cancelRecovery, getPermissions, getRecovery, setupRecovery, sign } from './core.js';
 
 const ACCOUNT = '0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266' as const;
 
@@ -139,4 +139,53 @@ test('addFunds takes no arguments at all', async () => {
 
   await expect(addFunds(config, { connector: connector as never })).resolves.toBeNull();
   expect((requests[0].params as [Record<string, unknown>])[0]).toEqual({ chainId: undefined });
+});
+
+test('getRecovery forwards the address and never a chainId in wallet_getRecovery params', async () => {
+  const { connector, requests } = fakeConnection();
+
+  const result = await getRecovery(config, { connector: connector as never, address: ACCOUNT });
+
+  expect(result).toBe('0xsignature');
+  expect(requests).toHaveLength(1);
+  expect(requests[0].method).toBe('wallet_getRecovery');
+  // Recovery is account-level: the read spans every chain, so there is no
+  // chain filter to forward, unlike wallet_getPermissions.
+  expect((requests[0].params as [Record<string, unknown>])[0]).toEqual({ address: ACCOUNT });
+});
+
+test('setupRecovery forwards the config and never an address or a chainId', async () => {
+  const { connector, requests } = fakeConnection();
+  const recoveries = [{ commitment: ACCOUNT, delay: 172_800 }];
+  const capabilities = { paymasterService: { url: 'https://pm.example' } };
+
+  await setupRecovery(config, {
+    connector: connector as never,
+    address: ACCOUNT,
+    recoveries,
+    threshold: 1,
+    capabilities,
+  });
+
+  expect(requests).toHaveLength(1);
+  expect(requests[0].method).toBe('wallet_setupRecovery');
+  // `address` selects which connected account to act as, exactly as in the
+  // other actions; the wallet acts as that account on the connected chain, so
+  // neither travels in the params.
+  expect((requests[0].params as [Record<string, unknown>])[0]).toStrictEqual({
+    recoveries,
+    threshold: 1,
+    capabilities,
+  });
+});
+
+test('cancelRecovery forwards the request id and never an address', async () => {
+  const { connector, requests } = fakeConnection();
+  const requestId = `0x${'ab'.repeat(32)}` as const;
+
+  await cancelRecovery(config, { connector: connector as never, address: ACCOUNT, requestId });
+
+  expect(requests).toHaveLength(1);
+  expect(requests[0].method).toBe('wallet_cancelRecovery');
+  expect((requests[0].params as [Record<string, unknown>])[0]).toEqual({ requestId, capabilities: undefined });
 });

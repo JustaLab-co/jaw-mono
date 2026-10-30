@@ -17,7 +17,7 @@ import type { SignAuthorizationReturnType } from 'viem/accounts';
 import { SmartAccount } from 'viem/account-abstraction';
 import { SmartAccountImplementation } from 'viem/account-abstraction';
 import type { TypedData } from 'viem';
-import type { TypedDataDefinition } from 'viem';
+import { TypedDataDefinition } from 'viem';
 import { UUID } from 'crypto';
 import type { WalletRpcSchema } from 'viem';
 import { WebAuthnAccount } from 'viem/account-abstraction';
@@ -31,6 +31,7 @@ export class Account {
         permissionId?: Hex;
         address?: Address_2;
     }): Promise<string>;
+    cancelRecovery(requestId: Hex): Promise<RecoverySetupResult>;
     get chainId(): number;
     static create(config: AccountConfig, options: CreateAccountOptions): Promise<Account>;
     estimateGas(calls: TransactionCall[], options?: {
@@ -48,6 +49,8 @@ export class Account {
     static getCurrentAccount(apiKey?: string, storage?: SyncStorage): PasskeyAccount | null;
     getMetadata(): AccountMetadata | null;
     getPermission(permissionId: Hex): Promise<WalletGrantPermissionsResponse>;
+    getRecovery(): Promise<RecoveryState>;
+    getRecoveryNetworks(): Promise<RecoveryNetworksPlan>;
     getSmartAccount(): SmartAccount;
     getSmartAccountFor(address?: Address_2): Promise<SmartAccount>;
     static getStoredAccounts(apiKey?: string, storage?: SyncStorage): PasskeyAccount[];
@@ -60,6 +63,7 @@ export class Account {
     // Warning: (ae-forgotten-export) The symbol "BundledTransactionResult" needs to be exported by the entry point index.d.ts
     sendCalls(calls: TransactionCall[], options?: SendCallsOptions, paymasterUrlOverride?: string, paymasterContextOverride?: Record<string, unknown>): Promise<BundledTransactionResult>;
     sendTransaction(calls: TransactionCall[], paymasterUrlOverride?: string, paymasterContextOverride?: Record<string, unknown>, from?: Address_2): Promise<Hash>;
+    setupRecovery(config: RecoveryConfig): Promise<RecoverySetupResult>;
     signMessage(message: string, options?: {
         address?: Address_2;
     }): Promise<Hex>;
@@ -117,7 +121,44 @@ export interface AddFundsUIRequest extends BaseUIRequest {
 }
 
 // @public (undocumented)
+export function addRecoveryOp(method: RecoveryMethodInput): AdminOp;
+
+// @public (undocumented)
 export type Address = `0x${string}`;
+
+// @public
+export type AdminBatch = {
+    id: Hex;
+    expiry: string;
+    chains: AdminBatchChain[];
+};
+
+// @public (undocumented)
+export type AdminBatchChain = {
+    chainId: number;
+    status: AdminBatchStatus;
+    txHash: Hex | null;
+};
+
+// @public
+export type AdminBatchStatus = 'PENDING' | 'CLAIMED' | 'SUBMITTED' | 'COMPLETED' | 'SKIPPED' | 'EXPIRED' | 'DEAD';
+
+// @public
+export type AdminOp = {
+    opType: AdminOpType;
+    data: Hex;
+};
+
+// @public
+export const AdminOpType: {
+    readonly ADD_RECOVERY: 0;
+    readonly REMOVE_RECOVERY: 1;
+    readonly SET_THRESHOLD: 2;
+    readonly CANCEL_REQUEST: 3;
+};
+
+// @public (undocumented)
+export type AdminOpType = (typeof AdminOpType)[keyof typeof AdminOpType];
 
 // @public (undocumented)
 export const ANY_FN_SEL: Hex;
@@ -131,6 +172,15 @@ export interface AppMetadata {
     appName: string;
     defaultChainId?: number;
 }
+
+// @public
+export function approveCeremony(requestId: Hex, request: ApproveCeremonyRequest, apiKey?: string): Promise<CeremonyApproval>;
+
+// @public (undocumented)
+export type ApproveCeremonyRequest = {
+    recoveryId: Hex;
+    proof: Hex;
+};
 
 // @public
 export type Asset = {
@@ -171,6 +221,24 @@ export interface BaseUIRequest {
     type: UIRequestType;
 }
 
+// @public (undocumented)
+export function buildAddRecoveryCall(account: Address_2, method: RecoveryMethodInput): {
+    to: Address_2;
+    data: Hex;
+};
+
+// @public
+export function buildCancelRecoveryRequestCall(requestId: Hex): {
+    to: Address_2;
+    data: Hex;
+};
+
+// @public
+export function buildEnrollRecoveryCall(account: Address_2): {
+    to: Address_2;
+    data: Hex;
+};
+
 // @public
 export const BRIDGE_APP_NAME_MAX_LENGTH = 64;
 
@@ -189,8 +257,20 @@ export function buildGrantPermissionCall(account: Address_2, spender: Address_2,
 // @public
 export function buildHandleJawRpcUrl(baseUrl: string, apiKey?: string): string;
 
+// @public (undocumented)
+export function buildRemoveRecoveryCall(account: Address_2, recoveryId: Hex): {
+    to: Address_2;
+    data: Hex;
+};
+
 // @public
 export function buildRevokePermissionCall(relayPermission: StorePermissionApiResponse): {
+    to: Address_2;
+    data: Hex;
+};
+
+// @public (undocumented)
+export function buildSetRecoveryThresholdCall(account: Address_2, threshold: number): {
     to: Address_2;
     data: Hex;
 };
@@ -260,8 +340,69 @@ export interface CallStatusResponse {
     version: string;
 }
 
+// @public
+export interface CancelRecoveryUIRequest extends BaseUIRequest {
+    // (undocumented)
+    data: {
+        address: Address;
+        chainId: number;
+        requestId: `0x${string}`;
+        capabilities?: RequestCapabilities;
+    };
+    // (undocumented)
+    type: 'wallet_cancelRecovery';
+}
+
+// @public
+export function cancelRequestOp(requestId: Hex): AdminOp;
+
 // @public (undocumented)
 export type CapabilitiesResult = Record<`0x${string}`, ChainCapabilities>;
+
+// @public
+export type Ceremony = {
+    requestId: Hex;
+    account: Address_2;
+    subject: Hex;
+    salt: Hex;
+    expiry: string;
+    threshold: number;
+    collected: number;
+    guardians: CeremonyGuardian[];
+    chains: CeremonyChain[];
+};
+
+// @public (undocumented)
+export type CeremonyApproval = {
+    collected: number;
+    threshold: number;
+    queued: boolean;
+};
+
+// @public (undocumented)
+export type CeremonyChain = {
+    chainId: number;
+    status: CeremonyChainStatus;
+    executeAt: string | null;
+    requestTxHash: Hex | null;
+    executeTxHash: Hex | null;
+};
+
+// @public
+export type CeremonyChainStatus = 'COLLECTING' | 'PENDING' | 'REQUESTED' | 'EXECUTED' | 'CANCELLED' | 'EXPIRED' | 'FAILED' | 'SKIPPED';
+
+// @public (undocumented)
+export type CeremonyGuardian = RecoveryMethod & {
+    approvedAt: string | null;
+};
+
+// @public
+export type CeremonyListEntry = Pick<Ceremony, 'requestId' | 'account' | 'subject' | 'expiry' | 'chains'>;
+
+// @public (undocumented)
+export type CeremonyListResponse = {
+    ceremonies: CeremonyListEntry[];
+};
 
 // @public (undocumented)
 export type Chain = {
@@ -283,6 +424,8 @@ export interface ChainCapabilities {
     chainMetadata?: ChainMetadataCapability;
     // (undocumented)
     feeToken?: FeeTokenCapability;
+    // (undocumented)
+    recovery?: RecoveryCapability;
 }
 
 // @public
@@ -323,6 +466,12 @@ export type CommunicatorOptions = {
 
 // @public
 export function computeEffectiveGasPrice(gas: Pick<UserOpGasFields, 'maxFeePerGas' | 'maxPriorityFeePerGas'>, baseFeePerGas: bigint, bufferBps?: bigint): bigint;
+
+// @public
+export function computeRecoveryId(account: Address_2, provider: Address_2, commitment: Hex): Hex;
+
+// @public
+export function computeRequestId(account: Address_2, subject: Hex, salt: Hex): Hex;
 
 // @public (undocumented)
 export type ConfigEvent = 'PopupLoaded' | 'PopupUnload' | 'PopupReady' | 'selectSignerType'
@@ -370,6 +519,19 @@ export interface CreateAccountOptions {
 }
 
 // @public
+export function createCeremony(request: CreateCeremonyRequest, apiKey?: string): Promise<CreatedCeremony>;
+
+// @public (undocumented)
+export type CreateCeremonyRequest = {
+    account: Address_2;
+    subject: Hex;
+    salt: Hex;
+};
+
+// @public
+export type CreatedCeremony = Pick<Ceremony, 'requestId' | 'account' | 'subject' | 'salt' | 'expiry'>;
+
+// @public
 export function createJAWProvider(options: CreateProviderOptions): JAWProvider;
 
 // @public (undocumented)
@@ -404,7 +566,13 @@ export function decrypt(sharedSecret: CryptoKey, input: EncryptedData): Promise<
 export function decryptContent<R extends RPCRequest | RPCResponse>(encryptedData: EncryptedData, sharedSecret: CryptoKey): Promise<R>;
 
 // @public
+export const DEFAULT_RECOVERY_ADMIN_EXPIRY_SECONDS = 600;
+
+// @public
 export function deriveSharedSecret(ownPrivateKey: CryptoKey, peerPublicKey: CryptoKey): Promise<CryptoKey>;
+
+// @public
+export function diffRecoveryConfig(current: RecoveryChainConfig, desired: RecoveryConfig): AdminOp[];
 
 // @public (undocumented)
 export const EMPTY_CALLDATA_FN_SEL: Hex;
@@ -592,6 +760,12 @@ export function generateKeyPair(): Promise<CryptoKeyPair>;
 // @public (undocumented)
 export function get(obj: unknown, path: string): unknown;
 
+// @public (undocumented)
+export function getAdminBatch(id: Hex, apiKey?: string): Promise<AdminBatch>;
+
+// @public (undocumented)
+export function getCeremony(requestId: Hex, apiKey?: string): Promise<Ceremony>;
+
 // @public
 export function getErrorCode(error: unknown): number | undefined;
 
@@ -600,6 +774,9 @@ export function getMessageFromCode(code: number | undefined, fallbackMessage?: s
 
 // @public
 export function getPermissionFromRelay(permissionHash: Hex, apiKey?: string): Promise<StorePermissionApiResponse>;
+
+// @public
+export function getRecoveryConfig(account: Address_2, apiKey?: string): Promise<RecoveryConfigResponse>;
 
 // @public
 export function getSupportedChains(showTestnets?: boolean): readonly Chain_2[];
@@ -620,6 +797,9 @@ export function handleGetCapabilitiesRequest(request: RequestArguments, apiKey: 
 
 // @public
 export function handleGetPermissionsRequest(request: RequestArguments, apiKey: string | undefined, connectedAddress?: Address_2): Promise<unknown>;
+
+// @public
+export function handleGetRecoveryRequest(request: RequestArguments, apiKey: string | undefined, connectedAddress?: Address_2): Promise<RecoveryState>;
 
 // Warning: (ae-forgotten-export) The symbol "HexString" needs to be exported by the entry point index.d.ts
 //
@@ -664,6 +844,9 @@ export function isActionableHttpRequestError(errorObject: unknown): errorObject 
 
 // @public
 export function isDelegatedToImplementation(client: Client, eoaAddress: Address_2, implementationAddress: Address_2): Promise<boolean>;
+
+// @public
+export function isFirstRecoverySetup(current: RecoveryChainConfig): boolean;
 
 // @public
 export function isMobile(userAgent?: string): boolean;
@@ -838,6 +1021,11 @@ export class KeyManager {
 }
 
 // @public
+export function listCeremonies(account: Address_2, options?: {
+    executed?: boolean;
+}, apiKey?: string): Promise<CeremonyListEntry[]>;
+
+// @public
 export function logAccountIssuance(params: LogAccountIssuanceParams): void;
 
 // @public
@@ -875,6 +1063,9 @@ export interface Message {
 // @public (undocumented)
 export type MessageID = UUID;
 
+// @public
+export function minimumRecoveryDelay(recoveries: RecoveryMethodInput[], threshold: number): number | null;
+
 // @public (undocumented)
 export const Mode: {
     readonly CrossPlatform: "CrossPlatform";
@@ -908,10 +1099,32 @@ export type NativePasskeyGetFn = (options: NativePasskeyGetOptions) => Promise<N
 export function normalizeAddFundsParams(params: unknown): NormalizedAddFundsParams;
 
 // @public
+export function normalizeCancelRecoveryParams(params: unknown): NormalizedCancelRecoveryParams;
+
+// @public
 export interface NormalizedAddFundsParams {
     chainId?: `0x${string}`;
     chains?: `0x${string}`[];
 }
+
+// @public
+export interface NormalizedCancelRecoveryParams {
+    // (undocumented)
+    capabilities?: RequestCapabilities;
+    // (undocumented)
+    requestId: Hex;
+}
+
+// @public
+export interface NormalizedSetupRecoveryParams {
+    // (undocumented)
+    capabilities?: RequestCapabilities;
+    recoveries: RecoveryMethodInput[];
+    threshold: number;
+}
+
+// @public
+export function normalizeSetupRecoveryParams(params: unknown): NormalizedSetupRecoveryParams;
 
 // @public (undocumented)
 export interface PasskeyAccount {
@@ -1064,6 +1277,12 @@ export interface PersonalSignRequestData {
     type: '0x45';
 }
 
+// @public
+export function planRecoveryChanges(current: RecoveryChainConfig, desired: RecoveryConfig): RecoveryChange[];
+
+// @public
+export function planRecoveryNetworks(chains: RecoveryChainConfig[], signerIsOwner: ReadonlyMap<number, boolean>, connectedChainId: number): RecoveryNetworksPlan;
+
 // @public (undocumented)
 export interface ProviderConnectInfo {
     // (undocumented)
@@ -1099,7 +1318,459 @@ export interface ProviderRpcError extends Error {
 }
 
 // @public
+export function randomSalt(): Hex;
+
+// @public
 export const RECONNECT_REQUIRED: "JAW_RECONNECT_REQUIRED";
+
+// @public
+export const RECOVER_TYPES: {
+    readonly Recover: readonly [{
+        readonly name: "account";
+        readonly type: "address";
+    }, {
+        readonly name: "subject";
+        readonly type: "bytes";
+    }, {
+        readonly name: "salt";
+        readonly type: "bytes32";
+    }, {
+        readonly name: "expiry";
+        readonly type: "uint256";
+    }];
+};
+
+// @public (undocumented)
+export type RecoverMessage = {
+    account: Address_2;
+    subject: Hex;
+    salt: Hex;
+    expiry: number | string;
+};
+
+// @public
+export function recoverTypedData(message: RecoverMessage): TypedDataDefinition<typeof RECOVER_TYPES, 'Recover'>;
+
+// @public
+export const RECOVERY_ADMIN_TYPES: {
+    readonly RecoveryAdmin: readonly [{
+        readonly name: "account";
+        readonly type: "address";
+    }, {
+        readonly name: "ops";
+        readonly type: "AdminOp[]";
+    }, {
+        readonly name: "salt";
+        readonly type: "bytes32";
+    }, {
+        readonly name: "expiry";
+        readonly type: "uint256";
+    }];
+    readonly AdminOp: readonly [{
+        readonly name: "opType";
+        readonly type: "uint8";
+    }, {
+        readonly name: "data";
+        readonly type: "bytes";
+    }];
+};
+
+// @public
+export const RECOVERY_MANAGER_ABI: readonly [{
+    readonly name: "addRecovery";
+    readonly type: "function";
+    readonly stateMutability: "nonpayable";
+    readonly inputs: readonly [{
+        readonly name: "account";
+        readonly type: "address";
+    }, {
+        readonly name: "provider";
+        readonly type: "address";
+    }, {
+        readonly name: "commitment";
+        readonly type: "bytes";
+    }, {
+        readonly name: "delay";
+        readonly type: "uint32";
+    }];
+    readonly outputs: readonly [{
+        readonly name: "recoveryId";
+        readonly type: "bytes32";
+    }];
+}, {
+    readonly name: "removeRecovery";
+    readonly type: "function";
+    readonly stateMutability: "nonpayable";
+    readonly inputs: readonly [{
+        readonly name: "account";
+        readonly type: "address";
+    }, {
+        readonly name: "recoveryId";
+        readonly type: "bytes32";
+    }];
+    readonly outputs: readonly [];
+}, {
+    readonly name: "setRecoveryThreshold";
+    readonly type: "function";
+    readonly stateMutability: "nonpayable";
+    readonly inputs: readonly [{
+        readonly name: "account";
+        readonly type: "address";
+    }, {
+        readonly name: "threshold";
+        readonly type: "uint256";
+    }];
+    readonly outputs: readonly [];
+}, {
+    readonly name: "executeRecoveryAdmin";
+    readonly type: "function";
+    readonly stateMutability: "nonpayable";
+    readonly inputs: readonly [{
+        readonly name: "account";
+        readonly type: "address";
+    }, {
+        readonly name: "ops";
+        readonly type: "tuple[]";
+        readonly components: readonly [{
+            readonly name: "opType";
+            readonly type: "uint8";
+        }, {
+            readonly name: "data";
+            readonly type: "bytes";
+        }];
+    }, {
+        readonly name: "salt";
+        readonly type: "bytes32";
+    }, {
+        readonly name: "expiry";
+        readonly type: "uint256";
+    }, {
+        readonly name: "ownerBytes";
+        readonly type: "bytes";
+    }, {
+        readonly name: "proof";
+        readonly type: "bytes";
+    }];
+    readonly outputs: readonly [];
+}, {
+    readonly name: "requestRecovery";
+    readonly type: "function";
+    readonly stateMutability: "nonpayable";
+    readonly inputs: readonly [{
+        readonly name: "account";
+        readonly type: "address";
+    }, {
+        readonly name: "subject";
+        readonly type: "bytes";
+    }, {
+        readonly name: "salt";
+        readonly type: "bytes32";
+    }, {
+        readonly name: "expiry";
+        readonly type: "uint256";
+    }, {
+        readonly name: "approvals";
+        readonly type: "tuple[]";
+        readonly components: readonly [{
+            readonly name: "recoveryId";
+            readonly type: "bytes32";
+        }, {
+            readonly name: "proof";
+            readonly type: "bytes";
+        }];
+    }];
+    readonly outputs: readonly [{
+        readonly name: "requestId";
+        readonly type: "bytes32";
+    }];
+}, {
+    readonly name: "executeRecoveryRequest";
+    readonly type: "function";
+    readonly stateMutability: "nonpayable";
+    readonly inputs: readonly [{
+        readonly name: "requestId";
+        readonly type: "bytes32";
+    }];
+    readonly outputs: readonly [];
+}, {
+    readonly name: "cancelRecoveryRequest";
+    readonly type: "function";
+    readonly stateMutability: "nonpayable";
+    readonly inputs: readonly [{
+        readonly name: "requestId";
+        readonly type: "bytes32";
+    }];
+    readonly outputs: readonly [];
+}, {
+    readonly name: "computeRecoveryId";
+    readonly type: "function";
+    readonly stateMutability: "pure";
+    readonly inputs: readonly [{
+        readonly name: "account";
+        readonly type: "address";
+    }, {
+        readonly name: "provider";
+        readonly type: "address";
+    }, {
+        readonly name: "commitment";
+        readonly type: "bytes";
+    }];
+    readonly outputs: readonly [{
+        readonly name: "";
+        readonly type: "bytes32";
+    }];
+}, {
+    readonly name: "hasRecovery";
+    readonly type: "function";
+    readonly stateMutability: "view";
+    readonly inputs: readonly [{
+        readonly name: "account";
+        readonly type: "address";
+    }, {
+        readonly name: "recoveryId";
+        readonly type: "bytes32";
+    }];
+    readonly outputs: readonly [{
+        readonly name: "";
+        readonly type: "bool";
+    }];
+}, {
+    readonly name: "getRecoveries";
+    readonly type: "function";
+    readonly stateMutability: "view";
+    readonly inputs: readonly [{
+        readonly name: "account";
+        readonly type: "address";
+    }];
+    readonly outputs: readonly [{
+        readonly name: "recoveries";
+        readonly type: "tuple[]";
+        readonly components: readonly [{
+            readonly name: "provider";
+            readonly type: "address";
+        }, {
+            readonly name: "commitment";
+            readonly type: "bytes";
+        }, {
+            readonly name: "delay";
+            readonly type: "uint32";
+        }];
+    }];
+}, {
+    readonly name: "getRecovery";
+    readonly type: "function";
+    readonly stateMutability: "view";
+    readonly inputs: readonly [{
+        readonly name: "account";
+        readonly type: "address";
+    }, {
+        readonly name: "recoveryId";
+        readonly type: "bytes32";
+    }];
+    readonly outputs: readonly [{
+        readonly name: "";
+        readonly type: "tuple";
+        readonly components: readonly [{
+            readonly name: "provider";
+            readonly type: "address";
+        }, {
+            readonly name: "commitment";
+            readonly type: "bytes";
+        }, {
+            readonly name: "delay";
+            readonly type: "uint32";
+        }];
+    }];
+}, {
+    readonly name: "recoveryCount";
+    readonly type: "function";
+    readonly stateMutability: "view";
+    readonly inputs: readonly [{
+        readonly name: "account";
+        readonly type: "address";
+    }];
+    readonly outputs: readonly [{
+        readonly name: "";
+        readonly type: "uint256";
+    }];
+}, {
+    readonly name: "recoveryThreshold";
+    readonly type: "function";
+    readonly stateMutability: "view";
+    readonly inputs: readonly [{
+        readonly name: "account";
+        readonly type: "address";
+    }];
+    readonly outputs: readonly [{
+        readonly name: "";
+        readonly type: "uint256";
+    }];
+}, {
+    readonly name: "isSaltUsed";
+    readonly type: "function";
+    readonly stateMutability: "view";
+    readonly inputs: readonly [{
+        readonly name: "account";
+        readonly type: "address";
+    }, {
+        readonly name: "salt";
+        readonly type: "bytes32";
+    }];
+    readonly outputs: readonly [{
+        readonly name: "";
+        readonly type: "bool";
+    }];
+}, {
+    readonly name: "recoveryAdminDigest";
+    readonly type: "function";
+    readonly stateMutability: "view";
+    readonly inputs: readonly [{
+        readonly name: "account";
+        readonly type: "address";
+    }, {
+        readonly name: "ops";
+        readonly type: "tuple[]";
+        readonly components: readonly [{
+            readonly name: "opType";
+            readonly type: "uint8";
+        }, {
+            readonly name: "data";
+            readonly type: "bytes";
+        }];
+    }, {
+        readonly name: "salt";
+        readonly type: "bytes32";
+    }, {
+        readonly name: "expiry";
+        readonly type: "uint256";
+    }];
+    readonly outputs: readonly [{
+        readonly name: "";
+        readonly type: "bytes32";
+    }];
+}, {
+    readonly name: "recoveryRequest";
+    readonly type: "function";
+    readonly stateMutability: "view";
+    readonly inputs: readonly [{
+        readonly name: "requestId";
+        readonly type: "bytes32";
+    }];
+    readonly outputs: readonly [{
+        readonly name: "";
+        readonly type: "tuple";
+        readonly components: readonly [{
+            readonly name: "account";
+            readonly type: "address";
+        }, {
+            readonly name: "executeAt";
+            readonly type: "uint64";
+        }, {
+            readonly name: "subject";
+            readonly type: "bytes";
+        }];
+    }];
+}];
+
+// @public
+export const RECOVERY_MANAGER_ADDRESS: `0x${string}`;
+
+// @public (undocumented)
+export type RecoveryAdminMessage = {
+    account: Address_2;
+    ops: AdminOp[];
+    salt: Hex;
+    expiry: number;
+};
+
+// @public
+export function recoveryAdminTypedData(message: RecoveryAdminMessage): TypedDataDefinition<typeof RECOVERY_ADMIN_TYPES, 'RecoveryAdmin'>;
+
+// @public
+export interface RecoveryCapability {
+    // (undocumented)
+    supported: boolean;
+}
+
+// @public
+export type RecoveryChainConfig = {
+    chainId: number;
+    deployed: boolean;
+    enrolled: boolean;
+    threshold: number;
+    recoveries: RecoveryMethod[];
+};
+
+// @public
+export type RecoveryChange = {
+    kind: 'add';
+    method: Required<RecoveryMethodInput>;
+} | {
+    kind: 'remove';
+    recoveryId: Hex;
+} | {
+    kind: 'threshold';
+    threshold: number;
+};
+
+// @public
+export type RecoveryConfig = {
+    recoveries: RecoveryMethodInput[];
+    threshold: number;
+};
+
+// @public
+export type RecoveryConfigResponse = {
+    chains: RecoveryChainConfig[];
+};
+
+// @public
+export type RecoveryMethod = {
+    recoveryId: Hex;
+    provider: Address_2;
+    commitment: Hex;
+    delay: number;
+};
+
+// @public
+export type RecoveryMethodInput = {
+    commitment: Hex;
+    delay: number;
+    provider?: Address_2;
+};
+
+// @public
+export type RecoveryNetwork = {
+    chainId: number;
+    status: RecoveryNetworkStatus;
+    config: RecoveryChainConfig;
+    enabledByTransaction?: boolean;
+};
+
+// @public
+export type RecoveryNetworksPlan = {
+    base?: RecoveryChainConfig;
+    networks: RecoveryNetwork[];
+};
+
+// @public
+export type RecoveryNetworkStatus = 'ready' | 'not-deployed' | 'not-available' | 'not-owner' | 'out-of-sync';
+
+// @public
+export type RecoverySetupResult = {
+    door: 'account' | 'relay';
+    batchId?: Hex;
+    chains: AdminBatchChain[];
+};
+
+// @public
+export type RecoveryState = {
+    chains: RecoveryChainConfig[];
+    pending: CeremonyListEntry[];
+};
+
+// @public (undocumented)
+export function removeRecoveryOp(recoveryId: Hex): AdminOp;
 
 // @public (undocumented)
 export interface RequestArguments {
@@ -1262,6 +1933,74 @@ export interface ServerErrorOptions<T> extends EthereumErrorOptions<T> {
     code: number;
 }
 
+// @public (undocumented)
+export function setThresholdOp(threshold: number): AdminOp;
+
+// @public
+export interface SetupRecoveryUIRequest extends BaseUIRequest {
+    // (undocumented)
+    data: {
+        address: Address;
+        chainId: number;
+        recoveries: RecoveryMethodInput[];
+        threshold: number;
+        capabilities?: RequestCapabilities;
+    };
+    // (undocumented)
+    type: 'wallet_setupRecovery';
+}
+
+// @public
+export const SIGNATURE_RECOVERY_PROVIDER_ABI: readonly [{
+    readonly name: "verify";
+    readonly type: "function";
+    readonly stateMutability: "nonpayable";
+    readonly inputs: readonly [{
+        readonly name: "account";
+        readonly type: "address";
+    }, {
+        readonly name: "subject";
+        readonly type: "bytes";
+    }, {
+        readonly name: "salt";
+        readonly type: "bytes32";
+    }, {
+        readonly name: "expiry";
+        readonly type: "uint256";
+    }, {
+        readonly name: "commitment";
+        readonly type: "bytes";
+    }, {
+        readonly name: "proof";
+        readonly type: "bytes";
+    }];
+    readonly outputs: readonly [];
+}, {
+    readonly name: "recoverDigest";
+    readonly type: "function";
+    readonly stateMutability: "view";
+    readonly inputs: readonly [{
+        readonly name: "account";
+        readonly type: "address";
+    }, {
+        readonly name: "subject";
+        readonly type: "bytes";
+    }, {
+        readonly name: "salt";
+        readonly type: "bytes32";
+    }, {
+        readonly name: "expiry";
+        readonly type: "uint256";
+    }];
+    readonly outputs: readonly [{
+        readonly name: "";
+        readonly type: "bytes32";
+    }];
+}];
+
+// @public (undocumented)
+export const SIGNATURE_RECOVERY_PROVIDER_ADDRESS: `0x${string}`;
+
 // @public
 export interface SignatureUIRequest extends BaseUIRequest {
     // (undocumented)
@@ -1385,6 +2124,20 @@ export const standardErrors: {
 // @public
 export type StorePermissionApiResponse = StorePermissionApiRequest;
 
+// @public
+export function submitAdminBatch(request: SubmitAdminBatchRequest, apiKey?: string): Promise<AdminBatch>;
+
+// @public
+export type SubmitAdminBatchRequest = {
+    account: Address_2;
+    ops: AdminOp[];
+    salt: Hex;
+    expiry: number;
+    ownerBytes: Hex;
+    proof: Hex;
+    chainIds: number[];
+};
+
 // @public (undocumented)
 export type SubnameTextRecordCapabilityRequest = Array<{
     key: string;
@@ -1482,6 +2235,9 @@ export interface TokenQuote {
     // (undocumented)
     tokenAddress: Address_2;
 }
+
+// @public
+export function toOwnerBytes(owner: Address_2 | Hex): Hex;
 
 // @public
 export interface TransactionCall {
@@ -1584,10 +2340,10 @@ export interface UIHandlerOptions {
 }
 
 // @public
-export type UIRequest = ConnectUIRequest | SignatureUIRequest | TypedDataUIRequest | TransactionUIRequest | SendTransactionUIRequest | PermissionUIRequest | RevokePermissionUIRequest | WalletSignUIRequest | AddFundsUIRequest;
+export type UIRequest = ConnectUIRequest | SignatureUIRequest | TypedDataUIRequest | TransactionUIRequest | SendTransactionUIRequest | PermissionUIRequest | RevokePermissionUIRequest | SetupRecoveryUIRequest | CancelRecoveryUIRequest | WalletSignUIRequest | AddFundsUIRequest;
 
 // @public
-export type UIRequestType = 'wallet_connect' | 'wallet_sendCalls' | 'eth_sendTransaction' | 'wallet_grantPermissions' | 'wallet_revokePermissions' | 'personal_sign' | 'eth_signTypedData_v4' | 'wallet_sign' | 'wallet_addFunds';
+export type UIRequestType = 'wallet_connect' | 'wallet_sendCalls' | 'eth_sendTransaction' | 'wallet_grantPermissions' | 'wallet_revokePermissions' | 'wallet_setupRecovery' | 'wallet_cancelRecovery' | 'personal_sign' | 'eth_signTypedData_v4' | 'wallet_sign' | 'wallet_addFunds';
 
 // @public
 export interface UIResponse<T = unknown> {
@@ -1631,6 +2387,17 @@ export type ViemRPCParams<M extends string> = ExtractParams<WalletRpcSchema, M>;
 //
 // @public
 export type ViemRPCReturnType<M extends string> = ExtractReturnType<WalletRpcSchema, M>;
+
+// @public
+export type WalletCancelRecoveryRequest = {
+    method: 'wallet_cancelRecovery';
+    params: [
+        {
+        requestId: Hex;
+        capabilities?: RequestCapabilities;
+    }
+    ];
+};
 
 // @public
 export type WalletConnectCapabilities = {
@@ -1691,6 +2458,16 @@ export type WalletGetCallsHistoryResponse = CallsHistoryItem[];
 export type WalletGetPermissionsResponse = StorePermissionApiResponse[];
 
 // @public
+export type WalletGetRecoveryRequest = {
+    method: 'wallet_getRecovery';
+    params?: [
+        {
+        address?: Address_2;
+    }
+    ];
+};
+
+// @public
 export type WalletGrantPermissionsRequest = {
     method: 'wallet_grantPermissions';
     params: [
@@ -1725,6 +2502,18 @@ export type WalletRevokePermissionsRequest = {
         {
         address?: Address_2;
         id: Hex;
+        capabilities?: RequestCapabilities;
+    }
+    ];
+};
+
+// @public
+export type WalletSetupRecoveryRequest = {
+    method: 'wallet_setupRecovery';
+    params: [
+        {
+        recoveries: RecoveryMethodInput[];
+        threshold: number;
         capabilities?: RequestCapabilities;
     }
     ];

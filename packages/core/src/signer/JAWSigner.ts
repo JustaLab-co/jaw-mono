@@ -18,6 +18,12 @@ import {
     normalizeRevokePermissionsParams,
     type NormalizedRevokePermissionsParams,
 } from '../rpc/permissions.js';
+import {
+    normalizeCancelRecoveryParams,
+    normalizeSetupRecoveryParams,
+    type NormalizedCancelRecoveryParams,
+    type NormalizedSetupRecoveryParams,
+} from '../rpc/recovery.js';
 import { handleGetCallsStatusRequest } from '../rpc/wallet_getCallStatus.js';
 import { handleGetAssetsRequest } from '../rpc/wallet_getAssets.js';
 import { handleGetCallsHistoryRequest } from '../rpc/wallet_getCallsHistory.js';
@@ -33,6 +39,7 @@ import {
     SignInWithEthereumCapabilityRequest,
     SubnameTextRecordCapabilityRequest,
     handleGetPermissionsRequest,
+    handleGetRecoveryRequest,
     handleGetCapabilitiesRequest,
 } from '../rpc/index.js';
 import { fetchRPCRequest, ensureIntNumber, hexStringFromNumber } from '../utils/index.js';
@@ -57,6 +64,8 @@ export type NormalizedSigningParams =
     | { method: 'wallet_sendCalls'; params: NormalizedSendCallsParams }
     | { method: 'eth_sendTransaction'; params: NormalizedSendTransactionParams }
     | { method: 'wallet_revokePermissions'; params: NormalizedRevokePermissionsParams }
+    | { method: 'wallet_setupRecovery'; params: NormalizedSetupRecoveryParams }
+    | { method: 'wallet_cancelRecovery'; params: NormalizedCancelRecoveryParams }
     | { method: 'wallet_addFunds'; params: NormalizedAddFundsParams };
 
 /**
@@ -105,8 +114,10 @@ export abstract class JAWSigner implements Signer {
      * Handles signing requests (personal_sign, eth_signTypedData_v4, wallet_sendCalls, etc.)
      *
      * @param normalized - Validated params for the methods that have them
-     * (wallet_sendCalls, eth_sendTransaction). Use these rather than
-     * re-reading `request.params`, which is still the dapp's raw envelope.
+     * (wallet_sendCalls, eth_sendTransaction, wallet_revokePermissions,
+     * wallet_setupRecovery, wallet_cancelRecovery, wallet_addFunds). Use these
+     * rather than re-reading `request.params`, which is still the dapp's raw
+     * envelope.
      */
     protected abstract handleSigningRequest(
         request: RequestArguments,
@@ -202,6 +213,14 @@ export abstract class JAWSigner implements Signer {
                     method: 'wallet_revokePermissions',
                     params: normalizeRevokePermissionsParams(request.params),
                 };
+
+            // Both run before any screen opens, so a malformed proposal or a
+            // missing request id is refused with -32602 in both modes.
+            case 'wallet_setupRecovery':
+                return { method: 'wallet_setupRecovery', params: normalizeSetupRecoveryParams(request.params) };
+
+            case 'wallet_cancelRecovery':
+                return { method: 'wallet_cancelRecovery', params: normalizeCancelRecoveryParams(request.params) };
 
             // Runs before the screen opens, so a malformed chainId is refused
             // with -32602 in BOTH modes. Validating in the AppSpecific handler
@@ -365,7 +384,9 @@ export abstract class JAWSigner implements Signer {
             case 'wallet_sendCalls':
             case 'wallet_sign':
             case 'wallet_grantPermissions':
-            case 'wallet_revokePermissions': {
+            case 'wallet_revokePermissions':
+            case 'wallet_setupRecovery':
+            case 'wallet_cancelRecovery': {
                 return this.dispatchSigningRequest(request);
             }
 
@@ -436,6 +457,9 @@ export abstract class JAWSigner implements Signer {
             case 'wallet_getPermissions':
                 return await handleGetPermissionsRequest(request, store.config.get().apiKey, this.accounts[0]);
 
+            case 'wallet_getRecovery':
+                return await handleGetRecoveryRequest(request, store.config.get().apiKey, this.accounts[0]);
+
             case 'wallet_getCapabilities': {
                 const config = store.config.get();
                 return await handleGetCapabilitiesRequest(
@@ -455,6 +479,8 @@ export abstract class JAWSigner implements Signer {
             case 'eth_signTypedData_v4':
             case 'wallet_grantPermissions':
             case 'wallet_revokePermissions':
+            case 'wallet_setupRecovery':
+            case 'wallet_cancelRecovery':
                 return this.dispatchSigningRequest(request);
 
             case 'wallet_addFunds':

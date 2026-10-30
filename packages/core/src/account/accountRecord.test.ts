@@ -2,9 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { type Hex, decodeFunctionData, pad } from 'viem';
 import {
     ACCOUNT_RECIPE_V1,
+    ACCOUNT_RECIPE_V2,
     type AccountRecord,
     accountRecordFactoryData,
     deriveAccountRecordV1,
+    deriveAccountRecordV2,
+    deriveNewAccountRecord,
     isAccountRecordOf,
     resolveAccountRecord,
 } from './accountRecord.js';
@@ -35,8 +38,33 @@ const FACTORY_VECTORS: { publicKey: Hex; address: Hex }[] = [
     },
 ];
 
+/**
+ * The same keys under the v2 recipe, also from the deployed factory, on Base and
+ * Base Sepolia alike:
+ * cast call 0x5803c076563C85799989d42Fc00292A8aE52fa9E \
+ *   'getAddress(bytes[],uint256)(address)' \
+ *   '[<publicKey>,0x000000000000000000000000f1b40E3D5701C04d86F7828f0EB367B9C90901D8,0x0000000000000000000000009D1df5AeBE2CdBe6051687C0ab2c788890907E45]' 0 \
+ *   --rpc-url https://mainnet.base.org
+ */
+const FACTORY_VECTORS_V2: { publicKey: Hex; address: Hex }[] = [
+    {
+        publicKey: FACTORY_VECTORS[0].publicKey,
+        address: '0x6644F4510907965B878ab6b93b0a0334f86A56CB',
+    },
+    {
+        publicKey: FACTORY_VECTORS[1].publicKey,
+        address: '0x201bcE6e444BA385F9c79d972D6b8E7dCc58e98c',
+    },
+    {
+        publicKey: FACTORY_VECTORS[2].publicKey,
+        address: '0xF5080CEBf6Be3091F6fC58524a242A4EF22F41FF',
+    },
+];
+
 const [, VECTOR, OTHER_VECTOR] = FACTORY_VECTORS;
+const [, VECTOR_V2] = FACTORY_VECTORS_V2;
 const PM_OWNER = pad(ACCOUNT_RECIPE_V1.permissionsManager).toLowerCase() as Hex;
+const RM_OWNER = pad(ACCOUNT_RECIPE_V2.recoveryManager).toLowerCase() as Hex;
 
 describe('deriveAccountRecordV1', () => {
     it.each(FACTORY_VECTORS)('derives the address the factory reports for $publicKey', ({ publicKey, address }) => {
@@ -59,7 +87,50 @@ describe('deriveAccountRecordV1', () => {
     });
 });
 
+describe('deriveAccountRecordV2', () => {
+    it.each(FACTORY_VECTORS_V2)('derives the address the factory reports for $publicKey', ({ publicKey, address }) => {
+        expect(deriveAccountRecordV2(publicKey).address).toBe(address);
+    });
+
+    it('records the v2 recipe: the v1 owners followed by the recovery manager', () => {
+        expect(deriveAccountRecordV2(VECTOR_V2.publicKey)).toEqual({
+            address: VECTOR_V2.address,
+            version: 2,
+            factory: '0x5803c076563C85799989d42Fc00292A8aE52fa9E',
+            owners: [VECTOR_V2.publicKey, PM_OWNER, RM_OWNER],
+            nonce: '0',
+        });
+    });
+});
+
+describe('deriveNewAccountRecord', () => {
+    it('gives a new account the v2 recipe', () => {
+        expect(deriveNewAccountRecord(VECTOR.publicKey)).toEqual(deriveAccountRecordV2(VECTOR.publicKey));
+    });
+});
+
 describe('isAccountRecordOf', () => {
+    it('accepts the v2 record its key derives', () => {
+        expect(isAccountRecordOf(deriveAccountRecordV2(VECTOR.publicKey), VECTOR.publicKey)).toBe(true);
+    });
+
+    it("rejects another key's v2 record", () => {
+        expect(isAccountRecordOf(deriveAccountRecordV2(OTHER_VECTOR.publicKey), VECTOR.publicKey)).toBe(false);
+    });
+
+    it.each([
+        ['the managers swapped', { owners: [VECTOR.publicKey, RM_OWNER, PM_OWNER] }],
+        [
+            'a foreign owner in place of the recovery manager',
+            { owners: [VECTOR.publicKey, PM_OWNER, pad('0x000000000000000000000000000000000000dEaD').toLowerCase()] },
+        ],
+        ['the v1 version number', { version: 1 }],
+        ['an unknown version number', { version: 3 }],
+    ] as const)('rejects a v2 record with %s', (_, change) => {
+        const record = { ...deriveAccountRecordV2(VECTOR.publicKey), ...change } as AccountRecord;
+        expect(isAccountRecordOf(record, VECTOR.publicKey)).toBe(false);
+    });
+
     it('accepts the record its key derives', () => {
         expect(isAccountRecordOf(deriveAccountRecordV1(VECTOR.publicKey), VECTOR.publicKey)).toBe(true);
     });
@@ -116,7 +187,12 @@ describe('resolveAccountRecord', () => {
         expect(resolveAccountRecord(stored, VECTOR.publicKey)).toEqual(valid);
     });
 
-    it('derives the record when none is stored', () => {
+    it('returns a stored v2 record when it checks out', () => {
+        const stored = deriveAccountRecordV2(VECTOR.publicKey);
+        expect(resolveAccountRecord(stored, VECTOR.publicKey)).toEqual(stored);
+    });
+
+    it('derives the v1 record when none is stored: only entries saved before records existed have none', () => {
         expect(resolveAccountRecord(undefined, VECTOR.publicKey).address).toBe(VECTOR.address);
     });
 
@@ -154,5 +230,14 @@ describe('accountRecordFactoryData', () => {
 
         expect(functionName).toBe('createAccount');
         expect(args).toEqual([[VECTOR.publicKey, PM_OWNER], 0n]);
+    });
+
+    it('encodes all three owners of a v2 record', () => {
+        const { args } = decodeFunctionData({
+            abi: factoryAbi,
+            data: accountRecordFactoryData(deriveAccountRecordV2(VECTOR_V2.publicKey)),
+        });
+
+        expect(args).toEqual([[VECTOR_V2.publicKey, PM_OWNER, RM_OWNER], 0n]);
     });
 });
