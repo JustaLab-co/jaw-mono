@@ -62,6 +62,10 @@ const transfer: BridgeCall = {
   ...RELAY_USDC_APPROVE,
   data: '0xa9059cbb' + word(OTHER) + word('989680'),
 };
+const upperHex = (call: BridgeCall): BridgeCall => ({
+  ...call,
+  data: call.data && '0x' + call.data.slice(2).toUpperCase(),
+});
 
 describe('given the relay-usdc batch the MCP builds, approve then deposit', () => {
   it('when it is read, then the transfer shows the deposit, both steps carry no alert, and only the Relay warning shows', () => {
@@ -109,6 +113,20 @@ describe('given the relay-usdc batch the MCP builds, approve then deposit', () =
     expect(batch?.transfer).toBeDefined();
     expect(batch?.steps).toEqual([PLAIN_STEP, PLAIN_STEP, null]);
     expect(batch?.notices).toEqual([RELAY_HIDDEN, sendsTo(3, 'USDC', OTHER)]);
+  });
+
+  it('when a third call transfers tokens in uppercase hex, then the recipient is still named', () => {
+    const batch = readBridgeBatch(contracts, [RELAY_USDC_APPROVE, RELAY_USDC_DEPOSIT, upperHex(transfer)], SIGNER);
+    expect(batch?.notices).toEqual([RELAY_HIDDEN, sendsTo(3, 'USDC', OTHER)]);
+  });
+
+  it('when a third call approves in uppercase hex, then the spender is still named', () => {
+    const batch = readBridgeBatch(
+      contracts,
+      [RELAY_USDC_APPROVE, RELAY_USDC_DEPOSIT, upperHex(approve(OTHER, 'ff'))],
+      SIGNER
+    );
+    expect(batch?.notices).toEqual([RELAY_HIDDEN, approvesSpend(3, OTHER, 'USDC')]);
   });
 
   it('when a transfer sits between the approve and the deposit, then the approve gets the unpaired wording and the transfer is named', () => {

@@ -100,7 +100,7 @@ function outsideNotice(contracts: BridgeContracts, call: BridgeCall, step: numbe
 function erc20Call(data: string | undefined) {
   if (!data) return undefined;
   try {
-    const call = decodeFunctionData({ abi: erc20Abi, data: data as Hex });
+    const call = decodeFunctionData({ abi: erc20Abi, data: data.toLowerCase() as Hex });
     return call.functionName === 'approve' || call.functionName === 'transfer' ? call : undefined;
   } catch {
     return undefined;
