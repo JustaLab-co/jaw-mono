@@ -1,3 +1,17 @@
+## 1.11.0 (2026-10-30)
+
+### 🚀 Features
+
+- **ui:** show bridge notices compact under the transfer ([#608](https://github.com/JustaLab-co/jaw-mono/pull/608))
+
+### 🧱 Updated Dependencies
+
+- Updated @jaw.id/core to 1.10.2
+
+### ❤️ Thank You
+
+- Mariano Aguero @mariano-aguero
+
 ## 1.10.4 (2026-10-30)
 
 ### 🧱 Updated Dependencies

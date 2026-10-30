@@ -1,3 +1,13 @@
+## 1.10.2 (2026-10-30)
+
+### 🩹 Fixes
+
+- **core:** update axios and qs past their advisories ([#607](https://github.com/JustaLab-co/jaw-mono/pull/607))
+
+### ❤️ Thank You
+
+- Mariano Aguero @mariano-aguero
+
 ## 1.10.1 (2026-10-30)
 
 ### 🩹 Fixes
