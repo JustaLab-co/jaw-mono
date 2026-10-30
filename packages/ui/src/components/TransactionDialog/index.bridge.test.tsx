@@ -181,6 +181,7 @@ const yellow = (root: HTMLElement) =>
   );
 const notice = (root: HTMLElement, text: string) =>
   [...root.querySelectorAll('[role="alert"]:not([aria-label]) > p')].find((e) => e.textContent === text);
+const headerIcons = (root: HTMLElement) => [...root.querySelectorAll('h2 + button[aria-label^="Cannot read"]')];
 const before = (first?: Element | null, second?: Element | null) =>
   !!first && !!second && !!(first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING);
 const box = (root: HTMLElement, heading: string) =>
@@ -311,11 +312,12 @@ describe('TransactionDialog with a bridge deposit', () => {
     expect(yellow(root)).toContain(`The recipient is not this account: ${SIGNER}.`);
   });
 
-  it('marks a bridge call it cannot read with one red alert line, and only a mark on its step', () => {
+  it('marks a bridge call it cannot read with a header icon and a mark on its step, and no text line', () => {
     const broken = { ...ACROSS_CALLS.prod, data: ACROSS_CALLS.prod.data + '00' };
     const root = render([approve(SPOKE_POOL), broken]);
-    expect(red(root)).toEqual([UNREADABLE]);
-    expect([...root.querySelectorAll('[role="alert"]')].map((e) => e.textContent)).toEqual([UNREADABLE]);
+    expect(red(root)).toEqual([]);
+    expect(root.querySelector('[role="alert"]')).toBeNull();
+    expect(headerIcons(root).map((e) => e.getAttribute('aria-label'))).toEqual([UNREADABLE]);
     const steps = [...root.querySelectorAll('[data-slot="accordion-item"]')];
     expect(steps).toHaveLength(2);
     expect(steps.some((step) => step.textContent?.includes('Cannot read'))).toBe(false);
@@ -417,18 +419,20 @@ describe('TransactionDialog notices around a bridge deposit', () => {
     expect(before(box(root, 'You get via Across'), line)).toBe(true);
   });
 
-  it('keeps a red alert above You send', () => {
+  it('keeps the header icon above You send', () => {
     const broken = { ...ACROSS_CALLS.prod, data: ACROSS_CALLS.prod.data + '00' };
     const root = render([approve(SPOKE_POOL), broken, RELAY_USDC_DEPOSIT]);
-    expect(before(root.querySelector('p.text-destructive'), box(root, 'You send'))).toBe(true);
+    expect(before(headerIcons(root)[0], box(root, 'You send'))).toBe(true);
   });
 
-  it('keeps the alert line when a readable deposit sits beside an approve it cannot read', () => {
+  it('keeps the header icon when a readable deposit sits beside an approve it cannot read', () => {
     const odd = { ...RELAY_USDC_APPROVE, data: RELAY_USDC_APPROVE.data + '00' };
     const root = render([odd, RELAY_USDC_DEPOSIT]);
     expect(title(root)).toBe('Deposit to Relay');
-    expect(red(root)).toEqual(['Cannot read the Relay call in step 1. Check its raw details before you confirm.']);
-    expect(root.querySelectorAll('[role="alert"]')).toHaveLength(2);
+    expect(headerIcons(root).map((e) => e.getAttribute('aria-label'))).toEqual([
+      'Cannot read the Relay call in step 1. Check its raw details before you confirm.',
+    ]);
+    expect(red(root)).toEqual([]);
   });
 
   it('shows the deposit count when there is no single transfer to show', () => {
@@ -557,96 +561,93 @@ describe('TransactionDialog with bridge calls it cannot read', () => {
   const tail = (call: BridgeCall): BridgeCall => ({ ...call, data: call.data + '00' });
   const paid = (call: BridgeCall): BridgeCall => ({ ...call, value: '1' });
 
-  const alertLines = (root: HTMLElement) => [
-    ...root.querySelectorAll('[role="alert"][aria-label="Unreadable bridge calls"] > p'),
-  ];
   const steps = (root: HTMLElement) =>
     [...root.querySelectorAll('[data-slot="accordion-item"]')].filter(
       (item) => item.querySelector('button')?.textContent !== 'Details'
     );
+  const labels = (root: HTMLElement) => headerIcons(root).map((e) => e.getAttribute('aria-label'));
   const marked = (step: Element) => step.querySelector('[aria-label="Unreadable call"]') !== null;
 
   it('given a readable deposit and an approve that sends USDC to an attacker, then it is a yellow outside-call notice and no red line', () => {
     const root = render([{ ...approve(ATTACKER), to: BASE_USDC }, ACROSS_CALLS.prod]);
     expect(yellow(root)).toContain(`Step 1 approves ${ATTACKER} to spend USDC. Check it before you confirm.`);
-    expect(alertLines(root)).toHaveLength(0);
+    expect(headerIcons(root)).toHaveLength(0);
   });
 
-  it('given a readable deposit and an Across approve it cannot read, then one red line and only that step is marked', () => {
+  it('given a readable deposit and an Across approve it cannot read, then a header icon and only that step is marked', () => {
     const root = render([paid(approve(SPOKE_POOL)), ACROSS_CALLS.prod]);
-    expect(alertLines(root).map((line) => line.textContent)).toEqual([ACROSS_1]);
+    expect(labels(root)).toEqual([ACROSS_1]);
     expect(steps(root).map(marked)).toEqual([true, false]);
   });
 
   it('given a readable approve and a deposit it cannot read, then the deposit step carries the mark', () => {
     const root = render([approve(SPOKE_POOL), tail(ACROSS_CALLS.prod)]);
-    expect(alertLines(root).map((line) => line.textContent)).toEqual([ACROSS_2]);
+    expect(labels(root)).toEqual([ACROSS_2]);
     expect(steps(root).map(marked)).toEqual([false, true]);
   });
 
-  it('given both providers unreadable on two steps each, then exactly two red lines', () => {
+  it('given both providers unreadable on two steps each, then one header icon explaining both', () => {
     const root = render([
       paid(approve(SPOKE_POOL)),
       tail(ACROSS_CALLS.prod),
       paid(RELAY_USDC_APPROVE),
       tail(RELAY_USDC_DEPOSIT),
     ]);
-    expect(alertLines(root).map((line) => line.textContent)).toEqual([ACROSS_ONE_TWO, RELAY_THREE_FOUR]);
+    expect(labels(root)).toEqual([`${ACROSS_ONE_TWO} ${RELAY_THREE_FOUR}`]);
     expect(steps(root).map(marked)).toEqual([true, true, true, true]);
   });
 
-  it('given eight unreadable Across steps, then still one red line', () => {
+  it('given eight unreadable Across steps, then still one header icon', () => {
     const root = render(Array.from({ length: 8 }, () => tail(ACROSS_CALLS.prod)));
-    expect(alertLines(root).map((line) => line.textContent)).toEqual([ACROSS_ALL]);
+    expect(labels(root)).toEqual([ACROSS_ALL]);
     expect(steps(root).filter(marked)).toHaveLength(8);
   });
 
-  it('given a readable transfer and a later step it cannot read, then the summary shows with the red line pinned above it', () => {
+  it('given a readable transfer and a later step it cannot read, then the summary shows with the icon above it', () => {
     const root = render([approve(SPOKE_POOL), ACROSS_CALLS.prod, tail(ACROSS_CALLS.prod)]);
-    const [line] = alertLines(root);
-    expect(line?.textContent).toBe(ACROSS_3);
-    expect(before(line, box(root, 'You send'))).toBe(true);
-    expect(line?.closest('[data-scroll-body]')).toBeNull();
+    expect(labels(root)).toEqual([ACROSS_3]);
+    expect(before(headerIcons(root)[0], box(root, 'You send'))).toBe(true);
     expect(steps(root).map(marked)).toEqual([false, false, true]);
   });
 
-  it('given an unreadable call beside notices, then both show and the red line stays outside the scrolling body', () => {
+  it('given an unreadable call beside notices, then both show and no text line carries the unreadable call', () => {
     const extra: BridgeCall = { chainId: 8453, to: ATTACKER, data: '0x12345678' };
     const root = render([approve(SPOKE_POOL), tail(ACROSS_CALLS.prod), RELAY_USDC_DEPOSIT, extra]);
-    const [line] = alertLines(root);
-    const outside = notice(root, `Step 4 calls ${ATTACKER} outside the bridge. Check it before you confirm.`);
-    expect(outside).toBeDefined();
-    expect(line?.closest('[data-scroll-body]')).toBeNull();
-    expect(before(line, outside)).toBe(true);
+    expect(notice(root, `Step 4 calls ${ATTACKER} outside the bridge. Check it before you confirm.`)).toBeDefined();
+    expect(labels(root)).toHaveLength(1);
+    expect(root.textContent).not.toContain('Cannot read');
   });
 
-  it('given a single call it cannot read, then its calldata card carries the mark', () => {
+  it('given a single call it cannot read, then the header icon and its calldata card mark show', () => {
     const root = render([tail(ACROSS_CALLS.prod)]);
-    expect(alertLines(root).map((line) => line.textContent)).toEqual([ACROSS_ONLY]);
+    expect(labels(root)).toEqual([ACROSS_ONLY]);
     expect(steps(root).map(marked)).toEqual([true]);
   });
 
-  it('given a single readable call, then it carries no mark and no red alert region renders', () => {
+  it('given a single readable call, then there is no icon and no alert', () => {
     const root = render([approve(SPOKE_POOL)]);
     expect(steps(root).map(marked)).toEqual([false]);
+    expect(headerIcons(root)).toHaveLength(0);
     expect(root.querySelector('[role="alert"]')).toBeNull();
   });
 
-  it('given a readable bridge batch, then no empty alert region is announced', () => {
+  it('given a readable bridge batch, then no icon renders', () => {
     const root = render([approve(SPOKE_POOL), ACROSS_CALLS.prod]);
+    expect(headerIcons(root)).toHaveLength(0);
     expect(root.querySelector('[role="alert"]')).toBeNull();
   });
 
-  it('announces the line as an alert with an icon and words, and labels the step mark for assistive tech', () => {
+  it('renders no red text line, and the header icon is a labelled button', () => {
     const root = render([approve(SPOKE_POOL), tail(ACROSS_CALLS.prod)]);
-    const [line] = alertLines(root);
-    expect(line.closest('[role="alert"]')).not.toBeNull();
-    expect(line.querySelector('svg')).not.toBeNull();
-    expect(line.textContent).toBe(ACROSS_2);
+    expect(root.querySelector('p.text-destructive')).toBeNull();
+    expect(root.textContent).not.toContain('Cannot read');
+    const [icon] = headerIcons(root);
+    expect(icon.tagName.toLowerCase()).toBe('button');
+    expect(icon.querySelector('svg')).not.toBeNull();
+    expect(icon.getAttribute('aria-label')).toBe(ACROSS_2);
     const mark = steps(root)[1].querySelector('[aria-label="Unreadable call"]');
     expect(mark?.tagName.toLowerCase()).toBe('svg');
     expect(mark?.getAttribute('role')).toBe('img');
-    expect(mark?.getAttribute('aria-hidden')).not.toBe('true');
     expect(mark?.closest('button')).not.toBeNull();
   });
 
@@ -663,12 +664,11 @@ describe('TransactionDialog with bridge calls it cannot read', () => {
     { call: { chainId: 8453, to: ATTACKER, data: '0x12345678' } },
   ];
 
-  it('for any batch, one red line per provider it cannot read, and a mark on exactly the unreadable steps', () => {
+  it('for any batch, one header icon when any step is unreadable, and a mark on exactly the unreadable steps', () => {
     fc.assert(
       fc.property(fc.array(fc.constantFrom(...KINDS), { minLength: 1, maxLength: 6 }), (batch) => {
         const root = render(batch.map((kind) => kind.call));
-        const providers = new Set(batch.flatMap((kind) => (kind.unreadable ? [kind.unreadable] : [])));
-        expect(alertLines(root)).toHaveLength(providers.size);
+        expect(headerIcons(root)).toHaveLength(batch.some((kind) => kind.unreadable) ? 1 : 0);
         expect(steps(root).map(marked)).toEqual(batch.map((kind) => !!kind.unreadable));
       }),
       { numRuns: 60 }
