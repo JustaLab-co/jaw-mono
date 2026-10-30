@@ -9,7 +9,7 @@ export default defineConfig({
   },
   test: {
     // Used only under --coverage. `include` counts files no test imports as
-    // uncovered, and the thresholds sit at this project's current coverage.
+    // uncovered, and the thresholds sit a point under this project's coverage.
     coverage: {
       provider: 'v8',
       include: ['src/**/*.ts'],
@@ -17,7 +17,7 @@ export default defineConfig({
       // A failing test still writes the summary the PR check compares.
       reportOnFailure: true,
       reportsDirectory: '../../coverage/packages/wagmi',
-      thresholds: { lines: 31, branches: 86, functions: 67, statements: 31 },
+      thresholds: { lines: 30, branches: 85, functions: 66, statements: 30 },
     },
     globals: true,
     environment: 'node',

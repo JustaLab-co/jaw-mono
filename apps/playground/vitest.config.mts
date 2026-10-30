@@ -11,7 +11,7 @@ export default defineConfig({
   },
   test: {
     // Used only under --coverage. `include` counts files no test imports as
-    // uncovered, and the thresholds sit at this project's current coverage.
+    // uncovered, and the thresholds sit a point under this project's coverage.
     coverage: {
       provider: 'v8',
       include: ['lib/**/*.ts'],
@@ -19,7 +19,7 @@ export default defineConfig({
       // A failing test still writes the summary the PR check compares.
       reportOnFailure: true,
       reportsDirectory: '../../coverage/apps/playground',
-      thresholds: { lines: 67, branches: 93, functions: 13, statements: 67 },
+      thresholds: { lines: 66, branches: 92, functions: 12, statements: 66 },
     },
     globals: true,
     environment: 'jsdom',

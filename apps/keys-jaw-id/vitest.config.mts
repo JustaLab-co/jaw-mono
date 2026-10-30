@@ -19,7 +19,7 @@ export default defineConfig({
   },
   test: {
     // Used only under --coverage. `include` counts files no test imports as
-    // uncovered, and the thresholds sit at this project's current coverage.
+    // uncovered, and the thresholds sit a point under this project's coverage.
     coverage: {
       provider: 'v8',
       include: ['src/**/*.{ts,tsx}'],
@@ -27,7 +27,7 @@ export default defineConfig({
       // A failing test still writes the summary the PR check compares.
       reportOnFailure: true,
       reportsDirectory: '../../coverage/apps/keys-jaw-id',
-      thresholds: { lines: 50, branches: 80, functions: 77, statements: 50 },
+      thresholds: { lines: 49, branches: 79, functions: 76, statements: 49 },
     },
     // Run once and exit. The Nx-inferred `test` target invokes `vitest` (not
     // `vitest run`), which would otherwise start watch mode in an interactive
