@@ -31,7 +31,7 @@ interface DecodeContext {
 }
 
 interface StepOverride {
-  alert?: string;
+  unreadable?: boolean;
 }
 
 /** Marks an unreadable step in its header. The batch alert line carries the words. */
@@ -61,7 +61,7 @@ export function SingleCallData({
   data,
   decode,
   allowanceFlag,
-  alert,
+  unreadable,
   ...ctx
 }: DecodeContext &
   StepOverride & { to: string; data: string; decode: DecodeResult; allowanceFlag: AllowanceFlag | null }) {
@@ -77,7 +77,7 @@ export function SingleCallData({
             <Eyebrow>Calldata</Eyebrow>
             <span className="text-foreground text-value mt-1 truncate">{callLabel(decode, 'Contract call')}</span>
           </span>
-          <UnreadableMark show={!!alert} />
+          <UnreadableMark show={!!unreadable} />
         </span>
         <HeaderFlag flag={flag} />
       </AccordionTrigger>
@@ -100,7 +100,7 @@ export function BatchStep({
   nativeSymbol,
   nativeTokenPrice,
   allowanceFlag,
-  alert,
+  unreadable,
   ...ctx
 }: Omit<DecodeContext, 'chainId'> &
   StepOverride & {
@@ -130,7 +130,7 @@ export function BatchStep({
           <span className="text-foreground text-value truncate">
             {callLabel(decode, transaction.action ?? stepFallbackLabel(index, hasData, value))}
           </span>
-          <UnreadableMark show={!!alert} />
+          <UnreadableMark show={!!unreadable} />
           {/* Native value in the header, so a collapsed step still shows what it moves.
               Token amounts live in the calldata, so they only appear once expanded. */}
           {value && (
@@ -230,7 +230,7 @@ export function BridgeNotices({ messages }: { messages: readonly string[] }) {
 export function BridgeAlerts({ messages }: { messages: readonly string[] }) {
   if (messages.length === 0) return null;
   return (
-    <div role="alert" className="mt-2 flex flex-col gap-1">
+    <div role="alert" aria-label="Unreadable bridge calls" className="mt-2 flex flex-col gap-1">
       {messages.map((message) => (
         <p
           key={message}
