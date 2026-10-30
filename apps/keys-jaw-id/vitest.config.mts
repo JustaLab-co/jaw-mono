@@ -18,6 +18,17 @@ export default defineConfig({
     },
   },
   test: {
+    // Used only under --coverage. `include` counts files no test imports as
+    // uncovered, and the thresholds sit at this project's current coverage.
+    coverage: {
+      provider: 'v8',
+      include: ['src/**/*.{ts,tsx}'],
+      reporter: ['html', 'json-summary', 'text-summary'],
+      // A failing test still writes the summary the PR check compares.
+      reportOnFailure: true,
+      reportsDirectory: '../../coverage/apps/keys-jaw-id',
+      thresholds: { lines: 50, branches: 80, functions: 77, statements: 50 },
+    },
     // Run once and exit. The Nx-inferred `test` target invokes `vitest` (not
     // `vitest run`), which would otherwise start watch mode in an interactive
     // terminal — hanging the pre-push hook. Mirrors packages/wagmi.
