@@ -542,6 +542,7 @@ describe('useGasEstimation fee-token outcome per ERC-20 result', () => {
     ['an object without a message', { code: -32000 }, 'Unknown error'],
     ['a blank first line', new Error('\n  \nexecution reverted: paused\nVersion: viem'), 'execution reverted: paused'],
     ['only whitespace', new Error(' \t '), 'Unknown error'],
+    ['tabs between words', new Error('execution\treverted'), 'execution reverted'],
     [
       'control and bidi characters',
       new Error('reverted:\u0007 \u202Edesrever\u202C ok\u0000'),
@@ -562,6 +563,14 @@ describe('useGasEstimation fee-token outcome per ERC-20 result', () => {
     expect([...failure]).toHaveLength(160);
     expect(failure.startsWith('execution reverted: 0xabab')).toBe(true);
     expect(failure.endsWith('…')).toBe(true);
+  });
+
+  it('keeps a reason that exactly fits the tooltip whole', async () => {
+    const fits = `execution reverted: ${'x'.repeat(140)}`;
+    erc20Mock.mockRejectedValue(new Error(fits));
+    await mount(ethOk(), [nativeEth(0n), token({})]);
+
+    expect(usdcNow().estimationFailure).toBe(fits);
   });
 
   it('records a short, single-line, printable reason for any rejection', async () => {
