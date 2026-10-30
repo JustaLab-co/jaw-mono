@@ -150,3 +150,163 @@ describe('a malformed call checker', () => {
         }
     );
 });
+
+describe('a call whose selector and functionSignature disagree', () => {
+    // The grant screen names the call by its functionSignature and the permission grants its
+    // selector. keys.jaw.id builds every grant through here, so a request from an SDK without
+    // the signer's check is still refused before the screen estimates or signs.
+    const MISMATCHED = { target: TARGET, selector: '0xa22cb465', functionSignature: 'balanceOf(address)' } as const;
+
+    it('is refused as invalid params when the screen builds its estimate', () => {
+        const build = () => buildGrantPermissionCall(ACCOUNT, SPENDER, 2000000000, { calls: [MISMATCHED] });
+
+        expect(build).toThrow(
+            expect.objectContaining({ code: -32602, message: expect.stringContaining('permissions.calls[0]') })
+        );
+    });
+
+    it('is refused on Grant with nothing sent to the bundler', async () => {
+        await expect(grant([MISMATCHED])).rejects.toMatchObject({
+            code: -32602,
+            message: expect.stringContaining('permissions.calls[0]'),
+        });
+        expect(sendTransaction).not.toHaveBeenCalled();
+    });
+
+    it('is refused when its functionSignature does not parse', () => {
+        const build = () =>
+            buildGrantPermissionCall(ACCOUNT, SPENDER, 2000000000, {
+                calls: [{ target: TARGET, selector: '0xa9059cbb', functionSignature: 'not a signature' }],
+            });
+
+        expect(build).toThrow(expect.objectContaining({ code: -32602 }));
+    });
+});
+
+describe('a call that names its function consistently', () => {
+    it.each([
+        ['a matching pair', { selector: '0xa9059cbb', functionSignature: 'transfer(address,uint256)' }],
+        ['an uppercase selector', { selector: '0xA9059CBB', functionSignature: 'transfer(address,uint256)' }],
+        [
+            'a signature with parameter names',
+            { selector: '0xa9059cbb', functionSignature: 'transfer(address to, uint256 amount)' },
+        ],
+        ['a selector alone', { selector: '0xa9059cbb' }],
+        ['a signature alone', { functionSignature: 'transfer(address,uint256)' }],
+    ] as const)('grants transfer for %s', (_label, call) => {
+        const { data } = buildGrantPermissionCall(ACCOUNT, SPENDER, 2000000000, {
+            calls: [{ target: TARGET, ...call }],
+        });
+
+        const decoded = decodeFunctionData({ abi: SPEND_PERMISSIONS_MANAGER_ABI, data });
+        if (decoded.functionName !== 'approve') throw new Error(`expected approve, got ${decoded.functionName}`);
+        expect(decoded.args[0].calls[0].selector.toLowerCase()).toBe('0xa9059cbb');
+    });
+});
+
+describe('a call the grant screen could misname', () => {
+    function build(call: Record<string, unknown>) {
+        return () =>
+            buildGrantPermissionCall(ACCOUNT, SPENDER, 2000000000, {
+                calls: [{ target: TARGET, ...call } as NonNullable<PermissionsDetail['calls']>[number]],
+            });
+    }
+
+    // The screen renders a label that is not a string as its text, so ['balanceOf(address)']
+    // reads as balanceOf(address) while the selector is granted.
+    it.each([
+        ['an array', ['balanceOf(address)']],
+        ['a number', 42],
+    ])('is refused when its functionSignature is %s', (_label, functionSignature) => {
+        expect(build({ selector: '0xa22cb465', functionSignature })).toThrow(
+            expect.objectContaining({
+                code: -32602,
+                message: expect.stringContaining('permissions.calls[0].functionSignature'),
+            })
+        );
+    });
+
+    // The manager reads these selectors as any function and as an empty call, but the screen
+    // labels a call by its signature, so a signature that hashes to one would hide the wildcard.
+    it.each([
+        ['any-function', 'fba3b554e(uint256)'],
+        ['empty-call', 'f31225173(uint256)'],
+    ])('is refused when its functionSignature hashes to the %s selector', (_label, functionSignature) => {
+        expect(build({ functionSignature })).toThrow(
+            expect.objectContaining({
+                code: -32602,
+                message: expect.stringContaining('permissions.calls[0].functionSignature'),
+            })
+        );
+    });
+
+    it.each(['0XA22CB465', '0xa22cb4', '0xa22cb46500', 'a22cb465', 42])(
+        'is refused as invalid params when its selector is not 4 bytes of 0x-prefixed hex: %s',
+        (selector) => {
+            expect(build({ selector, functionSignature: 'setApprovalForAll(address,bool)' })).toThrow(
+                expect.objectContaining({
+                    code: -32602,
+                    message: expect.stringContaining('permissions.calls[0].selector'),
+                })
+            );
+        }
+    );
+
+    it('blames the functionSignature, not the selector, when the signature does not parse', () => {
+        expect(build({ selector: '0xa9059cbb', functionSignature: 'not a signature' })).toThrow(
+            expect.objectContaining({
+                code: -32602,
+                message: expect.stringContaining('permissions.calls[0].functionSignature'),
+            })
+        );
+    });
+
+    // The selector is hashed from the signature up to its closing parenthesis, but the screen shows
+    // the whole string, so anything after it would be a note the dapp writes beside the real name.
+    it.each([
+        ['with a selector', { selector: '0xa22cb465' }],
+        ['alone', {}],
+    ])('is refused when text follows its functionSignature, %s', (_label, call) => {
+        const functionSignature = 'setApprovalForAll(address,bool) (read-only, moves nothing)';
+
+        expect(build({ ...call, functionSignature })).toThrow(
+            expect.objectContaining({
+                code: -32602,
+                message: expect.stringContaining('permissions.calls[0].functionSignature'),
+            })
+        );
+    });
+
+    it.each(['setApprovalForAll(address,bool) ', 'execute((address,uint256,bytes)[])'])(
+        'still grants a signature with only whitespace after it or a tuple inside it: %s',
+        (functionSignature) => {
+            expect(build({ functionSignature })).not.toThrow();
+        }
+    );
+
+    // The selector is hashed from the string as sent, characters the screen does not show included,
+    // so each of these reads as balanceOf(address) or transfer(address,uint256) but grants another
+    // selector, and a dapp can search such variants offline for one that hashes to setApprovalForAll.
+    it.each([
+        ['a zero-width space', 'balanceOf(​address)'],
+        ['a Cyrillic letter', 'bаlanceOf(address)'],
+        ['a tab after its parenthesis', 'balanceOf(\taddress)'],
+        ['a space after its parenthesis', 'balanceOf( address)'],
+        ['uint for uint256', 'transfer(address,uint)'],
+    ])('is refused when its functionSignature hides %s', (_label, functionSignature) => {
+        expect(build({ functionSignature })).toThrow(
+            expect.objectContaining({
+                code: -32602,
+                message: expect.stringContaining('permissions.calls[0].functionSignature'),
+            })
+        );
+    });
+
+    it.each([
+        'function transfer(address,uint256)',
+        'transfer(address, uint256)',
+        'execute((address target,uint256 value,bytes data)[] calls)',
+    ])('still grants a signature written another way that hashes as shown: %s', (functionSignature) => {
+        expect(build({ functionSignature })).not.toThrow();
+    });
+});

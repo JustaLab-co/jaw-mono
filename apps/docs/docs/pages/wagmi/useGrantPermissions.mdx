@@ -143,6 +143,11 @@ interface CallPermissionDetail {
 
 \*Either `selector` or `functionSignature` must be provided.
 
+:::warning
+If you send both `selector` and `functionSignature`, they must name the same function, or the request fails with `-32602`.
+`{ selector: '0xa9059cbb', functionSignature: 'transfer(address,uint256)' }` works. The same selector with `'balanceOf(address)'` is refused.
+:::
+
 :::tip
 Use `functionSignature` for readability - the SDK computes the selector automatically:
 

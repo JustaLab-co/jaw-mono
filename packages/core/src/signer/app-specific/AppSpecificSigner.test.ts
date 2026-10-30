@@ -1395,6 +1395,71 @@ describe('AppSpecificSigner', () => {
             expect(mockUIHandler.request).not.toHaveBeenCalled();
         });
 
+        // The grant screen names a call by its functionSignature, but the selector is what gets
+        // signed. A pair that disagrees would show the user one function and grant another.
+        it.each<[string, unknown, unknown]>([
+            ['a harmless label on setApprovalForAll', '0xa22cb465', 'balanceOf(address)'],
+            ['a label that does not parse', '0xa9059cbb', 'not a signature'],
+            ['a harmless label that is not a string', '0xa22cb465', ['balanceOf(address)']],
+            ['a label that hashes to the any-function selector', undefined, 'fba3b554e(uint256)'],
+            ['a selector the encoder cannot read', '0XA22CB465', 'setApprovalForAll(address,bool)'],
+        ])('rejects a grant with %s with -32602 and opens no dialog', async (_label, selector, functionSignature) => {
+            await expect(
+                signer.request({
+                    method: 'wallet_grantPermissions',
+                    params: [
+                        {
+                            expiry: 2_000_000_000,
+                            spender: '0x2222222222222222222222222222222222222222',
+                            permissions: {
+                                calls: [
+                                    {
+                                        target: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+                                        functionSignature: 'transfer(address,uint256)',
+                                    },
+                                    {
+                                        target: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+                                        selector,
+                                        functionSignature,
+                                    },
+                                ],
+                            },
+                        },
+                    ],
+                } as never)
+            ).rejects.toMatchObject({ code: -32602, message: expect.stringContaining('permissions.calls[1]') });
+
+            expect(mockUIHandler.request).not.toHaveBeenCalled();
+        });
+
+        it.each([
+            ['a matching pair', { selector: '0xa9059cbb', functionSignature: 'transfer(address,uint256)' }],
+            ['an uppercase selector', { selector: '0xA9059CBB', functionSignature: 'transfer(address,uint256)' }],
+            [
+                'a signature with parameter names',
+                { selector: '0xa9059cbb', functionSignature: 'transfer(address to, uint256 amount)' },
+            ],
+            ['a selector alone', { selector: '0xa22cb465' }],
+            ['a signature alone', { functionSignature: 'setApprovalForAll(address,bool)' }],
+        ])('opens the grant dialog for %s', async (_label, call) => {
+            (mockUIHandler.request as Mock).mockResolvedValue({ id: 'test-response-id', approved: true, data: {} });
+
+            await signer.request({
+                method: 'wallet_grantPermissions',
+                params: [
+                    {
+                        expiry: 2_000_000_000,
+                        spender: '0x2222222222222222222222222222222222222222',
+                        permissions: { calls: [{ target: '0x036CbD53842c5426634e7929541eC2318f3dCF7e', ...call }] },
+                    },
+                ],
+            } as never);
+
+            expect(mockUIHandler.request).toHaveBeenCalledWith(
+                expect.objectContaining({ type: 'wallet_grantPermissions' })
+            );
+        });
+
         // ERC-7871 wallet_sign 0x01 reaches the same EIP-712 dialog, so it must be
         // refused at the same boundary rather than only eth_signTypedData_v4.
         it.each([
