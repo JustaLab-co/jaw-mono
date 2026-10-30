@@ -3,11 +3,13 @@
 import {
   RecoveryDialog,
   useGasEstimation,
-  useRecoveryConfig,
+  useRecoveryNetworks,
   type FeeTokenOption,
   fetchTokenBalance,
   isNativeToken,
+  recoveryActivationCalls,
   recoveryPlanStillHolds,
+  recoveryUnavailable,
 } from '@jaw.id/ui';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { formatUnits, type Address } from 'viem';
@@ -18,8 +20,6 @@ import {
   type RecoveryConfig,
   type RecoverySetupResult,
   buildErc20PaymasterContext,
-  buildRecoverySetupCalls,
-  getRecoveryConfig,
   normalizeSetupRecoveryParams,
   isFirstRecoverySetup,
   standardErrorCodes,
@@ -29,6 +29,10 @@ import {
   handleGetCapabilitiesRequest,
 } from '@jaw.id/core';
 import { apiKeyFromChain } from '../../lib/api-key';
+
+// After the activation transaction lands, the networks are read again until one can take the change.
+const ACTIVATION_READS = 5;
+const ACTIVATION_READ_INTERVAL_MS = 2_000;
 
 export interface RecoveryModalProps {
   /** The dApp's params: the config to show, validated again here, and its capabilities. */
@@ -52,10 +56,10 @@ export interface RecoveryModalProps {
  * normalizer, since a page can post to keys without going through the SDK, and an invalid
  * config is refused with -32602 before anything is shown.
  *
- * The configs read picks the flow for the connected network: no recovery there is a first setup
- * through the account door (one userOp, the fee row below); recovery there is an edit, one
- * signature relayed by JAW to every network where it is on. `Account.setupRecovery` makes the
- * same read and the same choice.
+ * A first setup and an edit are both one signature, relayed by JAW to every network that can take
+ * it; `Account.getRecoveryNetworks` says which, the read `Account.setupRecovery` makes too. When
+ * none can yet, the screen offers one transaction on the connected network (the fee row below),
+ * then reads the networks again.
  */
 export const RecoveryModal = ({
   params,
@@ -80,6 +84,7 @@ export const RecoveryModal = ({
 
   const [status, setStatus] = useState<string>('');
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
+  const [isActivating, setIsActivating] = useState<boolean>(false);
   const [feeTokens, setFeeTokens] = useState<FeeTokenOption[]>([]);
   const [feeTokensLoading, setFeeTokensLoading] = useState<boolean>(true);
   // Synchronous re-entry guard: isProcessing disables the buttons only after a
@@ -123,7 +128,8 @@ export const RecoveryModal = ({
     return capabilities?.paymasterService?.context || chain?.paymaster?.context;
   }, [capabilities, chain?.paymaster?.context]);
 
-  // Recovery is account-level: the request carries the connected chain, where a first setup lands.
+  // Recovery is account-level: the request carries the connected chain, where an activation
+  // transaction would go.
   const chainId = chain?.id;
 
   // Get viem chain for fee token fetching
@@ -137,25 +143,17 @@ export const RecoveryModal = ({
 
   const accountAddress = (walletAddress ?? undefined) as Address | undefined;
 
-  const {
-    config,
-    chains,
-    loading: isLoadingConfig,
-    problem,
-  } = useRecoveryConfig({ address: accountAddress, apiKey: extractedApiKey, chainId });
-  const isFirstSetup = !config || isFirstRecoverySetup(config);
+  const { plan, loading: isLoadingConfig, problem, reload } = useRecoveryNetworks({ account });
+  const isFirstSetup = !plan?.base || isFirstRecoverySetup(plan.base);
+  const unavailable = plan && chainId !== undefined ? recoveryUnavailable(plan, chainId) : null;
+  const needsActivation = unavailable === 'deploy' || unavailable === 'enable';
 
-  // The account-door userOp of a first setup, built from the config under review so the fee is
-  // estimated over exactly what will be sent. An edit is relayed and costs the user nothing.
-  const transactionCalls = useMemo(() => {
-    if (!desired || !config || !isFirstSetup || !accountAddress) return [];
-    try {
-      return buildRecoverySetupCalls(accountAddress, config, desired);
-    } catch (error) {
-      console.warn('[RecoveryModal] Failed to build recovery setup calls:', error);
-      return [];
-    }
-  }, [desired, config, isFirstSetup, accountAddress]);
+  // The activation transaction, priced and sent as one object: a keys screen signs what it
+  // rendered. A recovery change is relayed and costs the user nothing.
+  const transactionCalls = useMemo(
+    () => (needsActivation && accountAddress ? recoveryActivationCalls(accountAddress) : []),
+    [needsActivation, accountAddress]
+  );
 
   // Use the gas estimation hook for both ETH and ERC-20 cost estimation
   const {
@@ -172,7 +170,7 @@ export const RecoveryModal = ({
     chainId: chainId || 1,
     apiKey: extractedApiKey,
     feeTokens,
-    // Nothing to price until a first setup is under review.
+    // Nothing to price unless the activation transaction is on screen.
     isSponsored: isSponsored || transactionCalls.length === 0,
     address: accountAddress,
     onFeeTokensUpdate: setFeeTokens,
@@ -320,7 +318,7 @@ export const RecoveryModal = ({
     submittingRef.current = true;
     try {
       setIsProcessing(true);
-      setStatus(isFirstSetup ? 'Enabling recovery...' : 'Updating recovery...');
+      setStatus(isFirstSetup ? 'Setting up recovery...' : 'Updating recovery...');
 
       if (!account) {
         throw new Error('Account not initialized. Please try again.');
@@ -332,14 +330,13 @@ export const RecoveryModal = ({
 
       // Account plans again from its own read when it signs. Refuse when that plan is no longer
       // the one this screen showed: a keys screen signs what it rendered.
-      const fresh = await getRecoveryConfig(walletAddress as Address, extractedApiKey);
-      if (!chainId || !recoveryPlanStillHolds(chains, fresh.chains, chainId, desired)) {
+      const fresh = await account.getRecoveryNetworks();
+      if (!plan || !recoveryPlanStillHolds(plan, fresh, desired)) {
         throw new Error('Recovery settings changed since this screen opened. Close this and try again.');
       }
 
-      // The config the confirm screen rendered, signed as is. The paymaster only applies to the
-      // account door.
-      const setup = await account.setupRecovery(desired, computedPaymasterUrl, computedPaymasterContext);
+      // The config the confirm screen rendered, signed as is and relayed.
+      const setup = await account.setupRecovery(desired);
       setStatus('');
       // Answered at once, like every keys modal: once the change has landed, closing the window
       // must not report a rejection. The page's done screen follows; a relayed batch is the dApp's
@@ -363,19 +360,31 @@ export const RecoveryModal = ({
       submittingRef.current = false;
       setIsProcessing(false);
     }
-  }, [
-    account,
-    desired,
-    isFirstSetup,
-    walletAddress,
-    extractedApiKey,
-    chainId,
-    chains,
-    computedPaymasterUrl,
-    computedPaymasterContext,
-    onSuccess,
-    onError,
-  ]);
+  }, [account, desired, isFirstSetup, plan, onSuccess, onError]);
+
+  // The one transaction that lets the connected network take a change. It answers nothing: the
+  // request stays open, and a failure stays on screen for another try or Cancel.
+  const handleActivate = useCallback(async () => {
+    if (submittingRef.current || settledRef.current || !account) return;
+    submittingRef.current = true;
+    setIsActivating(true);
+    setStatus('');
+    try {
+      await account.sendTransaction(transactionCalls, computedPaymasterUrl, computedPaymasterContext);
+      // The read is live, and a node a block behind can still answer with the old state.
+      for (let read = 1; read <= ACTIVATION_READS; read++) {
+        const fresh = await reload();
+        if (fresh?.base || read === ACTIVATION_READS) break;
+        await new Promise((resolve) => setTimeout(resolve, ACTIVATION_READ_INTERVAL_MS));
+      }
+    } catch (error) {
+      console.error('Recovery activation failed:', error);
+      setStatus(`Error: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      submittingRef.current = false;
+      setIsActivating(false);
+    }
+  }, [account, transactionCalls, computedPaymasterUrl, computedPaymasterContext, reload]);
 
   // Only reached unsigned: a config the app manages that is already in place (the dialog's Done).
   const handleDone = useCallback(
@@ -418,17 +427,18 @@ export const RecoveryModal = ({
       appName={appName}
       appLogoUrl={appLogoUrl}
       config={desired}
-      current={config}
-      chains={chains}
+      plan={plan}
       isLoadingConfig={isLoadingConfig || isAccountLoading}
       problem={problem}
       networkName={networkName}
       chainId={chainId}
       apiKey={extractedApiKey}
       onConfirm={handleConfirm}
+      onActivate={handleActivate}
       onCancel={handleCancel}
       onDone={handleDone}
       isProcessing={isProcessing}
+      isActivating={isActivating}
       status={status}
       result={null}
       gasFee={gasFee}
