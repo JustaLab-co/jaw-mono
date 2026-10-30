@@ -134,8 +134,6 @@ export const TransactionDialog = ({
   // unpayable state; the in-flight remainder of this gate renders there as "Estimating...".
   const erc20CannotPay =
     isPayingWithErc20 && (!selectedFeeToken?.gasCostMaxFormatted || !selectedFeeToken?.isSelectable);
-  const canConfirm =
-    !isProcessing && !gasFeeLoading && !blockReason && !erc20CannotPay && !permissionBlocks && bridgeSettled;
 
   // Reverts, but gas estimated fine, so it stays submittable: warn rather than block.
   const softRevertWarning = !blockReason && !permissionBlocks && !!assetPreviewWillRevert;
@@ -157,12 +155,21 @@ export const TransactionDialog = ({
     apiKey
   );
   // Under a permission the granter's funds move; until it is known, the batch is not read.
-  const bridge = useBridgeBatch(
+  const { bridge, settled: tokensRead } = useBridgeBatch(
     bridgeContracts,
     transactions,
     isPermissioned ? onBehalfOf : walletAddress,
-    capabilities?.jawRelayOrder
+    capabilities?.jawRelayOrder,
+    apiKey
   );
+  const canConfirm =
+    !isProcessing &&
+    !gasFeeLoading &&
+    !blockReason &&
+    !erc20CannotPay &&
+    !permissionBlocks &&
+    bridgeSettled &&
+    tokensRead;
   const transfer = bridge?.transfer;
   const title =
     transfer?.title ?? (isNativeSend ? "You're Sending" : (callTitle(singleCallDecode) ?? 'Review Transaction'));

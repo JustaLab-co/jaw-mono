@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
@@ -25,6 +25,32 @@ vi.mock('../../hooks/useBridgeContracts', async (original) => {
     ...real,
     useBridgeContracts: (apiKey?: string) => ({ ...real.useBridgeContracts(apiKey), settled: table.settled }),
   };
+});
+// The chain side of the screen: a node that knows the tokens it is told about and nothing else.
+const chain = vi.hoisted(() => ({
+  tokens: {} as Record<string, { symbol: string; decimals: bigint }>,
+  hang: false,
+}));
+vi.mock('../../utils/publicClient', async (original) => {
+  const real = await original<typeof import('../../utils/publicClient')>();
+  const { createPublicClient, custom, encodeAbiParameters } = await import('viem');
+  const client = createPublicClient({
+    transport: custom(
+      {
+        async request({ params }) {
+          if (chain.hang) return new Promise(() => undefined);
+          const { to, data } = (params as [{ to: string; data: string }])[0];
+          const token = chain.tokens[to.toLowerCase()];
+          if (!token) return '0x';
+          return data === '0x95d89b41'
+            ? encodeAbiParameters([{ type: 'string' }], [token.symbol])
+            : encodeAbiParameters([{ type: 'uint256' }], [token.decimals]);
+        },
+      },
+      { retryCount: 0 }
+    ),
+  });
+  return { ...real, getJawPublicClient: () => client };
 });
 vi.mock('../../hooks', () => ({ useChainIconURI: () => undefined, useFeeTokenPrice: () => undefined }));
 vi.mock('../../utils/tokenPrice', () => ({ fetchTokenPrice: async (s: string) => ({ USDC: 1, WETH: 3000 })[s] ?? 0 }));
@@ -453,5 +479,44 @@ describe('TransactionDialog while the bridge table settles', () => {
     const root = await renderLive([approve(SPOKE_POOL), ACROSS_CALLS.prod]);
     table.settled = true;
     expect(confirm(root)?.disabled).toBe(disabled);
+  });
+});
+
+describe('TransactionDialog with a bridge into a token outside the table', () => {
+  const BOUGHT = '0xd0601ce157db5bdc3162bbac2a2c8af5320d9eec';
+  const confirm = (root: HTMLElement) =>
+    [...root.querySelectorAll('button')].find((b) => b.textContent === 'Confirm') as HTMLButtonElement;
+  const batch = [approve(SPOKE_POOL), ACROSS_CALLS.usdcToNvdaFee];
+
+  afterEach(() => {
+    chain.tokens = {};
+    chain.hang = false;
+  });
+
+  it('shows the amount in the token units, tagged unverified, warns, and leaves Confirm enabled', async () => {
+    chain.tokens[BOUGHT] = { symbol: 'AAPL', decimals: 18n };
+    const root = await renderLive(batch);
+    const get = column(root, 'They get via Across');
+    expect(get).toContain('AAPL');
+    expect(get).toContain('unverified');
+    expect(get).toMatch(/≥ 0\.0128/);
+    expect(root.textContent).not.toContain('base units');
+    await open(root);
+    expect(root.textContent).toContain('This screen has not verified the token AAPL (0xd060...9EEC).');
+    expect(confirm(root).disabled).toBe(false);
+  });
+
+  it('keeps Confirm disabled until the token answers', async () => {
+    chain.hang = true;
+    const root = await renderLive(batch);
+    expect(confirm(root).disabled).toBe(true);
+    expect(column(root, 'They get via Across')).toContain('base units');
+  });
+
+  it('when the token cannot be read, then it reads in base units and Confirm is enabled', async () => {
+    const root = await renderLive(batch);
+    expect(column(root, 'They get via Across')).toContain('≥ 12801829359864708 base units');
+    expect(root.textContent).not.toContain('unverified');
+    expect(confirm(root).disabled).toBe(false);
   });
 });
