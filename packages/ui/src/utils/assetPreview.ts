@@ -28,6 +28,8 @@ export interface AssetDelta {
   isNative: boolean;
   /** Symbol and decimals are the token's own claim and nothing here vouches for them. */
   unverified?: true;
+  /** The token reported no usable decimals, so `amountFormatted` is the amount in base units. */
+  baseUnits?: true;
 }
 
 /**
@@ -40,13 +42,14 @@ export interface AssetDelta {
  * runs for minutes, and `Number(2n ** 200n)` throws `RangeError: Out of memory`. All of that is
  * on the thread rendering a dialog someone is mid-signature on, and a batch only has to *touch*
  * such a contract for it to be measured and formatted. So an out-of-range `decimals` is read the
- * way an unreadable one is: no usable unit, and the row is dropped rather than rendered.
+ * way an unreadable one is: no usable unit, so the row shows the amount in base units.
  */
 const MAX_DECIMALS = 255;
 
 /**
  * Normalize viem's `assetChanges` into the rows the UI renders.
- * Drops zero-diff entries and non-native entries without a usable symbol/decimals.
+ * Drops zero-diff entries and non-native entries without a symbol. A token with no usable
+ * decimals keeps its row, in base units.
  * Addresses in `erc721` are rendered as whole-token counts (viem reports NFT decimals
  * as `1` or `undefined`, which would otherwise show as "0.1" or be dropped).
  */
@@ -64,9 +67,8 @@ export function mapAssetChanges(
     const symbol = isNative ? (c.token.symbol ?? 'ETH') : c.token.symbol;
     const reported = c.token.decimals;
     const usable = reported !== undefined && Number.isInteger(reported) && reported >= 0 && reported <= MAX_DECIMALS;
-    const decimals = isNative ? 18 : isNft ? 0 : usable ? reported : undefined;
+    const decimals = isNative ? 18 : isNft ? 0 : usable ? reported : 0;
 
-    if (decimals === undefined) continue;
     if (!isNative && !symbol) continue;
 
     const magnitude = diff < 0n ? -diff : diff;
@@ -78,6 +80,7 @@ export function mapAssetChanges(
       direction: diff < 0n ? 'out' : 'in',
       amountFormatted: formatUnits(magnitude, decimals),
       isNative,
+      baseUnits: !isNative && !isNft && !usable ? true : undefined,
     });
   }
   return out;

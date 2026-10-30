@@ -291,4 +291,27 @@ describe('AssetPreview bridge receive side for a token read from the chain', () 
     expect(get(out)).toContain('2500000000000000000 base units');
     expect(out).not.toContain('unverified');
   });
+
+  it('says why the amount is in base units when the token was not read', () => {
+    const out = html({ bridge: transferTo({ address: AAPL, known: false }) });
+    expect(get(out)).toContain('In base units: this screen could not read the decimals.');
+  });
+});
+
+describe('AssetPreview simulated rows with unusable decimals', () => {
+  const raw: AssetDelta = { ...usdcOut, decimals: 0, amountFormatted: '1234567', baseUnits: true };
+
+  it('shows the amount in base units, right after it, with the note', async () => {
+    await mount({ assetsOut: [raw] });
+    expect(host.textContent).toContain('\u22121234567 base units');
+    expect(host.textContent).toContain('In base units: this screen could not read the decimals.');
+  });
+
+  it('shows no dollar value for a pinned token whose amount is in base units', async () => {
+    prices.fetch.mockResolvedValue(1);
+    await mount({ assetsIn: [{ ...raw, direction: 'in', amountFormatted: '5000000' }] });
+    await settle();
+    expect(host.textContent).toContain('5000000 base units');
+    expect(host.textContent).not.toContain('$');
+  });
 });

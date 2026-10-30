@@ -40,6 +40,12 @@ function symbolFor(delta: AssetDelta, nativeSymbol: string): string {
   return delta.isNative ? nativeSymbol : (delta.symbol ?? '');
 }
 
+function BaseUnitsNote() {
+  return (
+    <span className="text-muted-foreground text-body-xs">In base units: this screen could not read the decimals.</span>
+  );
+}
+
 function formatUsd(value: number): string {
   if (value < 0.01) return '<$0.01';
   return `$${value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -98,14 +104,16 @@ function AssetRow({
   const sign = prefix ?? (out ? '−' : '+');
   const colorClass = out ? 'text-negative' : 'text-positive';
   const symbol = symbolFor(delta, nativeSymbol);
-  const rounded = formatAssetAmount(delta.amountFormatted);
+  const rounded = delta.baseUnits ? delta.amountFormatted : formatAssetAmount(delta.amountFormatted);
   const hasMore = rounded !== delta.amountFormatted;
-  const usd = price && price > 0 ? Number(delta.amountFormatted) * price : 0;
+  // A base units amount is not a token amount, so no price applies to it.
+  const usd = delta.baseUnits ? 0 : price && price > 0 ? Number(delta.amountFormatted) * price : 0;
 
   const amount = (
     <span className={`text-value break-all text-right font-mono ${colorClass}`}>
       {sign}
       <SubText>{rounded}</SubText>
+      {delta.baseUnits && ' base units'}
     </span>
   );
 
@@ -125,7 +133,7 @@ function AssetRow({
           {!delta.isNative && <TokenAddress address={delta.address} />}
         </div>
       </div>
-      <div className="ml-auto flex flex-none flex-col items-end">
+      <div className={`ml-auto flex flex-col items-end ${delta.baseUnits ? 'min-w-0 text-right' : 'flex-none'}`}>
         {hasMore ? (
           <TooltipProvider delayDuration={0}>
             <Tooltip>
@@ -140,6 +148,7 @@ function AssetRow({
           amount
         )}
         {usd > 0 && <span className="text-muted-foreground text-body-xs">{formatUsd(usd)}</span>}
+        {delta.baseUnits && <BaseUnitsNote />}
       </div>
     </div>
   );
@@ -325,6 +334,7 @@ function BridgeColumns({
         {out.length === 0 && (
           <PlainRow chainId={send.chainId} token={send.token} chain={origin}>
             <span className="text-value text-negative break-all font-mono">−{send.amount.toString()} base units</span>
+            <BaseUnitsNote />
           </PlainRow>
         )}
       </DeltaColumn>
@@ -345,6 +355,7 @@ function BridgeColumns({
               <span className="text-value text-positive break-all font-mono">
                 ≥ <SubText>{`${receive.amount.amount} base units`}</SubText>
               </span>
+              <BaseUnitsNote />
             </PlainRow>
           )}
         </DeltaColumn>

@@ -73,11 +73,30 @@ describe('mapAssetChanges', () => {
     expect(delta).toMatchObject({ decimals: 0, direction: 'out', amountFormatted: '1' });
   });
 
+  it('shows a token with usable decimals, native and an ERC-721 in their own units, not base units', () => {
+    const deltas = mapAssetChanges(
+      [
+        change(USDC, 1_000_000n, { decimals: 6, symbol: 'USDC' }),
+        change(ethAddress, 10n ** 18n, { symbol: 'ETH' }),
+        change(AERO_POS, 1n, { symbol: 'POS' }),
+      ],
+      new Set([AERO_POS.toLowerCase()])
+    );
+
+    expect(deltas.map((d) => [d.amountFormatted, d.baseUnits])).toEqual([
+      ['1', undefined],
+      ['1', undefined],
+      ['1', undefined],
+    ]);
+  });
+
   it('keeps an ERC-721 whose decimals viem could not read at all', () => {
     const changes = [change(AERO_POS, 1n, { symbol: 'AERO-CL-POS' })];
 
-    // Unconfirmed it has no usable unit, so it cannot be rendered as an amount...
-    expect(mapAssetChanges(changes)).toEqual([]);
+    // Unconfirmed it has no usable unit, so it is shown in base units...
+    expect(mapAssetChanges(changes)).toEqual([
+      expect.objectContaining({ amountFormatted: '1', baseUnits: true, direction: 'in' }),
+    ]);
     // ...but ERC-165 makes it a count.
     expect(mapAssetChanges(changes, new Set([AERO_POS.toLowerCase()]))).toEqual([
       expect.objectContaining({ decimals: 0, direction: 'in', amountFormatted: '1' }),
@@ -106,7 +125,7 @@ describe('mapAssetChanges', () => {
     expect(delta).toMatchObject({ isNative: true, decimals: 18, symbol: 'ETH' });
   });
 
-  it('drops a token reporting decimals past a uint8 instead of formatting it', () => {
+  it('shows a token reporting decimals past a uint8 in base units instead of formatting it', () => {
     // viem decodes the `decimals()` word as `uint256` and reports `Number` of it, so a contract
     // picks this number. `formatUnits` pads to that many digits, quadratically: 100_000 blocks
     // the render thread for ~4.5s, 1_000_000 for minutes, `Number(2n ** 200n)` throws
@@ -122,7 +141,15 @@ describe('mapAssetChanges', () => {
       change(USDC, 1n, { decimals: 6.5, symbol: 'FRAC' }),
     ];
 
-    expect(mapAssetChanges(hostile)).toEqual([]);
+    expect(mapAssetChanges(hostile)).toEqual(
+      hostile.map(() => expect.objectContaining({ decimals: 0, amountFormatted: '1', baseUnits: true }))
+    );
+  });
+
+  it('shows a row with no decimals at all in base units, with the note flag', () => {
+    const [delta] = mapAssetChanges([change(USDC, -1_234_567n, { symbol: 'USDC' })]);
+
+    expect(delta).toMatchObject({ amountFormatted: '1234567', direction: 'out', baseUnits: true });
   });
 
   it('still formats the largest decimals a compliant token can declare', () => {
@@ -222,11 +249,11 @@ describe('resolveTokenUnits', () => {
 
     expect(units.erc721.size).toBe(0);
     expect(units.changes[0].token.decimals).toBe(0);
-    // Without the recovery the row is dropped outright — a transfer missing from a signing screen.
+    // Without the recovery the row falls back to base units instead of vanishing from a signing screen.
     expect(mapAssetChanges(units.changes, units.erc721)).toEqual([
       expect.objectContaining({ symbol: 'ZERO', decimals: 0, direction: 'in', amountFormatted: '42' }),
     ]);
-    expect(mapAssetChanges(changes)).toEqual([]);
+    expect(mapAssetChanges(changes)).toEqual([expect.objectContaining({ symbol: 'ZERO', baseUnits: true })]);
   });
 
   it('lets ERC-165 outrank a decimals() answer', async () => {
@@ -302,6 +329,7 @@ describe('resolveTokenUnits', () => {
     expect(units.changes[0].token.decimals).toBeUndefined();
     expect(units.changes[1].token.decimals).toBe(0);
     expect(mapAssetChanges(units.changes, units.erc721)).toEqual([
+      expect.objectContaining({ symbol: 'HUGE', amountFormatted: '42', baseUnits: true }),
       expect.objectContaining({ symbol: 'FINE', decimals: 0, amountFormatted: '7' }),
     ]);
   });
@@ -316,7 +344,9 @@ describe('resolveTokenUnits', () => {
     const units = await resolveTokenUnits(client, [change(ZERO_DEC, 42n, { symbol: 'HUGE' })], BLOCK, BATCH);
 
     expect(units.changes[0].token.decimals).toBeUndefined();
-    expect(mapAssetChanges(units.changes, units.erc721)).toEqual([]);
+    expect(mapAssetChanges(units.changes, units.erc721)).toEqual([
+      expect.objectContaining({ symbol: 'HUGE', amountFormatted: '42', baseUnits: true }),
+    ]);
   });
 
   it('reads return data short of a word as no answer', async () => {
