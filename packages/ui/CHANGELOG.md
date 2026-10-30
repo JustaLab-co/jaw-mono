@@ -1,3 +1,13 @@
+## 1.11.2 (2026-10-30)
+
+### 🩹 Fixes
+
+- **ui:** drop the unverified tag from bridge tokens ([#610](https://github.com/JustaLab-co/jaw-mono/pull/610))
+
+### ❤️ Thank You
+
+- Ghadi @Ghadi8
+
 ## 1.11.1 (2026-10-30)
 
 ### 🩹 Fixes
