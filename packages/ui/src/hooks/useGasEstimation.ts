@@ -371,7 +371,7 @@ export function useGasEstimation({
               isSelectable: estimate.hasSufficientBalance,
             };
           }
-          return token;
+          return { ...token, estimationFailure: undefined };
         });
 
         // Notify parent of updated tokens (use ref to avoid infinite loop)

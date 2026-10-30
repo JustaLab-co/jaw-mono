@@ -622,6 +622,15 @@ describe('useGasEstimation fee-token outcome per ERC-20 result', () => {
       expect(usdcNow()).toMatchObject({ gasCostFormatted: '0.02', isSelectable: true, estimationFailure: undefined });
     });
 
+    it('by a quote that leaves a token unquoted', async () => {
+      await failFirst();
+      // The paymaster quotes USDC, which cannot cover the fee, and no longer quotes USDT.
+      erc20Mock.mockResolvedValueOnce([{ ...usdcEstimate, hasSufficientBalance: false }]);
+      await retry();
+      // A leftover USDT failure would turn this shortfall into "Fee estimation failed".
+      expect(tokensNow.filter((t) => t.estimationFailure)).toEqual([]);
+    });
+
     it.each([
       ['a quote', () => erc20Mock.mockResolvedValueOnce([])],
       ['a prefund shortfall', () => erc20Mock.mockRejectedValueOnce(new Error("AA21 didn't pay prefund"))],
