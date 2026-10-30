@@ -1,6 +1,5 @@
 # [JAW.id](https://jaw.id/)
 
-[![CI](https://github.com/JustaLab-co/jaw-mono/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/JustaLab-co/jaw-mono/actions/workflows/ci.yml)
 [![Coverage](https://github.com/JustaLab-co/jaw-mono/raw/badges/coverage.svg)](https://github.com/JustaLab-co/jaw-mono/actions/workflows/coverage.yml)
 [![@jaw.id/core](https://img.shields.io/npm/v/@jaw.id/core?label=%40jaw.id%2Fcore)](https://www.npmjs.com/package/@jaw.id/core)
 [![@jaw.id/wagmi](https://img.shields.io/npm/v/@jaw.id/wagmi?label=%40jaw.id%2Fwagmi)](https://www.npmjs.com/package/@jaw.id/wagmi)
