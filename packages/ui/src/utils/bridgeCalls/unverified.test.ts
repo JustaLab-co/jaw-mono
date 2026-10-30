@@ -37,16 +37,14 @@ async function read(calls: BridgeCall[], tokens: Record<string, Answer>, order?:
 const answer = (address: string, a: Answer) => ({ [address.toLowerCase()]: a });
 
 describe('given an Across swap that buys a token outside the table', () => {
-  it('when the token answers, then the batch asks for it and shows its amount in its own units, marked unverified', async () => {
+  it('when the token answers, then the batch asks for it and shows its amount in its own units, with a notice', async () => {
     const first = readBridgeBatchWithUnread(contracts, swapToStock, SIGNER);
     expect(first?.unread).toEqual([{ chainId: 4663, address: BOUGHT }]);
 
     const batch = await read(swapToStock, answer(BOUGHT, { symbol: 'AAPL', decimals: 18n }));
     const token = batch?.transfer?.receive?.amount.token;
     expect(token).toEqual({ address: BOUGHT, known: false, unverified: true, symbol: 'AAPL', decimals: 18 });
-    expect(batch?.transfer?.details.find((d) => d.label === 'Fee')?.value).toMatch(
-      /^0\.\d+ AAPL \(unverified\) to JAW$/
-    );
+    expect(batch?.transfer?.details.find((d) => d.label === 'Fee')?.value).toMatch(/^0\.\d+ AAPL to JAW$/);
     expect(batch?.notices).toEqual([
       ...NOT_ACCOUNT,
       `This screen has not verified the token AAPL (${BOUGHT.slice(0, 6)}...${BOUGHT.slice(-4)}). Check it before you confirm.`,
@@ -135,7 +133,7 @@ describe('given a Relay order that pays out a token', () => {
     expect(amount).toMatchObject({ chainId: 1, token: { known: true, symbol: 'EURe', decimals: 18 } });
   });
 
-  it('when it pays a token that answers, then the terms show with the unverified tag, not the order is hidden', async () => {
+  it('when it pays a token that answers, then the terms show with a notice, not the order is hidden', async () => {
     const order = toToken('robinhood', AAPL.toLowerCase(), '2500000000000000000');
     const first = readBridgeBatchWithUnread(contracts, [RELAY_USDC_APPROVE, RELAY_USDC_DEPOSIT], SIGNER);
     expect(first?.unread).toEqual([]);
