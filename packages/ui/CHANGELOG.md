@@ -1,3 +1,17 @@
+## 1.11.1 (2026-10-30)
+
+### 🩹 Fixes
+
+- **ui:** name the dApp when fetching the bridge table ([#611](https://github.com/JustaLab-co/jaw-mono/pull/611))
+
+### 🧱 Updated Dependencies
+
+- Updated @jaw.id/core to 1.10.3
+
+### ❤️ Thank You
+
+- Mariano Aguero @mariano-aguero
+
 ## 1.11.0 (2026-10-30)
 
 ### 🚀 Features
