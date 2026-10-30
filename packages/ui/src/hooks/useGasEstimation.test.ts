@@ -10,6 +10,7 @@ import { createElement, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { act } from 'react';
 import type { Address } from 'viem';
+import fc from 'fast-check';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -537,11 +538,54 @@ describe('useGasEstimation fee-token outcome per ERC-20 result', () => {
     ['an empty message', new Error(''), 'Unknown error'],
     ['a string', 'paymaster unreachable', 'paymaster unreachable'],
     ['undefined', undefined, 'Unknown error'],
+    ['an RPC error object', { code: -32000, message: 'execution reverted: paused' }, 'execution reverted: paused'],
+    ['an object without a message', { code: -32000 }, 'Unknown error'],
+    ['a blank first line', new Error('\n  \nexecution reverted: paused\nVersion: viem'), 'execution reverted: paused'],
+    ['only whitespace', new Error(' \t '), 'Unknown error'],
+    [
+      'control and bidi characters',
+      new Error('reverted:\u0007 \u202Edesrever\u202C ok\u0000'),
+      'reverted: desrever ok',
+    ],
   ])('a rejection with %s still records a readable failure', async (_label, reason, expected) => {
     erc20Mock.mockRejectedValue(reason);
     await mount(ethOk(), [nativeEth(0n), token({})]);
 
     expect(usdcNow().estimationFailure).toBe(expected);
+  });
+
+  it('cuts a very long reason to fit the tooltip', async () => {
+    erc20Mock.mockRejectedValue(new Error(`execution reverted: 0x${'ab'.repeat(5000)}`));
+    await mount(ethOk(), [nativeEth(0n), token({})]);
+
+    const failure = usdcNow().estimationFailure!;
+    expect([...failure]).toHaveLength(160);
+    expect(failure.startsWith('execution reverted: 0xabab')).toBe(true);
+    expect(failure.endsWith('…')).toBe(true);
+  });
+
+  it('records a short, single-line, printable reason for any rejection', async () => {
+    // eslint-disable-next-line no-control-regex
+    const unprintable = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2028\u2029\u2066-\u2069\ufeff]/;
+    const reasons = fc.oneof(
+      fc.anything(),
+      fc.string({ unit: 'binary', maxLength: 400 }),
+      fc.string({ unit: 'binary', maxLength: 400 }).map((m) => new Error(m))
+    );
+    await fc.assert(
+      fc.asyncProperty(reasons, async (reason) => {
+        erc20Mock.mockReset();
+        erc20Mock.mockRejectedValue(reason);
+        await mount(ethOk(), [nativeEth(0n), token({})]);
+        const failure = usdcNow().estimationFailure;
+        act(() => root!.unmount());
+        root = null;
+        // A balance revert is a shortfall and records no failure at all.
+        if (failure === undefined) return true;
+        return failure.trim() !== '' && [...failure].length <= 160 && !unprintable.test(failure);
+      }),
+      { numRuns: 60 }
+    );
   });
 
   // A later round rewrites every field the earlier round set, so the banner follows the latest round.

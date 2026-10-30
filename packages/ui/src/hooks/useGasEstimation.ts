@@ -103,10 +103,23 @@ function isPrefundError(error: unknown): boolean {
   return PREFUND_ERRORS.some((msg) => error.message.toLowerCase().includes(msg.toLowerCase()));
 }
 
-/** The first line of an error, which is the reason viem leads with. */
+/** Longest failure text the fee tooltip shows. */
+const MAX_FAILURE_LENGTH = 160;
+
+// Control and bidi-override characters can hide or reorder the text around them.
+// eslint-disable-next-line no-control-regex
+const UNPRINTABLE = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g;
+
+/** The first non-blank line of an error, which is the reason viem leads with, cut to fit the tooltip. */
 function describeFailure(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error ?? '');
-  return message.split('\n')[0] || 'Unknown error';
+  const message = typeof error === 'string' ? error : (error as { message?: unknown } | null | undefined)?.message;
+  const line = (typeof message === 'string' ? message : '')
+    .split(/[\r\n\u2028\u2029]/)
+    .map((l) => l.replace(UNPRINTABLE, ' ').replace(/\s+/g, ' ').trim())
+    .find(Boolean);
+  if (!line) return 'Unknown error';
+  const chars = [...line];
+  return chars.length > MAX_FAILURE_LENGTH ? `${chars.slice(0, MAX_FAILURE_LENGTH - 1).join('')}…` : line;
 }
 
 // ============================================================================
