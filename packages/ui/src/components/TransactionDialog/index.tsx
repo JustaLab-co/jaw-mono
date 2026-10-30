@@ -215,21 +215,19 @@ export const TransactionDialog = ({
                 />
               </div>
             )}
-            <h2 className="text-foreground text-title-xl truncate pr-9">{title}</h2>
+            <div className="flex items-center gap-2 pr-9">
+              <h2 className="text-foreground text-title-xl min-w-0 truncate">{title}</h2>
+              {bridge && <BridgeAlerts messages={bridge.alerts} />}
+            </div>
             {totalTransactions > 1 && currentTransaction?.description && (
               <p className="text-muted-foreground text-body mt-1">
                 {currentTransaction.action}: {currentTransaction.description}
               </p>
             )}
-            {bridge && <BridgeAlerts messages={bridge.alerts} />}
           </div>
 
           {/* Scrollable body */}
-          <div
-            ref={scrollRef}
-            data-scroll-body
-            className="jaw-scroll min-h-0 flex-1 space-y-3 overflow-y-auto px-6 pb-3 pt-6"
-          >
+          <div ref={scrollRef} className="jaw-scroll min-h-0 flex-1 space-y-3 overflow-y-auto px-6 pb-3 pt-6">
             {/* Native send → one prominent hero amount */}
             {isNativeSend && (
               // The spec sheet frames an ERC-20 supply, so it never measured the native-send hero.

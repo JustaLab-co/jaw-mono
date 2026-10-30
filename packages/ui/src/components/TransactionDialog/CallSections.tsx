@@ -1,6 +1,7 @@
 'use client';
 
 import { Code, TriangleAlert } from 'lucide-react';
+import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover';
 import { AccordionContent, AccordionItem, AccordionTrigger } from '../ui/accordion';
 import { CopyButton } from '../CopyButton';
 import { Eyebrow, PartyRow, Row, ValueAmount } from '../primitives';
@@ -34,7 +35,7 @@ interface StepOverride {
   unreadable?: boolean;
 }
 
-/** Marks an unreadable step in its header. The batch alert line carries the words. */
+/** Marks an unreadable step in its header. The header icon carries the words. */
 function UnreadableMark({ show }: { show: boolean }) {
   if (!show) return null;
   return (
@@ -226,20 +227,25 @@ export function BridgeNotices({ messages }: { messages: readonly string[] }) {
   );
 }
 
-/** One red line per bridge call this screen cannot read, in view with no click. */
+/** A small warning icon in the header. Tap it for what the screen could not read. */
 export function BridgeAlerts({ messages }: { messages: readonly string[] }) {
   if (messages.length === 0) return null;
   return (
-    <div role="alert" aria-label="Unreadable bridge calls" className="mt-2 flex flex-col gap-1">
-      {messages.map((message) => (
-        <p
-          key={message}
-          className="text-destructive text-body-sm border-destructive flex items-start gap-1.5 border-l-2 pl-2 [overflow-wrap:anywhere]"
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          aria-label={messages.join(' ')}
+          className="text-destructive flex-none cursor-pointer border-0 bg-transparent p-0"
         >
-          <TriangleAlert className="mt-0.5 size-3 flex-none" strokeWidth={2} />
-          {message}
-        </p>
-      ))}
-    </div>
+          <TriangleAlert className="size-4" strokeWidth={2} />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent side="bottom" align="start" className="text-body-sm w-64 p-3">
+        {messages.map((message) => (
+          <p key={message}>{message}</p>
+        ))}
+      </PopoverContent>
+    </Popover>
   );
 }
