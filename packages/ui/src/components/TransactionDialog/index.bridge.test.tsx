@@ -94,7 +94,7 @@ const PERIPHERY = '0x97CCDBea4632140639aD5eA9b944aa034eb15fD4';
 const BASE_USDC = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 const RELAY_HIDDEN =
   'Relay keeps the destination chain and the recipient in an order outside this transaction. This screen cannot show them. Confirm only if you started this transfer yourself.';
-const UNREADABLE = 'This screen cannot read this Across call. Check the raw details before you confirm.';
+const UNREADABLE = 'Cannot read this Across call. Check the raw details before you confirm.';
 
 const word = (hex: string) => hex.replace(/^0x/, '').toLowerCase().padStart(64, '0');
 const approve = (spender: string, amount = '989680'): BridgeCall => ({
@@ -167,7 +167,7 @@ const renderLive = async (transactions: BridgeCall[], extra: Extra = {}) => {
 };
 
 const title = (root: HTMLElement) => root.querySelector('h2')?.textContent;
-const red = (root: HTMLElement) => [...root.querySelectorAll('.text-destructive')].map((e) => e.textContent);
+const red = (root: HTMLElement) => [...root.querySelectorAll('p.text-destructive')].map((e) => e.textContent);
 const yellow = (root: HTMLElement) =>
   [...root.querySelectorAll('[role="alert"].bg-warning\\/10 p, [role="alert"] > p')].map((e) => e.textContent);
 const notice = (root: HTMLElement, text: string) =>
@@ -302,10 +302,16 @@ describe('TransactionDialog with a bridge deposit', () => {
     expect(yellow(root)).toContain(`The recipient is not this account: ${SIGNER}.`);
   });
 
-  it('marks a bridge call it cannot read in red, on the batch and on its step', () => {
+  it('marks a bridge call it cannot read with one red alert line, and only a mark on its step', () => {
     const broken = { ...ACROSS_CALLS.prod, data: ACROSS_CALLS.prod.data + '00' };
     const root = render([approve(SPOKE_POOL), broken]);
-    expect(red(root)).toEqual([UNREADABLE, UNREADABLE]);
+    expect(red(root)).toEqual([UNREADABLE]);
+    expect([...root.querySelectorAll('[role="alert"]')].map((e) => e.textContent)).toEqual([UNREADABLE]);
+    const steps = [...root.querySelectorAll('[data-slot="accordion-item"]')];
+    expect(steps).toHaveLength(2);
+    expect(steps.some((step) => step.textContent?.includes('Cannot read'))).toBe(false);
+    expect(steps[1].querySelector('[aria-label="Unreadable call"]')).not.toBeNull();
+    expect(steps[0].querySelector('[aria-label="Unreadable call"]')).toBeNull();
     expect(title(root)).not.toContain('Bridge');
     expect(root.textContent).not.toContain('You get');
   });
@@ -405,7 +411,15 @@ describe('TransactionDialog notices around a bridge deposit', () => {
   it('keeps a red alert above You send', () => {
     const broken = { ...ACROSS_CALLS.prod, data: ACROSS_CALLS.prod.data + '00' };
     const root = render([approve(SPOKE_POOL), broken, RELAY_USDC_DEPOSIT]);
-    expect(before(root.querySelector('.text-destructive'), box(root, 'You send'))).toBe(true);
+    expect(before(root.querySelector('p.text-destructive'), box(root, 'You send'))).toBe(true);
+  });
+
+  it('keeps the alert line when a readable deposit sits beside an approve it cannot read', () => {
+    const odd = { ...RELAY_USDC_APPROVE, data: RELAY_USDC_APPROVE.data + '00' };
+    const root = render([odd, RELAY_USDC_DEPOSIT]);
+    expect(title(root)).toBe('Deposit to Relay');
+    expect(red(root)).toEqual(['Cannot read this Relay call. Check the raw details before you confirm.']);
+    expect(root.querySelectorAll('[role="alert"].flex-col')).toHaveLength(2);
   });
 
   it('shows the deposit count when there is no single transfer to show', () => {

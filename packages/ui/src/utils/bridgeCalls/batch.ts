@@ -36,7 +36,7 @@ type Read = Deposit | BridgeApprove | Unreadable | undefined;
 type Pull = { token: Address; amount: bigint; spender: Address };
 
 export const cannotRead = (provider: BridgeProvider) =>
-  `This screen cannot read this ${PROVIDER_NAME[provider]} call. Check the raw details before you confirm.`;
+  `Cannot read this ${PROVIDER_NAME[provider]} call. Check the raw details before you confirm.`;
 
 export function readBridgeBatch(
   contracts: BridgeContracts,

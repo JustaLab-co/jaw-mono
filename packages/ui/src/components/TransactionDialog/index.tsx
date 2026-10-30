@@ -26,7 +26,7 @@ import { callTitle } from './DecodedCalldata';
 import { resolveBlockReason } from '../../utils/transactionFailure';
 import { allowanceFlag } from '../../utils/allowances';
 import { isBlockingPermissionProblem, PERMISSION_PROBLEM_TEXT } from '../../utils/permissionExecution';
-import { BatchStep, BridgeDetails, BridgeNotices, NAME_SOURCES, SingleCallData } from './CallSections';
+import { BatchStep, BridgeAlerts, BridgeDetails, BridgeNotices, NAME_SOURCES, SingleCallData } from './CallSections';
 import { InlineWarning, PartyRow, Row, ValueAmount } from '../primitives';
 import { NetworkFeeRow } from '../NetworkFeeRow';
 
@@ -221,6 +221,7 @@ export const TransactionDialog = ({
                 {currentTransaction.action}: {currentTransaction.description}
               </p>
             )}
+            {bridge && <BridgeAlerts messages={bridge.alerts} />}
           </div>
 
           {/* Scrollable body */}
@@ -328,12 +329,6 @@ export const TransactionDialog = ({
                 />
               </div>
             )}
-
-            {bridge?.alerts.map((alert) => (
-              <div key={alert} role="alert">
-                <InlineWarning text={alert} />
-              </div>
-            ))}
 
             {/* Asset changes — a native send shows the same information in its hero. */}
             {!isNativeSend && (
