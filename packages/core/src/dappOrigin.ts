@@ -14,3 +14,9 @@ import { store } from './store/index.js';
 export function setDappOrigin(origin: string | undefined): void {
     store.config.set({ dappOrigin: origin });
 }
+
+/** The header that names the dApp on a request keys makes to the proxy, empty when none is set. */
+export function dappOriginHeader(): Record<string, string> {
+    const origin = store.config.get().dappOrigin;
+    return origin ? { 'x-dapp-origin': origin } : {};
+}

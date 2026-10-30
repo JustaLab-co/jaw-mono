@@ -60,6 +60,26 @@ describe('given the bridge table loader', () => {
     expect(String(fetchMock.mock.calls[0][0])).not.toContain('api-key');
   });
 
+  it('when keys acts for a dApp, then the request names it and the proxy serves the live table', async () => {
+    const { setDappOrigin } = await vi.importActual<{ setDappOrigin: (origin?: string) => void }>(
+      '@jaw.id/core/internal'
+    );
+    setDappOrigin('https://dapp.example');
+    fetchMock.mockImplementation(async (_url, init) =>
+      new Headers(init?.headers).get('x-dapp-origin') === 'https://dapp.example'
+        ? answer(tableAt(4))
+        : new Response('{"error":"no dApp named"}', { status: 403 })
+    );
+    await load();
+    expect(currentContracts()).toMatchObject({ version: 4, source: 'live' });
+  });
+
+  it('when no dApp origin is set, then the request carries no dApp header', async () => {
+    fetchMock.mockResolvedValue(answer(tableAt(4)));
+    await load();
+    expect(new Headers(fetchMock.mock.calls[0][1]?.headers).has('x-dapp-origin')).toBe(false);
+  });
+
   it('when a fresh table is held, then asking again within the hour makes no request', async () => {
     fetchMock.mockResolvedValue(answer(tableAt(4)));
     await load('key');

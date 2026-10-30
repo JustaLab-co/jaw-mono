@@ -9,7 +9,7 @@
  * different instance from the one the request path reads, and the header would go
  * missing with nothing failing. A `require` of this path fails loudly instead.
  */
-export { setDappOrigin } from './dappOrigin.js';
+export { setDappOrigin, dappOriginHeader } from './dappOrigin.js';
 
 // Also used by @jaw.id/ui, which runs on dApp pages in app-specific mode. There it
 // adds nothing: only keys sets the origin it reads.
