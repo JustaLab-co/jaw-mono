@@ -23,6 +23,9 @@ bunx nx build @jaw.id/ui
 # Run tests for a package
 bunx nx test @jaw.id/core
 
+# Tests with coverage, as the Coverage workflow runs them on main
+bunx nx run-many -t test --coverage
+
 # Run a single test file
 cd packages/core && bunx vitest run src/path/to/file.test.ts
 
@@ -79,6 +82,8 @@ These hold for every change, however small. A diff that needs to break one is a 
 - **Packaging changes run the published test.** After touching `exports`, `files`, `bin` or a build config of a package in `packages/`, run `bunx nx run published-e2e:e2e`, which installs the three packages from a local registry the way an integrator would.
 
 CI runs `bunx nx affected -t lint test typecheck build api-check e2e`, so a change to core also runs the tests of everything that depends on it. `test` depends on `^build` in `nx.json`, so `nx test` builds the packages it imports first instead of reading a stale local `dist`.
+
+The Coverage workflow runs the affected suites of a PR, and every suite on main, with `--coverage`. Each project's vitest config sets `coverage.thresholds` at its current coverage, so a project that falls below them fails. On a PR it also compares each project against the latest run on main, comments the table, and fails when a metric drops more than 0.1 points, unless the PR has the `coverage-drop-ok` label. Raise a threshold when coverage goes up; never lower one to make a run pass.
 
 ## Architecture
 
