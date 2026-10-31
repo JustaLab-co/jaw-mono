@@ -82,3 +82,25 @@ export function resolveBlockReason({
     !hasSelectablePaymentOption || gasEstimationError === INSUFFICIENT_FUNDS_ERROR || revertCause === 'balance';
   return shortfall ? 'funds' : 'will-fail';
 }
+
+/** The fee-token facts the block reason depends on. */
+interface FeeTokenFacts {
+  isSelectable: boolean;
+  estimationFailure?: string;
+}
+
+/**
+ * The block reason read from the fee-token list, shared by every dialog with a fee row so a
+ * blocked fee reads the same on each. A list that has not loaded yet counts as payable.
+ */
+export function resolveFeeBlock({
+  feeTokens,
+  ...input
+}: Omit<BlockReasonInput, 'hasSelectablePaymentOption' | 'feeEstimationFailure'> & {
+  feeTokens?: FeeTokenFacts[];
+}) {
+  const hasSelectablePaymentOption = !feeTokens?.length || feeTokens.some((t) => t.isSelectable);
+  const feeEstimationFailure = feeTokens?.find((t) => t.estimationFailure)?.estimationFailure;
+  const blockReason = resolveBlockReason({ ...input, hasSelectablePaymentOption, feeEstimationFailure });
+  return { blockReason, hasSelectablePaymentOption, feeEstimationFailure };
+}

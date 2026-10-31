@@ -23,7 +23,7 @@ import { TokenIcon } from '../TokenIcon';
 import { SubText } from '../SubText';
 import { AssetPreview } from './AssetPreview';
 import { callTitle } from './DecodedCalldata';
-import { resolveBlockReason } from '../../utils/transactionFailure';
+import { resolveFeeBlock } from '../../utils/transactionFailure';
 import { allowanceFlag } from '../../utils/allowances';
 import { isBlockingPermissionProblem, PERMISSION_PROBLEM_TEXT } from '../../utils/permissionExecution';
 import { BatchStep, BridgeDetails, BridgeNotices, NAME_SOURCES, SingleCallData } from './CallSections';
@@ -77,10 +77,6 @@ export const TransactionDialog = ({
   const nativeSymbol = nativeToken?.symbol || nativeCurrencySymbol || 'ETH';
   const nativeTokenPrice = useFeeTokenPrice(nativeSymbol);
 
-  // If feeTokens isn't loaded yet (null/undefined/empty), assume there are selectable options.
-  const hasSelectablePaymentOption =
-    !feeTokens || feeTokens.length === 0 ? true : feeTokens.some((t) => t.isSelectable);
-
   // Inside a Radix modal, native wheel scrolling of a nested container can get eaten —
   // drive scrollTop manually (mirrors the signing dialogs).
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -108,10 +104,8 @@ export const TransactionDialog = ({
   });
   const displayWalletAddress = getDisplayAddress(wallet.name, walletAddress);
 
-  const feeEstimationFailure = feeTokens?.find((t) => t.estimationFailure)?.estimationFailure;
-  const blockReason = resolveBlockReason({
-    hasSelectablePaymentOption,
-    feeEstimationFailure,
+  const { blockReason, hasSelectablePaymentOption, feeEstimationFailure } = resolveFeeBlock({
+    feeTokens,
     gasEstimationError,
     sponsored,
     isPayingWithErc20: !!isPayingWithErc20,
