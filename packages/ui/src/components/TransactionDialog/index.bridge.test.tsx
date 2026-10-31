@@ -176,12 +176,21 @@ const renderLive = async (transactions: BridgeCall[], extra: Extra = {}) => {
 const title = (root: HTMLElement) => root.querySelector('h2')?.textContent;
 const red = (root: HTMLElement) => [...root.querySelectorAll('p.text-destructive')].map((e) => e.textContent);
 const yellow = (root: HTMLElement) =>
-  [...root.querySelectorAll('[role="alert"].bg-warning\\/10 p, [role="alert"]:not([aria-label]) > p')].map(
-    (e) => e.textContent
-  );
+  [...root.querySelectorAll('[role="alert"].bg-warning\\/10 p, [role="alert"] > p')].map((e) => e.textContent);
 const notice = (root: HTMLElement, text: string) =>
-  [...root.querySelectorAll('[role="alert"]:not([aria-label]) > p')].find((e) => e.textContent === text);
-const headerIcons = (root: HTMLElement) => [...root.querySelectorAll('h2 + button[aria-label^="Cannot read"]')];
+  [...root.querySelectorAll('[role="alert"] > p')].find((e) => e.textContent === text);
+// Throws without a header, so a "no icon" assertion cannot pass on a missing one.
+const headerIcons = (root: HTMLElement) => {
+  const header = root.querySelector('h2')?.parentElement;
+  if (!header) throw new Error('no dialog header');
+  return [...header.querySelectorAll('button')].filter((b) => b.getAttribute('aria-label')?.startsWith('Cannot read'));
+};
+// Page text a sighted reader sees: the screen reader line is cut out.
+const visibleText = (root: HTMLElement) => {
+  const copy = root.cloneNode(true) as HTMLElement;
+  copy.querySelectorAll('.sr-only').forEach((e) => e.remove());
+  return copy.textContent ?? '';
+};
 const before = (first?: Element | null, second?: Element | null) =>
   !!first && !!second && !!(first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING);
 const box = (root: HTMLElement, heading: string) =>
@@ -615,7 +624,7 @@ describe('TransactionDialog with bridge calls it cannot read', () => {
     const root = render([approve(SPOKE_POOL), tail(ACROSS_CALLS.prod), RELAY_USDC_DEPOSIT, extra]);
     expect(notice(root, `Step 4 calls ${ATTACKER} outside the bridge. Check it before you confirm.`)).toBeDefined();
     expect(labels(root)).toHaveLength(1);
-    expect(root.textContent).not.toContain('Cannot read');
+    expect(visibleText(root)).not.toContain('Cannot read');
   });
 
   it('given a single call it cannot read, then the header icon and its calldata card mark show', () => {
@@ -640,7 +649,7 @@ describe('TransactionDialog with bridge calls it cannot read', () => {
   it('renders no red text line, and the header icon is a labelled button', () => {
     const root = render([approve(SPOKE_POOL), tail(ACROSS_CALLS.prod)]);
     expect(root.querySelector('p.text-destructive')).toBeNull();
-    expect(root.textContent).not.toContain('Cannot read');
+    expect(visibleText(root)).not.toContain('Cannot read');
     const [icon] = headerIcons(root);
     expect(icon.tagName.toLowerCase()).toBe('button');
     expect(icon.querySelector('svg')).not.toBeNull();
@@ -649,6 +658,31 @@ describe('TransactionDialog with bridge calls it cannot read', () => {
     expect(mark?.tagName.toLowerCase()).toBe('svg');
     expect(mark?.getAttribute('role')).toBe('img');
     expect(mark?.closest('button')).not.toBeNull();
+  });
+
+  it('opens a popover with the explanation when the header icon is clicked', async () => {
+    const root = await renderLive([approve(SPOKE_POOL), tail(ACROSS_CALLS.prod)]);
+    const [icon] = headerIcons(root);
+    await act(async () => {
+      icon.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    const popover = document.querySelector('[data-slot="popover-content"]');
+    expect(popover?.textContent).toBe(icon.getAttribute('aria-label'));
+    expect(popover?.textContent).toContain('step 2');
+    expect(popover?.closest('[role="dialog"]')).not.toBeNull();
+  });
+
+  it('announces the unreadable state to screen readers without showing it', () => {
+    const root = render([
+      paid(approve(SPOKE_POOL)),
+      tail(ACROSS_CALLS.prod),
+      paid(RELAY_USDC_APPROVE),
+      tail(RELAY_USDC_DEPOSIT),
+    ]);
+    const status = root.querySelector('[role="status"]');
+    expect(status?.classList.contains('sr-only')).toBe(true);
+    expect(status?.textContent).toBe(`${ACROSS_ONE_TWO} ${RELAY_THREE_FOUR}`);
+    expect(render([approve(SPOKE_POOL), ACROSS_CALLS.prod]).querySelector('[role="status"]')).toBeNull();
   });
 
   type Kind = { call: BridgeCall; unreadable?: 'across' | 'relay' };

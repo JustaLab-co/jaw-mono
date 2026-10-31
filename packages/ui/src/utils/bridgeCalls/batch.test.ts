@@ -546,7 +546,7 @@ describe('given a bridge deposit and calls outside the bridge', () => {
     expect(batch?.notices.filter((notice) => notice === RELAY_HIDDEN)).toHaveLength(1);
   });
 
-  it('when two calls cannot be read the same way, then the red alert shows once and its steps both carry it', () => {
+  it('when two calls cannot be read the same way, then one alert names both steps and each step is marked unreadable', () => {
     const bad = { ...ACROSS_CALLS.prod, data: ACROSS_CALLS.prod.data + '00' };
     const batch = readBridgeBatch(contracts, [bad, bad], SIGNER);
     expect(batch?.alerts).toEqual([CANNOT_READ_ACROSS_BOTH]);
