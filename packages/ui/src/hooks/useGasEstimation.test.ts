@@ -579,6 +579,11 @@ describe('useGasEstimation fee-token outcome per ERC-20 result', () => {
     ['only whitespace', new Error(' \t '), 'Unknown error'],
     ['tabs between words', new Error('execution\treverted'), 'execution reverted'],
     [
+      'invisible format characters',
+      new Error('reverted:\u00ad \u2060paused\u061c\u180e now\u{e0041}'),
+      'reverted: paused now',
+    ],
+    [
       'control and bidi characters',
       new Error('reverted:\u0007 \u202Edesrever\u202C ok\u0000'),
       'reverted: desrever ok',
@@ -609,12 +614,16 @@ describe('useGasEstimation fee-token outcome per ERC-20 result', () => {
   });
 
   it('records a short, single-line, printable reason for any rejection', async () => {
-    // eslint-disable-next-line no-control-regex
-    const unprintable = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2028\u2029\u2066-\u2069\ufeff]/;
+    // Any control, format, line or paragraph separator would hide or reorder the text around it.
+    const unprintable = /[\p{C}\p{Zl}\p{Zp}]/u;
+    const hidden = ['\u00ad', '\u061c', '\u180e', '\u2060', '\u2064', '\u202e', '\ufeff', '\u{e0041}', '\u0007'];
+    const text = fc
+      .array(fc.oneof(fc.string({ unit: 'binary', maxLength: 40 }), fc.constantFrom(...hidden)), { maxLength: 12 })
+      .map((parts) => parts.join(''));
     const reasons = fc.oneof(
       fc.anything(),
-      fc.string({ unit: 'binary', maxLength: 400 }),
-      fc.string({ unit: 'binary', maxLength: 400 }).map((m) => new Error(m))
+      text,
+      text.map((m) => new Error(m))
     );
     await fc.assert(
       fc.asyncProperty(reasons, async (reason) => {

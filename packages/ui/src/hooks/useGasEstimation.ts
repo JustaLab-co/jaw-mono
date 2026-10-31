@@ -106,9 +106,9 @@ function isPrefundError(error: unknown): boolean {
 /** Longest failure text the fee tooltip shows. */
 const MAX_FAILURE_LENGTH = 160;
 
-// Control and bidi-override characters can hide or reorder the text around them.
-// eslint-disable-next-line no-control-regex
-const UNPRINTABLE = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g;
+// Control, format (bidi overrides, zero-width and tag characters) and unassigned code points can
+// hide or reorder the text around them.
+const UNPRINTABLE = /\p{C}/gu;
 
 /** The first non-blank line of an error, which is the reason viem leads with, cut to fit the tooltip. */
 function describeFailure(error: unknown): string {
