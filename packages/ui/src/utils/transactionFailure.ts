@@ -69,7 +69,11 @@ export interface BlockReasonInput {
   feeEstimationFailure?: string;
 }
 
-/** Funding outranks a revert: "add funds" is actionable, and a shortfall usually caused the revert. */
+/**
+ * Funding outranks a revert: "add funds" is actionable, and a shortfall usually caused the revert.
+ * A funded token that failed to estimate outranks a shortfall that only the fee shows, because
+ * that token might pay once the estimation works.
+ */
 export function resolveBlockReason({
   hasSelectablePaymentOption,
   gasEstimationError,
@@ -81,12 +85,12 @@ export function resolveBlockReason({
   const gasError = !!gasEstimationError && !sponsored && !isPayingWithErc20;
   if (hasSelectablePaymentOption && !gasError) return null;
 
-  // The unselectable token has a balance, so "add funds" would be the wrong remedy.
-  if (!hasSelectablePaymentOption && feeEstimationFailure && revertCause !== 'balance') return 'estimation-failed';
+  if (revertCause === 'balance') return 'funds';
 
-  const shortfall =
-    !hasSelectablePaymentOption || gasEstimationError === INSUFFICIENT_FUNDS_ERROR || revertCause === 'balance';
-  return shortfall ? 'funds' : 'will-fail';
+  // No option can pay, or the ETH leg fell short of the prefund (dust ETH stays selectable).
+  const feeShort = !hasSelectablePaymentOption || gasEstimationError === INSUFFICIENT_FUNDS_ERROR;
+  if (feeShort && feeEstimationFailure) return 'estimation-failed';
+  return feeShort ? 'funds' : 'will-fail';
 }
 
 /** The fee-token facts the block reason depends on. */

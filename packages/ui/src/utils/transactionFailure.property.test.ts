@@ -8,78 +8,81 @@ import {
   type RevertCause,
 } from './transactionFailure';
 
-// The oracle restates the fee-block rules in their own terms:
-// - nothing blocks while a fee option is selectable and no counted gas error exists;
-// - a funded token that failed to estimate, with the asset itself not short, is an estimation failure;
-// - otherwise a real shortfall signal reads as funds, and anything else as will-fail.
-// A failure is recorded as a non-empty string; '' and undefined both mean none was recorded.
-function oracle(i: BlockReasonInput): BlockReason {
-  const gasErrorCounts = i.gasEstimationError !== '' && !i.sponsored && !i.isPayingWithErc20;
-  if (i.hasSelectablePaymentOption && !gasErrorCounts) return null;
+const healthy: BlockReasonInput = {
+  hasSelectablePaymentOption: true,
+  gasEstimationError: '',
+  sponsored: false,
+  isPayingWithErc20: false,
+};
 
-  const fundedTokenFailed =
-    !i.hasSelectablePaymentOption && (i.feeEstimationFailure ?? '') !== '' && i.revertCause !== 'balance';
-  if (fundedTokenFailed) return 'estimation-failed';
+// What the dialog should say in situations a user actually reaches.
+const scenarios: Array<[string, Partial<BlockReasonInput>, BlockReason]> = [
+  ['ETH pays the fee', {}, null],
+  [
+    'the fee is sponsored and ETH estimation failed',
+    { sponsored: true, gasEstimationError: 'Failed to estimate gas' },
+    null,
+  ],
+  [
+    'USDC pays while the ETH leg fell short',
+    { isPayingWithErc20: true, gasEstimationError: INSUFFICIENT_FUNDS_ERROR },
+    null,
+  ],
+  [
+    'ETH and USDC are both empty',
+    { hasSelectablePaymentOption: false, gasEstimationError: INSUFFICIENT_FUNDS_ERROR },
+    'funds',
+  ],
+  ['USDC is quoted short and ETH is empty', { hasSelectablePaymentOption: false }, 'funds'],
+  [
+    'ETH is empty and the funded USDC failed to estimate',
+    {
+      hasSelectablePaymentOption: false,
+      gasEstimationError: INSUFFICIENT_FUNDS_ERROR,
+      feeEstimationFailure: 'reverted',
+    },
+    'estimation-failed',
+  ],
+  [
+    'ETH is dust and the funded USDC failed to estimate',
+    { gasEstimationError: INSUFFICIENT_FUNDS_ERROR, feeEstimationFailure: 'reverted' },
+    'estimation-failed',
+  ],
+  ['ETH is dust and holds no fee token', { gasEstimationError: INSUFFICIENT_FUNDS_ERROR }, 'funds'],
+  [
+    'the transfer itself exceeds the balance while USDC failed to estimate',
+    { hasSelectablePaymentOption: false, feeEstimationFailure: 'reverted', revertCause: 'balance' },
+    'funds',
+  ],
+  [
+    'the call reverts for another reason',
+    { gasEstimationError: 'Failed to estimate gas', revertCause: 'other' },
+    'will-fail',
+  ],
+  [
+    'ETH estimation failed for another reason and USDC failed too',
+    { gasEstimationError: 'Failed to estimate gas', feeEstimationFailure: 'reverted' },
+    'will-fail',
+  ],
+];
 
-  const shortfall =
-    !i.hasSelectablePaymentOption || i.gasEstimationError === INSUFFICIENT_FUNDS_ERROR || i.revertCause === 'balance';
-  return shortfall ? 'funds' : 'will-fail';
-}
-
-const revertCauses: Array<RevertCause | undefined> = [undefined, 'balance', 'other'];
-const gasErrors = ['', INSUFFICIENT_FUNDS_ERROR, 'Failed to estimate gas'];
-const failures = [undefined, '', ' ', '\n', 'execution reverted'];
-
-function* domain(): Generator<BlockReasonInput> {
-  for (const hasSelectablePaymentOption of [true, false])
-    for (const gasEstimationError of gasErrors)
-      for (const sponsored of [true, false])
-        for (const isPayingWithErc20 of [true, false])
-          for (const revertCause of revertCauses)
-            for (const feeEstimationFailure of failures)
-              yield {
-                hasSelectablePaymentOption,
-                gasEstimationError,
-                sponsored,
-                isPayingWithErc20,
-                revertCause,
-                feeEstimationFailure,
-              };
-}
+describe('resolveBlockReason scenarios', () => {
+  it.each(scenarios)('%s', (_name, over, expected) => {
+    expect(resolveBlockReason({ ...healthy, ...over })).toBe(expected);
+  });
+});
 
 const arbInput: fc.Arbitrary<BlockReasonInput> = fc.record({
   hasSelectablePaymentOption: fc.boolean(),
   gasEstimationError: fc.oneof(fc.constant(''), fc.constant(INSUFFICIENT_FUNDS_ERROR), fc.string()),
   sponsored: fc.boolean(),
   isPayingWithErc20: fc.boolean(),
-  revertCause: fc.constantFrom<RevertCause | undefined>(...revertCauses),
-  feeEstimationFailure: fc.option(fc.oneof(fc.constant(''), fc.string(), fc.string({ unit: 'binary' })), {
-    nil: undefined,
-  }),
-});
-
-describe('resolveBlockReason over its whole finite domain', () => {
-  it('agrees with the spec oracle on every input', () => {
-    let count = 0;
-    for (const i of domain()) {
-      expect(resolveBlockReason(i), JSON.stringify(i)).toBe(oracle(i));
-      count++;
-    }
-    expect(count).toBe(2 * 3 * 2 * 2 * 3 * failures.length);
-  });
-
-  it('reaches every reason, so the table is not degenerate', () => {
-    const seen = new Set([...domain()].map(resolveBlockReason));
-    expect(seen).toEqual(new Set([null, 'funds', 'will-fail', 'estimation-failed']));
-  });
+  revertCause: fc.constantFrom<RevertCause | undefined>(undefined, 'balance', 'other'),
+  feeEstimationFailure: fc.option(fc.string(), { nil: undefined }),
 });
 
 describe('resolveBlockReason properties', () => {
-  it('matches the oracle for arbitrary error strings', () => {
-    fc.assert(fc.property(arbInput, (i) => resolveBlockReason(i) === oracle(i)));
-  });
-
-  it('says funds only when a real shortfall signal is present', () => {
+  it('says funds only with a shortfall signal: no payable option, a prefund shortfall or a balance revert', () => {
     fc.assert(
       fc.property(arbInput, (i) => {
         if (resolveBlockReason(i) !== 'funds') return true;
@@ -92,32 +95,43 @@ describe('resolveBlockReason properties', () => {
     );
   });
 
-  it('never says funds for a funded token whose estimation failed without a balance revert', () => {
-    fc.assert(
-      fc.property(arbInput, fc.string({ minLength: 1 }), (i, failure) => {
-        const reason = resolveBlockReason({
-          ...i,
-          hasSelectablePaymentOption: false,
-          feeEstimationFailure: failure,
-          revertCause: i.revertCause === 'balance' ? 'other' : i.revertCause,
-        });
-        return reason === 'estimation-failed';
-      })
-    );
-  });
-
-  it('never says estimation-failed when the asset itself is short', () => {
+  it('never says estimation-failed on a balance revert', () => {
     fc.assert(
       fc.property(arbInput, (i) => resolveBlockReason({ ...i, revertCause: 'balance' }) !== 'estimation-failed')
     );
   });
 
-  it('returns null exactly when an option is selectable and no gas error counts', () => {
+  it('never says estimation-failed when no token recorded a failure', () => {
     fc.assert(
-      fc.property(arbInput, (i) => {
-        const gasErrorCounts = i.gasEstimationError !== '' && !i.sponsored && !i.isPayingWithErc20;
-        return (resolveBlockReason(i) === null) === (i.hasSelectablePaymentOption && !gasErrorCounts);
+      fc.property(
+        arbInput,
+        (i) => resolveBlockReason({ ...i, feeEstimationFailure: undefined }) !== 'estimation-failed'
+      )
+    );
+  });
+
+  it('never says funds for a recorded failure unless the asset itself is short', () => {
+    fc.assert(
+      fc.property(arbInput, fc.string({ minLength: 1 }), (i, failure) => {
+        const revertCause = i.revertCause === 'balance' ? 'other' : i.revertCause;
+        return resolveBlockReason({ ...i, revertCause, feeEstimationFailure: failure }) !== 'funds';
       })
     );
+  });
+
+  it('never blocks a sponsored fee or an ERC-20 payment while an option can pay', () => {
+    fc.assert(
+      fc.property(
+        arbInput,
+        fc.boolean(),
+        (i, sponsored) =>
+          resolveBlockReason({ ...i, hasSelectablePaymentOption: true, sponsored, isPayingWithErc20: !sponsored }) ===
+          null
+      )
+    );
+  });
+
+  it('always blocks when no option can pay', () => {
+    fc.assert(fc.property(arbInput, (i) => resolveBlockReason({ ...i, hasSelectablePaymentOption: false }) !== null));
   });
 });

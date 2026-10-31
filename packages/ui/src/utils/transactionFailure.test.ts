@@ -127,6 +127,18 @@ describe('resolveBlockReason', () => {
     ).toBe('estimation-failed');
   });
 
+  it('reports estimation-failed when dust ETH is selectable but short of the prefund', () => {
+    expect(
+      resolveBlockReason(
+        input({
+          hasSelectablePaymentOption: true,
+          gasEstimationError: INSUFFICIENT_FUNDS_ERROR,
+          feeEstimationFailure: 'execution reverted',
+        })
+      )
+    ).toBe('estimation-failed');
+  });
+
   it('keeps funds when the asset itself is short, whatever the estimation said', () => {
     expect(
       resolveBlockReason(

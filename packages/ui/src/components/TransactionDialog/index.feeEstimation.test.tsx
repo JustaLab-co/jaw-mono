@@ -18,7 +18,8 @@ const eth = (balance: bigint): FeeTokenOption => ({
   balance,
   balanceFormatted: '0',
   isNative: true,
-  isSelectable: false,
+  // The producer offers native whenever it holds any balance.
+  isSelectable: balance > 0n,
 });
 
 const usdc = (over: Partial<FeeTokenOption> = {}): FeeTokenOption => ({
@@ -62,6 +63,16 @@ describe('TransactionDialog fee estimation failure', () => {
     expect(html).not.toContain('Insufficient');
     expect(html).toContain('Fee estimation failed');
     expect(html).not.toContain('Add funds');
+  });
+
+  it('does not claim insufficient funds when ETH is dust and a funded token failed to estimate', () => {
+    // A few wei make ETH selectable, but its leg still ends in a prefund shortfall.
+    const html = render([
+      eth(5n),
+      usdc({ gasCostFormatted: 'Estimation failed', estimationFailure: 'execution reverted' }),
+    ]);
+    expect(html).not.toContain('Insufficient');
+    expect(html).toContain('Fee estimation failed');
   });
 
   it('offers a retry when the caller can re-run the estimation', () => {

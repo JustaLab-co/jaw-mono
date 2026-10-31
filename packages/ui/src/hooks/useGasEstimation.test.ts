@@ -690,6 +690,19 @@ describe('useGasEstimation fee-token outcome per ERC-20 result', () => {
     });
   });
 
+  it('dust ETH short of the prefund does not hide a funded token that failed to estimate', async () => {
+    erc20Mock.mockRejectedValue(new Error('execution reverted: Across quote expired'));
+    await mount(
+      makeAccount(async () => {
+        throw new Error("AA21 didn't pay prefund");
+      }),
+      [nativeEth(5n), token({})]
+    );
+
+    expect(tokensNow.find((t) => t.isNative)?.isSelectable).toBe(true);
+    expect(blockNow()).toBe('estimation-failed');
+  });
+
   // A round that throws before its legs run still replaces what the previous round recorded.
   describe('a round that throws before estimating', () => {
     let accountError: unknown;
