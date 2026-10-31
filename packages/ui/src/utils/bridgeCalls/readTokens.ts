@@ -1,4 +1,4 @@
-import { hexToString, parseAbi, type Client } from 'viem';
+import { BaseError, hexToString, parseAbi, type Client } from 'viem';
 import { readContract } from 'viem/actions';
 import { readKey, type TokenReads } from './table';
 import type { TokenRef } from './view';
@@ -14,10 +14,21 @@ const PRINTABLE_SYMBOL = /^[\x20-\x7E]{1,16}$/;
 
 type Read = { symbol: string; decimals: number };
 
+// A bytes32 answer reaches the string decoder as bytes it cannot read, and these are how that fails.
+const DECODE_ERRORS = ['AbiDecodingDataSizeTooSmallError', 'PositionOutOfBoundsError', 'IntegerOutOfRangeError'];
+
+function isDecodeError(e: unknown): boolean {
+  return (
+    e instanceof BaseError &&
+    e.walk((cause) => cause instanceof BaseError && DECODE_ERRORS.includes(cause.name)) !== null
+  );
+}
+
 async function readSymbol(client: Client, address: TokenRef['address']): Promise<string> {
   try {
     return await readContract(client, { address, abi: ERC20_ABI, functionName: 'symbol' });
-  } catch {
+  } catch (e) {
+    if (!isDecodeError(e)) throw e;
     const word = await readContract(client, { address, abi: BYTES32_SYMBOL_ABI, functionName: 'symbol' });
     return hexToString(word, { size: 32 });
   }

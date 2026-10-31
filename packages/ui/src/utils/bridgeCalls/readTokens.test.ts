@@ -23,6 +23,20 @@ describe('given tokens outside the pinned table', () => {
     expect(await readOne({ symbol: 'USDC', decimals: 6n })).toEqual({ symbol: 'USDC', decimals: 6 });
   });
 
+  it('when symbol() reverts, then the bytes32 form is not asked', async () => {
+    const asked: string[] = [];
+    const node = nodeFor(answers({ symbol: 'AAPL', decimals: 18n, revert: 'symbol' }), asked);
+    await readTokens([{ chainId: 4663, address: AAPL }], node);
+    expect(asked.filter((q) => q.endsWith(SYMBOL))).toHaveLength(1);
+  });
+
+  it('when the string decode fails, then the bytes32 form is asked', async () => {
+    const asked: string[] = [];
+    const node = nodeFor(answers({ symbol: 'MKR', decimals: 18n, bytes32: true }), asked);
+    await readTokens([{ chainId: 4663, address: AAPL }], node);
+    expect(asked.filter((q) => q.endsWith(SYMBOL))).toHaveLength(2);
+  });
+
   it('when the symbol is a bytes32 word, then it is decoded without its null bytes', async () => {
     expect(await readOne({ symbol: 'MKR', decimals: 18n, bytes32: true })).toEqual({ symbol: 'MKR', decimals: 18 });
   });
