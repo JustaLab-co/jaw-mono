@@ -121,6 +121,17 @@ function describeFailure(error: unknown): string {
   return chars.length > MAX_FAILURE_LENGTH ? `${chars.slice(0, MAX_FAILURE_LENGTH - 1).join('')}…` : line;
 }
 
+/** A fee token with no estimate behind it: nothing to show, and not selectable. */
+function unpriced(token: FeeTokenOption): FeeTokenOption {
+  return {
+    ...token,
+    estimationFailure: undefined,
+    gasCostFormatted: undefined,
+    gasCostMaxFormatted: undefined,
+    isSelectable: false,
+  };
+}
+
 // ============================================================================
 // Hook Implementation
 // ============================================================================
@@ -348,29 +359,17 @@ export function useGasEstimation({
         updatedFeeTokens = currentFeeTokens.map((token) => {
           if (token.isNative) return token;
 
-          // Tokens with 0 balance are not selectable (can't pay gas fees)
-          if (token.balance === 0n) {
-            return {
-              ...token,
-              estimationFailure: undefined,
-              gasCostFormatted: undefined, // No estimate available
-              gasCostMaxFormatted: undefined,
-              isSelectable: false,
-            };
-          }
-
           const estimate = erc20Estimates.find((e) => e.tokenAddress.toLowerCase() === token.address.toLowerCase());
+          // An empty token is never estimated, and one the paymaster left out has nothing proven.
+          if (token.balance === 0n || !estimate) return unpriced(token);
 
-          if (estimate) {
-            return {
-              ...token,
-              estimationFailure: undefined,
-              gasCostFormatted: estimate.tokenCostFormatted,
-              gasCostMaxFormatted: estimate.tokenCostMaxFormatted,
-              isSelectable: estimate.hasSufficientBalance,
-            };
-          }
-          return { ...token, estimationFailure: undefined };
+          return {
+            ...token,
+            estimationFailure: undefined,
+            gasCostFormatted: estimate.tokenCostFormatted,
+            gasCostMaxFormatted: estimate.tokenCostMaxFormatted,
+            isSelectable: estimate.hasSufficientBalance,
+          };
         });
 
         // Notify parent of updated tokens (use ref to avoid infinite loop)
@@ -385,16 +384,7 @@ export function useGasEstimation({
           updatedFeeTokens = currentFeeTokens.map((token) => {
             if (token.isNative) return token;
 
-            // Tokens with 0 balance are not selectable
-            if (token.balance === 0n) {
-              return {
-                ...token,
-                estimationFailure: undefined,
-                gasCostFormatted: undefined,
-                gasCostMaxFormatted: undefined,
-                isSelectable: false,
-              };
-            }
+            if (token.balance === 0n) return unpriced(token);
 
             // Try to extract the required amount from the error message
             // Format: "X.XXX USDC required but sender has Y USDC"
@@ -404,13 +394,7 @@ export function useGasEstimation({
               gasCostFormatted = match[1]; // Just the amount, symbol is already shown
             }
 
-            return {
-              ...token,
-              estimationFailure: undefined,
-              gasCostFormatted,
-              gasCostMaxFormatted: undefined,
-              isSelectable: false,
-            };
+            return { ...unpriced(token), gasCostFormatted };
           });
         } else {
           // Unexpected error - log it and show estimation failed
@@ -421,24 +405,8 @@ export function useGasEstimation({
           updatedFeeTokens = currentFeeTokens.map((token) => {
             if (token.isNative) return token;
 
-            // Tokens with 0 balance - just mark as not selectable without error message
-            if (token.balance === 0n) {
-              return {
-                ...token,
-                estimationFailure: undefined,
-                gasCostFormatted: undefined,
-                gasCostMaxFormatted: undefined,
-                isSelectable: false,
-              };
-            }
-
-            return {
-              ...token,
-              gasCostFormatted: 'Estimation failed',
-              gasCostMaxFormatted: undefined,
-              isSelectable: false,
-              estimationFailure,
-            };
+            if (token.balance === 0n) return unpriced(token);
+            return { ...unpriced(token), gasCostFormatted: 'Estimation failed', estimationFailure };
           });
         }
         onFeeTokensUpdateRef.current?.(updatedFeeTokens);

@@ -687,6 +687,46 @@ describe('useGasEstimation fee-token outcome per ERC-20 result', () => {
     });
   });
 
+  // A token the paymaster leaves out of a quote is unproven, whatever an earlier round said of it.
+  describe('a funded token missing from the quote', () => {
+    const ethShort = () =>
+      makeAccount(async () => {
+        throw new Error("AA21 didn't pay prefund");
+      });
+    const usdtNow = () => tokensNow.find((t) => t.symbol === 'USDT')!;
+    const quoteOnlyShortUsdc = async () => {
+      erc20Mock.mockResolvedValueOnce([{ ...usdcEstimate, hasSufficientBalance: false }]);
+      await act(async () => hook.refetch());
+      await flush();
+    };
+
+    it('drops the failure text an earlier round left on it', async () => {
+      erc20Mock.mockRejectedValueOnce(new Error('execution reverted'));
+      await mount(ethShort(), [nativeEth(0n), token({}), token({ symbol: 'USDT', address: USDT })]);
+      expect(blockNow()).toBe('estimation-failed');
+
+      await quoteOnlyShortUsdc();
+
+      expect(blockNow()).toBe('funds');
+      expect(usdtNow()).toMatchObject({
+        isSelectable: false,
+        gasCostFormatted: undefined,
+        estimationFailure: undefined,
+      });
+    });
+
+    it('is no longer offered after an earlier round quoted it', async () => {
+      erc20Mock.mockResolvedValueOnce([usdcEstimate, usdtEstimate]);
+      await mount(ethShort(), [nativeEth(0n), token({}), token({ symbol: 'USDT', address: USDT })]);
+      expect(usdtNow().isSelectable).toBe(true);
+
+      await quoteOnlyShortUsdc();
+
+      expect(usdtNow()).toMatchObject({ isSelectable: false, gasCostFormatted: undefined });
+      expect(blockNow()).toBe('funds');
+    });
+  });
+
   describe('ordering', () => {
     type Deferred<T> = { promise: Promise<T>; resolve: (v: T) => void; reject: (e: unknown) => void };
     const deferred = <T>(): Deferred<T> => {
