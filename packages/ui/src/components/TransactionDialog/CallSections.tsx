@@ -231,21 +231,27 @@ export function BridgeNotices({ messages }: { messages: readonly string[] }) {
 export function BridgeAlerts({ messages }: { messages: readonly string[] }) {
   if (messages.length === 0) return null;
   return (
-    <Popover>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          aria-label={messages.join(' ')}
-          className="text-destructive flex-none cursor-pointer border-0 bg-transparent p-0"
-        >
-          <TriangleAlert className="size-4" strokeWidth={2} />
-        </button>
-      </PopoverTrigger>
-      <PopoverContent side="bottom" align="start" className="text-body-sm w-64 p-3">
-        {messages.map((message) => (
-          <p key={message}>{message}</p>
-        ))}
-      </PopoverContent>
-    </Popover>
+    <>
+      <Popover>
+        <PopoverTrigger asChild>
+          {/* p-1 -m-1 grows the tap area without moving the icon. */}
+          <button
+            type="button"
+            aria-label={messages.join(' ')}
+            className="text-destructive -m-1 flex-none cursor-pointer border-0 bg-transparent p-1"
+          >
+            <TriangleAlert className="size-4" strokeWidth={2} />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent side="bottom" align="start" className="text-body-sm w-64 p-3">
+          {messages.map((message) => (
+            <p key={message}>{message}</p>
+          ))}
+        </PopoverContent>
+      </Popover>
+      <span role="status" className="sr-only">
+        {messages.join(' ')}
+      </span>
+    </>
   );
 }

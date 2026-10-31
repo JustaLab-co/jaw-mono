@@ -35,15 +35,14 @@ type Deposit = AcrossDeposit | RelayDeposit;
 type Read = Deposit | BridgeApprove | Unreadable | undefined;
 type Pull = { token: Address; amount: bigint; spender: Address };
 
-const listed = (steps: number[]) =>
-  steps.length === 1 ? `${steps[0]}` : `${steps.slice(0, -1).join(', ')} and ${steps[steps.length - 1]}`;
-
 // A lone call has no step number on screen, so the line only names the provider.
-export function cannotRead(provider: BridgeProvider, steps: number[], batchSize: number): string {
+function cannotRead(provider: BridgeProvider, steps: number[], batchSize: number): string {
   const name = PROVIDER_NAME[provider];
   if (batchSize === 1) return `Cannot read this ${name} call. Check its raw details before you confirm.`;
-  const many = steps.length > 1;
-  return `Cannot read the ${name} ${many ? 'calls in steps' : 'call in step'} ${listed(steps)}. Check ${many ? 'their' : 'its'} raw details before you confirm.`;
+  if (steps.length === 1)
+    return `Cannot read the ${name} call in step ${steps[0]}. Check its raw details before you confirm.`;
+  const listed = `${steps.slice(0, -1).join(', ')} and ${steps[steps.length - 1]}`;
+  return `Cannot read the ${name} calls in steps ${listed}. Check their raw details before you confirm.`;
 }
 
 function unreadableAlerts(reads: Read[]): string[] {
