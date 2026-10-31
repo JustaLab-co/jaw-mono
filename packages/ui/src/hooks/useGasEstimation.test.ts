@@ -477,6 +477,7 @@ describe('useGasEstimation fee-token outcome per ERC-20 result', () => {
     erc20Mock.mockResolvedValue([usdcEstimate]);
     let result!: UseGasEstimationResult;
     const account = ethOk();
+    account.getSmartAccountFor = vi.fn(account.getSmartAccountFor);
     const feeTokens = [nativeEth(10n ** 18n), token({})];
     function Bare() {
       result = useGasEstimation({ account, transactionCalls: CALLS, chainId: 84532, apiKey: 'k', feeTokens });
@@ -492,6 +493,11 @@ describe('useGasEstimation fee-token outcome per ERC-20 result', () => {
     await act(async () => result.refetch());
     await flush();
     expect(result.gasEstimationError).toBe('');
+
+    vi.mocked(account.getSmartAccountFor).mockRejectedValueOnce(new Error('lookup timed out'));
+    await act(async () => result.refetch());
+    await flush();
+    expect(result.gasEstimationError).toBe('Failed to estimate gas');
   });
 
   it('prefund error: funded tokens read Insufficient, empty ones carry nothing, native is untouched', async () => {
@@ -740,6 +746,7 @@ describe('useGasEstimation fee-token outcome per ERC-20 result', () => {
       await failThenThrow(new Error('smart account lookup timed out'));
 
       expect(usdcNow()).toMatchObject({ isSelectable: false, estimationFailure: 'smart account lookup timed out' });
+      expect(hook.gasEstimationError).toBe('Failed to estimate gas');
       expect(blockNow()).toBe('estimation-failed');
     });
 
@@ -747,7 +754,33 @@ describe('useGasEstimation fee-token outcome per ERC-20 result', () => {
       await failThenThrow(new Error('ERC20: transfer amount exceeds balance'));
 
       expect(usdcNow().estimationFailure).toBeUndefined();
+      expect(hook.gasEstimationError).toBe('Insufficient funds');
       expect(blockNow()).toBe('funds');
+    });
+
+    it('leaves the newer round alone when it throws late', async () => {
+      let throwLate!: () => void;
+      accountError = undefined;
+      erc20Mock.mockResolvedValue([usdcEstimate]);
+      const late = {
+        ...account,
+        getSmartAccountFor: () =>
+          new Promise((_resolve, reject) => (throwLate = () => reject(new Error('lookup timed out')))),
+      } as unknown as Account;
+      root = createRoot(document.createElement('div'));
+      await act(async () =>
+        root!.render(createElement(Probe, { account: late, initialTokens: [nativeEth(0n), token({})] }))
+      );
+      const first = throwLate;
+      await act(async () => root!.render(createElement(Probe, { account, initialTokens: [] })));
+      await flush();
+      expect(usdcNow()).toMatchObject({ isSelectable: true, estimationFailure: undefined });
+
+      await act(async () => first());
+      await flush();
+
+      expect(usdcNow()).toMatchObject({ isSelectable: true, estimationFailure: undefined });
+      expect(hook.gasEstimationError).toBe('');
     });
   });
 

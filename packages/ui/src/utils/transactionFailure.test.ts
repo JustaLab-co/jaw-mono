@@ -3,6 +3,7 @@ import {
   INSUFFICIENT_FUNDS_ERROR,
   classifyRevert,
   resolveBlockReason,
+  resolveFeeBlock,
   type BlockReasonInput,
 } from './transactionFailure';
 
@@ -220,5 +221,27 @@ describe('prefund shortfall vs the call reverting on its own terms', () => {
     'transfer amount exceeds balance',
   ])('a genuine asset shortfall is classified as balance: %s', (message) => {
     expect(classifyRevert(new Error(message))).toBe('balance');
+  });
+});
+
+describe('resolveFeeBlock', () => {
+  const base = { gasEstimationError: '', sponsored: false, isPayingWithErc20: false };
+
+  it('is payable while one token of several can pay', () => {
+    const fee = resolveFeeBlock({ ...base, feeTokens: [{ isSelectable: false }, { isSelectable: true }] });
+    expect(fee).toMatchObject({ blockReason: null, hasSelectablePaymentOption: true });
+  });
+
+  it('treats a list that has not loaded yet as payable', () => {
+    expect(resolveFeeBlock({ ...base, feeTokens: [] }).blockReason).toBeNull();
+    expect(resolveFeeBlock(base).blockReason).toBeNull();
+  });
+
+  it('reports the first recorded failure', () => {
+    const fee = resolveFeeBlock({
+      ...base,
+      feeTokens: [{ isSelectable: false }, { isSelectable: false, estimationFailure: 'reverted' }],
+    });
+    expect(fee).toMatchObject({ blockReason: 'estimation-failed', feeEstimationFailure: 'reverted' });
   });
 });
