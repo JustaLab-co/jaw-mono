@@ -34,7 +34,7 @@ const usdc = (over: Partial<FeeTokenOption> = {}): FeeTokenOption => ({
   ...over,
 });
 
-const render = (feeTokens: FeeTokenOption[], onRetryEstimation?: () => void) =>
+const render = (feeTokens: FeeTokenOption[], onRetryEstimation?: () => void, estimatingTokenCosts = false) =>
   renderToStaticMarkup(
     <TransactionDialog
       open
@@ -47,6 +47,7 @@ const render = (feeTokens: FeeTokenOption[], onRetryEstimation?: () => void) =>
       sponsored={false}
       feeTokens={feeTokens}
       onRetryEstimation={onRetryEstimation}
+      estimatingTokenCosts={estimatingTokenCosts}
       onConfirm={async () => undefined}
       onCancel={() => undefined}
       isProcessing={false}
@@ -78,6 +79,12 @@ describe('TransactionDialog fee estimation failure', () => {
     const failed = [eth(0n), usdc({ gasCostFormatted: 'Estimation failed', estimationFailure: 'reverted' })];
     expect(render(failed, () => undefined)).toContain('Retry');
     expect(render(failed)).not.toContain('Retry');
+  });
+
+  it('holds Retry while the fee-token costs are being estimated', () => {
+    const failed = [eth(0n), usdc({ gasCostFormatted: 'Estimation failed', estimationFailure: 'reverted' })];
+    expect(render(failed, () => undefined, true)).toMatch(/<button[^>]*disabled[^>]*>Retry<\/button>/);
+    expect(render(failed, () => undefined)).not.toMatch(/<button[^>]*disabled[^>]*>Retry<\/button>/);
   });
 
   it('still says insufficient funds when ETH and USDC are both empty', () => {

@@ -29,6 +29,8 @@ export interface NetworkFeeRowProps {
   estimationFailureDetail?: string;
   /** Re-runs the estimation. The retry link shows for `estimation-failed` only when this is set. */
   onRetryEstimation?: () => void;
+  /** A fee-token estimation is running, so Retry waits for it. */
+  estimatingTokenCosts?: boolean;
 
   gasFee?: string;
   gasFeeLoading?: boolean;
@@ -60,6 +62,7 @@ export function NetworkFeeRow({
   fundsShortfallDetail,
   estimationFailureDetail,
   onRetryEstimation,
+  estimatingTokenCosts = false,
   willFailDetail = 'Simulating this transaction reverted, so the fee can’t be estimated and it can’t be submitted.',
   gasFee,
   gasFeeLoading = false,
@@ -114,7 +117,7 @@ export function NetworkFeeRow({
             <button
               type="button"
               onClick={onRetryEstimation}
-              disabled={disabled}
+              disabled={disabled || gasFeeLoading || estimatingTokenCosts}
               className="text-muted-foreground text-body-xs font-mono underline"
             >
               Retry

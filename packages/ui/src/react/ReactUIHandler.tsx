@@ -1547,6 +1547,7 @@ function TransactionDialogWrapper({
     setSelectedFeeToken,
     isPayingWithErc20,
     refetch: retryEstimation,
+    estimatingTokenCosts,
   } = useGasEstimation({
     account,
     transactionCalls,
@@ -1786,6 +1787,7 @@ function TransactionDialogWrapper({
       gasFeeLoading={gasFeeLoading}
       gasEstimationError={gasEstimationError}
       onRetryEstimation={retryEstimation}
+      estimatingTokenCosts={estimatingTokenCosts}
       sponsored={isSponsored}
       assetsOut={assetsOut}
       assetsIn={assetsIn}
@@ -1916,6 +1918,7 @@ function SendTransactionDialogWrapper({
     setSelectedFeeToken,
     isPayingWithErc20,
     refetch: retryEstimation,
+    estimatingTokenCosts,
   } = useGasEstimation({
     account,
     transactionCalls,
@@ -2147,6 +2150,7 @@ function SendTransactionDialogWrapper({
       gasFeeLoading={gasFeeLoading}
       gasEstimationError={gasEstimationError}
       onRetryEstimation={retryEstimation}
+      estimatingTokenCosts={estimatingTokenCosts}
       sponsored={isSponsored}
       assetsOut={assetsOut}
       assetsIn={assetsIn}
@@ -2282,6 +2286,7 @@ function PermissionDialogWrapper({
     setSelectedFeeToken,
     isPayingWithErc20,
     refetch: retryEstimation,
+    estimatingTokenCosts,
   } = useGasEstimation({
     account,
     transactionCalls,
@@ -2682,6 +2687,7 @@ function PermissionDialogWrapper({
       gasFeeLoading={gasFeeLoading}
       gasEstimationError={gasEstimationError}
       onRetryEstimation={retryEstimation}
+      estimatingTokenCosts={estimatingTokenCosts}
       sponsored={isSponsored}
       mainnetRpcUrl={getMainnetRpcUrl(apiKey)}
       // Fee token props for ERC-20 paymaster
@@ -2954,6 +2960,7 @@ function RevokePermissionDialogWrapper({
     setSelectedFeeToken,
     isPayingWithErc20,
     refetch: retryEstimation,
+    estimatingTokenCosts,
   } = useGasEstimation({
     account,
     transactionCalls,
@@ -3349,6 +3356,7 @@ function RevokePermissionDialogWrapper({
       gasFeeLoading={gasFeeLoading}
       gasEstimationError={gasEstimationError}
       onRetryEstimation={retryEstimation}
+      estimatingTokenCosts={estimatingTokenCosts}
       sponsored={isSponsored}
       // Fee token props for ERC-20 paymaster
       feeTokens={feeTokens}

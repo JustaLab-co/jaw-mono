@@ -52,6 +52,7 @@ export const PermissionDialog = ({
   gasFeeLoading = false,
   gasEstimationError = '',
   onRetryEstimation,
+  estimatingTokenCosts,
   sponsored = false,
   feeTokens,
   feeTokensLoading,
@@ -331,6 +332,7 @@ export const PermissionDialog = ({
               hasSelectablePaymentOption={hasSelectablePaymentOption}
               estimationFailureDetail={feeEstimationFailure}
               onRetryEstimation={onRetryEstimation}
+              estimatingTokenCosts={estimatingTokenCosts}
               disabled={isProcessing}
             />
 

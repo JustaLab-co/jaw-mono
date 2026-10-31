@@ -40,6 +40,7 @@ export const TransactionDialog = ({
   gasFeeLoading,
   gasEstimationError,
   onRetryEstimation,
+  estimatingTokenCosts,
   sponsored,
   assetsOut,
   assetsIn,
@@ -431,6 +432,7 @@ export const TransactionDialog = ({
               hasSelectablePaymentOption={hasSelectablePaymentOption}
               estimationFailureDetail={feeEstimationFailure}
               onRetryEstimation={onRetryEstimation}
+              estimatingTokenCosts={estimatingTokenCosts}
               disabled={isProcessing}
             />
 
