@@ -24,6 +24,7 @@ import { estimateErc20PaymasterCosts } from '@jaw.id/core';
 import type { Account } from '@jaw.id/core';
 import { useGasEstimation, type UseGasEstimationResult, type TransactionCall } from './useGasEstimation';
 import type { FeeTokenOption } from '../components/FeeTokenSelector';
+import { resolveFeeBlock } from '../utils/transactionFailure';
 
 const erc20Mock = vi.mocked(estimateErc20PaymasterCosts);
 
@@ -78,6 +79,15 @@ const usdtEstimate = { ...usdcEstimate, tokenAddress: USDT };
 
 let hook: UseGasEstimationResult;
 let tokensNow: FeeTokenOption[];
+
+// What the dialog's fee row would report for the hook's current output.
+const blockNow = () =>
+  resolveFeeBlock({
+    feeTokens: tokensNow,
+    gasEstimationError: hook.gasEstimationError,
+    sponsored: false,
+    isPayingWithErc20: hook.isPayingWithErc20,
+  }).blockReason;
 
 let setTokensExternally: (tokens: FeeTokenOption[]) => void;
 let setCallsExternally: (calls: TransactionCall[]) => void;
@@ -522,6 +532,28 @@ describe('useGasEstimation fee-token outcome per ERC-20 result', () => {
 
     expect(usdcNow()).toMatchObject({ isSelectable: false, estimationFailure: undefined });
     expect(hook.gasEstimationError).toBe('Insufficient funds');
+  });
+
+  describe.each([
+    ['an Error', (m: string) => new Error(m)],
+    ['a string', (m: string) => m],
+    ['an RPC error object', (m: string) => ({ code: -32000, message: m })],
+  ])('a shortfall rejected as %s', (_form, wrap) => {
+    it.each(['ERC20: transfer amount exceeds balance', "AA21 didn't pay prefund"])(
+      'reads as insufficient funds: %s',
+      async (message) => {
+        erc20Mock.mockRejectedValue(wrap(message));
+        await mount(
+          makeAccount(async () => {
+            throw wrap(message);
+          }),
+          [nativeEth(0n), token({})]
+        );
+
+        expect(usdcNow().estimationFailure).toBeUndefined();
+        expect(blockNow()).toBe('funds');
+      }
+    );
   });
 
   it('a revert that quotes a prefund-style amount is still an estimation failure', async () => {

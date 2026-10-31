@@ -3,7 +3,7 @@ import type { Address, Hex } from 'viem';
 import type { Account, TokenEstimate, TransactionCall } from '@jaw.id/core';
 import { estimateErc20PaymasterCosts, jawPaymasterUrl } from '@jaw.id/core';
 import type { FeeTokenOption } from '../components/FeeTokenSelector';
-import { classifyRevert, INSUFFICIENT_FUNDS_ERROR } from '../utils/transactionFailure';
+import { classifyRevert, INSUFFICIENT_FUNDS_ERROR, messageOf } from '../utils/transactionFailure';
 
 // ============================================================================
 // Types
@@ -99,8 +99,8 @@ const PREFUND_ERRORS = [
  * purpose) reads as a balance shortfall.
  */
 function isPrefundError(error: unknown): boolean {
-  if (!(error instanceof Error)) return false;
-  return PREFUND_ERRORS.some((msg) => error.message.toLowerCase().includes(msg.toLowerCase()));
+  const message = messageOf(error).toLowerCase();
+  return PREFUND_ERRORS.some((msg) => message.includes(msg.toLowerCase()));
 }
 
 /** Longest failure text the fee tooltip shows. */
@@ -112,8 +112,7 @@ const UNPRINTABLE = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066
 
 /** The first non-blank line of an error, which is the reason viem leads with, cut to fit the tooltip. */
 function describeFailure(error: unknown): string {
-  const message = typeof error === 'string' ? error : (error as { message?: unknown } | null | undefined)?.message;
-  const line = (typeof message === 'string' ? message : '')
+  const line = messageOf(error)
     .split(/[\r\n\u2028\u2029]/)
     .map((l) => l.replace(UNPRINTABLE, ' ').replace(/\s+/g, ' ').trim())
     .find(Boolean);
@@ -400,8 +399,7 @@ export function useGasEstimation({
             // Try to extract the required amount from the error message
             // Format: "X.XXX USDC required but sender has Y USDC"
             let gasCostFormatted = 'Insufficient';
-            const errorMsg = erc20Result.reason instanceof Error ? erc20Result.reason.message : '';
-            const match = errorMsg.match(/([\d.]+)\s*(\w+)\s*required/i);
+            const match = messageOf(erc20Result.reason).match(/([\d.]+)\s*(\w+)\s*required/i);
             if (match) {
               gasCostFormatted = match[1]; // Just the amount, symbol is already shown
             }

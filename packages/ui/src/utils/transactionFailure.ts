@@ -28,14 +28,20 @@ const BALANCE_REVERT_PATTERNS = [
   'subtraction overflow', // pre-0.8 SafeMath underflow on a balance decrement
 ];
 
+/** The text of a rejection: the value itself when it is a string, else its `message`. */
+export function messageOf(error: unknown): string {
+  if (typeof error === 'string') return error;
+  const message = (error as { message?: unknown } | null | undefined)?.message;
+  return typeof message === 'string' ? message : '';
+}
+
 /**
  * Classify a revert from its reason. viem puts the decoded reason, or the raw error data when
  * it can't decode, in `error.message` — so one substring sweep covers both. Used on both
  * simulation failures and bundler estimation failures.
  */
 export function classifyRevert(error: unknown): RevertCause {
-  const message = error instanceof Error ? error.message : String(error ?? '');
-  const haystack = message.toLowerCase();
+  const haystack = messageOf(error).toLowerCase();
   return BALANCE_REVERT_PATTERNS.some((p) => haystack.includes(p)) ? 'balance' : 'other';
 }
 
