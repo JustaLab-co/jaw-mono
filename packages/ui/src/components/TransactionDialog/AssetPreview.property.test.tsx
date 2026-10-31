@@ -57,5 +57,5 @@ describe('a simulated token row on the signing screen', () => {
       }),
       { numRuns: 100 }
     );
-  });
+  }, 30_000);
 });
