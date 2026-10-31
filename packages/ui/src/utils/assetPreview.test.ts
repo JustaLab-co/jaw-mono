@@ -114,9 +114,10 @@ describe('mapAssetChanges', () => {
     expect(delta.decimals).toBe(0);
   });
 
-  it('drops an ERC-20 with no symbol', () => {
+  it('keeps an ERC-20 with no symbol', () => {
     // A bytes32 `symbol()` (MKR-style) fails viem's decode and arrives undefined.
-    expect(mapAssetChanges([change(USDC, 1_000_000n, { decimals: 6 })])).toEqual([]);
+    const [delta] = mapAssetChanges([change(USDC, -1_000_000n, { decimals: 6 })]);
+    expect(delta).toMatchObject({ address: USDC, symbol: undefined, amountFormatted: '1', direction: 'out' });
   });
 
   it('treats the native pseudo-address as native whatever viem reports', () => {
@@ -239,6 +240,19 @@ describe('resolveTokenUnits', () => {
     expect(units.changes).toEqual(changes);
     // A `1` is already a usable unit, so only the interface question goes out.
     expect(probes.map((p) => p.data.slice(0, 10))).toEqual([SUPPORTS_INTERFACE]);
+  });
+
+  it('keeps a token with no readable symbol, whatever its decimals', async () => {
+    const { client } = stubClient(() => 'revert');
+    const changes = [change(USDC, -1_000_000n, { decimals: 6 }), change(ZERO_DEC, -42n, {})];
+
+    const units = await resolveTokenUnits(client, changes, BLOCK, BATCH);
+    const deltas = mapAssetChanges(units.changes, units.erc721);
+
+    expect(deltas.map((d) => [d.address, d.symbol, d.amountFormatted])).toEqual([
+      [USDC, undefined, '1'],
+      [ZERO_DEC, undefined, '42'],
+    ]);
   });
 
   it('recovers a 0-decimal ERC-20 that viem reported as undefined', async () => {

@@ -47,7 +47,7 @@ describe('a simulated token row on the signing screen', () => {
         if (delta.baseUnits) {
           expect(delta.amountFormatted).toBe(magnitude.toString());
           expect(text).toContain(`${magnitude} base units`);
-          expect(text).toContain('In base units: this screen could not read the decimals.');
+          expect(text).toContain('Could not read the decimals.');
           expect(text).not.toContain('$');
         } else {
           expect(delta.amountFormatted).toBe(formatUnits(magnitude, decimals as number));

@@ -21,6 +21,7 @@ export interface RawAssetChange {
 export interface AssetDelta {
   address: string;
   symbol?: string;
+  /** Meaningless when `baseUnits` is set: there it only stands in for a unit that is unknown. */
   decimals: number;
   diff: bigint;
   direction: 'in' | 'out';
@@ -48,8 +49,8 @@ const MAX_DECIMALS = 255;
 
 /**
  * Normalize viem's `assetChanges` into the rows the UI renders.
- * Drops zero-diff entries and non-native entries without a symbol. A token with no usable
- * decimals keeps its row, in base units.
+ * Drops zero-diff entries. A token with no readable symbol keeps its row, and so does one with
+ * no usable decimals, which is then in base units.
  * Addresses in `erc721` are rendered as whole-token counts (viem reports NFT decimals
  * as `1` or `undefined`, which would otherwise show as "0.1" or be dropped).
  */
@@ -68,8 +69,6 @@ export function mapAssetChanges(
     const reported = c.token.decimals;
     const usable = reported !== undefined && Number.isInteger(reported) && reported >= 0 && reported <= MAX_DECIMALS;
     const decimals = isNative ? 18 : isNft ? 0 : usable ? reported : 0;
-
-    if (!isNative && !symbol) continue;
 
     const magnitude = diff < 0n ? -diff : diff;
     out.push({

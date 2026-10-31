@@ -36,14 +36,13 @@ type ChainBadge = { name: string; icon?: string };
 /** Rows shown before the "+N" overflow toggle kicks in. */
 const COLLAPSED_ROWS = 2;
 
+// A token with no readable symbol is labelled by its short address, as the bridge rows do.
 function symbolFor(delta: AssetDelta, nativeSymbol: string): string {
-  return delta.isNative ? nativeSymbol : (delta.symbol ?? '');
+  return delta.isNative ? nativeSymbol : (delta.symbol ?? formatAddress(delta.address));
 }
 
-function BaseUnitsNote() {
-  return (
-    <span className="text-muted-foreground text-body-xs">In base units: this screen could not read the decimals.</span>
-  );
+function RowNote({ children }: { children: ReactNode }) {
+  return <span className="text-muted-foreground text-body-xs">{children}</span>;
 }
 
 function formatUsd(value: number): string {
@@ -148,7 +147,7 @@ function AssetRow({
           amount
         )}
         {usd > 0 && <span className="text-muted-foreground text-body-xs">{formatUsd(usd)}</span>}
-        {delta.baseUnits && <BaseUnitsNote />}
+        {delta.baseUnits && <RowNote>Could not read the decimals.</RowNote>}
       </div>
     </div>
   );
@@ -334,7 +333,7 @@ function BridgeColumns({
         {out.length === 0 && (
           <PlainRow chainId={send.chainId} token={send.token} chain={origin}>
             <span className="text-value text-negative break-all font-mono">−{send.amount.toString()} base units</span>
-            <BaseUnitsNote />
+            <RowNote>Could not read this token.</RowNote>
           </PlainRow>
         )}
       </DeltaColumn>
@@ -355,7 +354,7 @@ function BridgeColumns({
               <span className="text-value text-positive break-all font-mono">
                 ≥ <SubText>{`${receive.amount.amount} base units`}</SubText>
               </span>
-              <BaseUnitsNote />
+              <RowNote>Could not read this token.</RowNote>
             </PlainRow>
           )}
         </DeltaColumn>
@@ -381,8 +380,9 @@ export const AssetPreview = ({
   const bridgeOut = bridge && (!error && assetsOut.length > 0 ? assetsOut : sentDeltas(bridge.send));
   const bridgeIn = bridge?.receive ? receivedDeltas(bridge.receive) : [];
   const shown = bridgeOut ? bridgeOut : [...assetsOut, ...assetsIn];
-  // An unverified symbol is the token's own word, so it never keys a price.
-  const trusted = (list: AssetDelta[]) => list.filter((d) => !d.unverified);
+  // An unverified symbol is the token's own word, and a base units row has no price to scale, so
+  // neither keys a price. A token with no symbol has nothing to key on.
+  const trusted = (list: AssetDelta[]) => list.filter((d) => !d.unverified && !d.baseUnits && (d.isNative || d.symbol));
   const symbols = [
     ...trusted(shown).map((d) => symbolFor(d, nativeSymbol)),
     ...trusted(bridgeIn).map((d) => d.symbol ?? ''),
