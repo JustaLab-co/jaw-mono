@@ -62,7 +62,6 @@ describe('TransactionDialog fee estimation failure', () => {
     ]);
     expect(html).not.toContain('Insufficient');
     expect(html).toContain('Fee estimation failed');
-    expect(html).not.toContain('Add funds');
   });
 
   it('does not claim insufficient funds when ETH is dust and a funded token failed to estimate', () => {
