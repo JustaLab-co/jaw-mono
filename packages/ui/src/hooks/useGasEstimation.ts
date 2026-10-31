@@ -3,7 +3,7 @@ import type { Address, Hex } from 'viem';
 import type { Account, TokenEstimate, TransactionCall } from '@jaw.id/core';
 import { estimateErc20PaymasterCosts, jawPaymasterUrl } from '@jaw.id/core';
 import type { FeeTokenOption } from '../components/FeeTokenSelector';
-import { classifyRevert, INSUFFICIENT_FUNDS_ERROR } from '../utils/transactionFailure';
+import { classifyRevert, INSUFFICIENT_FUNDS_ERROR, messageOf } from '../utils/transactionFailure';
 
 // ============================================================================
 // Types
@@ -99,8 +99,50 @@ const PREFUND_ERRORS = [
  * purpose) reads as a balance shortfall.
  */
 function isPrefundError(error: unknown): boolean {
-  if (!(error instanceof Error)) return false;
-  return PREFUND_ERRORS.some((msg) => error.message.toLowerCase().includes(msg.toLowerCase()));
+  const message = messageOf(error).toLowerCase();
+  return PREFUND_ERRORS.some((msg) => message.includes(msg.toLowerCase()));
+}
+
+/** Longest failure text the fee tooltip shows. */
+const MAX_FAILURE_LENGTH = 160;
+
+// Control, format (bidi overrides, zero-width and tag characters) and unassigned code points can
+// hide or reorder the text around them.
+const UNPRINTABLE = /\p{C}/gu;
+
+/** The first non-blank line of an error, which is the reason viem leads with, cut to fit the tooltip. */
+function describeFailure(error: unknown): string {
+  const line = messageOf(error)
+    .split(/[\r\n\u2028\u2029]/)
+    .map((l) => l.replace(UNPRINTABLE, ' ').replace(/\s+/g, ' ').trim())
+    .find(Boolean);
+  if (!line) return 'Unknown error';
+  const chars = [...line];
+  return chars.length > MAX_FAILURE_LENGTH ? `${chars.slice(0, MAX_FAILURE_LENGTH - 1).join('')}…` : line;
+}
+
+/** A fee token with no estimate behind it: nothing to show, and not selectable. */
+function unpriced(token: FeeTokenOption): FeeTokenOption {
+  return {
+    ...token,
+    estimationFailure: undefined,
+    gasCostFormatted: undefined,
+    gasCostMaxFormatted: undefined,
+    isSelectable: false,
+  };
+}
+
+/**
+ * Every funded ERC-20 marked as failed to estimate. The reason is recorded unless the error is a
+ * balance revert, which is a real shortfall and keeps reading as one.
+ */
+function markEstimationFailed(tokens: FeeTokenOption[], error: unknown): FeeTokenOption[] {
+  const estimationFailure = classifyRevert(error) === 'balance' ? undefined : describeFailure(error);
+  return tokens.map((token) => {
+    if (token.isNative) return token;
+    if (token.balance === 0n) return unpriced(token);
+    return { ...unpriced(token), gasCostFormatted: 'Estimation failed', estimationFailure };
+  });
 }
 
 // ============================================================================
@@ -242,6 +284,10 @@ export function useGasEstimation({
       setGasFee('sponsored');
       setGasFeeLoading(false);
       setGasEstimationError('');
+      const tokens = feeTokensRef.current;
+      if (tokens.some((t) => t.estimationFailure)) {
+        onFeeTokensUpdateRef.current?.(tokens.map((t) => ({ ...t, estimationFailure: undefined })));
+      }
       return;
     }
 
@@ -330,27 +376,17 @@ export function useGasEstimation({
         updatedFeeTokens = currentFeeTokens.map((token) => {
           if (token.isNative) return token;
 
-          // Tokens with 0 balance are not selectable (can't pay gas fees)
-          if (token.balance === 0n) {
-            return {
-              ...token,
-              gasCostFormatted: undefined, // No estimate available
-              gasCostMaxFormatted: undefined,
-              isSelectable: false,
-            };
-          }
-
           const estimate = erc20Estimates.find((e) => e.tokenAddress.toLowerCase() === token.address.toLowerCase());
+          // An empty token is never estimated, and one the paymaster left out has nothing proven.
+          if (token.balance === 0n || !estimate) return unpriced(token);
 
-          if (estimate) {
-            return {
-              ...token,
-              gasCostFormatted: estimate.tokenCostFormatted,
-              gasCostMaxFormatted: estimate.tokenCostMaxFormatted,
-              isSelectable: estimate.hasSufficientBalance,
-            };
-          }
-          return token;
+          return {
+            ...token,
+            estimationFailure: undefined,
+            gasCostFormatted: estimate.tokenCostFormatted,
+            gasCostMaxFormatted: estimate.tokenCostMaxFormatted,
+            isSelectable: estimate.hasSufficientBalance,
+          };
         });
 
         // Notify parent of updated tokens (use ref to avoid infinite loop)
@@ -365,55 +401,22 @@ export function useGasEstimation({
           updatedFeeTokens = currentFeeTokens.map((token) => {
             if (token.isNative) return token;
 
-            // Tokens with 0 balance are not selectable
-            if (token.balance === 0n) {
-              return {
-                ...token,
-                gasCostFormatted: undefined,
-                gasCostMaxFormatted: undefined,
-                isSelectable: false,
-              };
-            }
+            if (token.balance === 0n) return unpriced(token);
 
             // Try to extract the required amount from the error message
             // Format: "X.XXX USDC required but sender has Y USDC"
             let gasCostFormatted = 'Insufficient';
-            const errorMsg = erc20Result.reason instanceof Error ? erc20Result.reason.message : '';
-            const match = errorMsg.match(/([\d.]+)\s*(\w+)\s*required/i);
+            const match = messageOf(erc20Result.reason).match(/([\d.]+)\s*(\w+)\s*required/i);
             if (match) {
               gasCostFormatted = match[1]; // Just the amount, symbol is already shown
             }
 
-            return {
-              ...token,
-              gasCostFormatted,
-              gasCostMaxFormatted: undefined,
-              isSelectable: false,
-            };
+            return { ...unpriced(token), gasCostFormatted };
           });
         } else {
           // Unexpected error - log it and show estimation failed
           console.error('[useGasEstimation] ERC-20 estimation failed:', erc20Result.reason);
-          updatedFeeTokens = currentFeeTokens.map((token) => {
-            if (token.isNative) return token;
-
-            // Tokens with 0 balance - just mark as not selectable without error message
-            if (token.balance === 0n) {
-              return {
-                ...token,
-                gasCostFormatted: undefined,
-                gasCostMaxFormatted: undefined,
-                isSelectable: false,
-              };
-            }
-
-            return {
-              ...token,
-              gasCostFormatted: 'Estimation failed',
-              gasCostMaxFormatted: undefined,
-              isSelectable: false,
-            };
-          });
+          updatedFeeTokens = markEstimationFailed(currentFeeTokens, erc20Result.reason);
         }
         onFeeTokensUpdateRef.current?.(updatedFeeTokens);
       }
@@ -440,6 +443,8 @@ export function useGasEstimation({
         return;
       }
       ethEstimatedForRef.current = '';
+      // Nothing was estimated, so no earlier quote or failure still holds.
+      onFeeTokensUpdateRef.current?.(markEstimationFailed(feeTokensRef.current, error));
       handleEstimationError(error);
     } finally {
       // Only update loading states if this is still the current estimation

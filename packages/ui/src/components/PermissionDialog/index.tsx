@@ -15,7 +15,7 @@ import { useAddressIdentities } from '../../hooks/useAddressIdentities';
 import { identityKey } from '../../utils/reverseResolve';
 import { CLEAR_SIGNING_ONLY, ENS_ONLY } from '../../utils/addressIdentity';
 import { getDisplayAddress } from '../../utils';
-import { resolveBlockReason } from '../../utils/transactionFailure';
+import { resolveFeeBlock } from '../../utils/transactionFailure';
 import { isBlockingRevocationProblem, REVOCATION_PROBLEM_TEXT } from '../../utils/permissionExecution';
 import { PermissionDialogProps } from './types';
 import { InlineWarning, PartyRow } from '../primitives';
@@ -51,6 +51,8 @@ export const PermissionDialog = ({
   gasFee,
   gasFeeLoading = false,
   gasEstimationError = '',
+  onRetryEstimation,
+  estimatingTokenCosts,
   sponsored = false,
   feeTokens,
   feeTokensLoading,
@@ -104,12 +106,8 @@ export const PermissionDialog = ({
     return () => el.removeEventListener('wheel', onWheel);
   }, [isProcessing]);
 
-  const hasSelectablePaymentOption =
-    !feeTokens || feeTokens.length === 0 ? true : feeTokens.some((t) => t.isSelectable);
-
-  // Same rule as the transaction screen, so a blocked fee reads identically on both.
-  const blockReason = resolveBlockReason({
-    hasSelectablePaymentOption,
+  const { blockReason, hasSelectablePaymentOption, feeEstimationFailure } = resolveFeeBlock({
+    feeTokens,
     gasEstimationError,
     sponsored,
     isPayingWithErc20: !!isPayingWithErc20,
@@ -332,6 +330,9 @@ export const PermissionDialog = ({
               showFeeTokenSelector={showFeeTokenSelector}
               isPayingWithErc20={isPayingWithErc20}
               hasSelectablePaymentOption={hasSelectablePaymentOption}
+              estimationFailureDetail={feeEstimationFailure}
+              onRetryEstimation={onRetryEstimation}
+              estimatingTokenCosts={estimatingTokenCosts}
               disabled={isProcessing}
             />
 

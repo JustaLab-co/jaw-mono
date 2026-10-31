@@ -3,6 +3,7 @@ import {
   INSUFFICIENT_FUNDS_ERROR,
   classifyRevert,
   resolveBlockReason,
+  resolveFeeBlock,
   type BlockReasonInput,
 } from './transactionFailure';
 
@@ -114,6 +115,45 @@ describe('resolveBlockReason', () => {
     expect(resolveBlockReason(input({ gasEstimationError: 'Failed to estimate gas' }))).toBe('will-fail');
   });
 
+  it('reports a failed fee estimation on a funded token as estimation-failed, not funds', () => {
+    // ETH is empty, so its leg ends in "Insufficient funds"; USDC has a balance but its estimation reverted.
+    expect(
+      resolveBlockReason(
+        input({
+          hasSelectablePaymentOption: false,
+          gasEstimationError: INSUFFICIENT_FUNDS_ERROR,
+          feeEstimationFailure: 'execution reverted',
+        })
+      )
+    ).toBe('estimation-failed');
+  });
+
+  it('reports estimation-failed when dust ETH is selectable but short of the prefund', () => {
+    expect(
+      resolveBlockReason(
+        input({
+          hasSelectablePaymentOption: true,
+          gasEstimationError: INSUFFICIENT_FUNDS_ERROR,
+          feeEstimationFailure: 'execution reverted',
+        })
+      )
+    ).toBe('estimation-failed');
+  });
+
+  it('keeps funds when the asset itself is short, whatever the estimation said', () => {
+    expect(
+      resolveBlockReason(
+        input({ hasSelectablePaymentOption: false, feeEstimationFailure: 'execution reverted', revertCause: 'balance' })
+      )
+    ).toBe('funds');
+  });
+
+  it('keeps funds when no fee token reports an estimation failure', () => {
+    expect(
+      resolveBlockReason(input({ hasSelectablePaymentOption: false, gasEstimationError: INSUFFICIENT_FUNDS_ERROR }))
+    ).toBe('funds');
+  });
+
   it('does not invent a block from a revert cause alone', () => {
     // A balance revert with a healthy estimate stays submittable — it is a warning, not a block.
     expect(resolveBlockReason(input({ revertCause: 'balance' }))).toBeNull();
@@ -181,5 +221,27 @@ describe('prefund shortfall vs the call reverting on its own terms', () => {
     'transfer amount exceeds balance',
   ])('a genuine asset shortfall is classified as balance: %s', (message) => {
     expect(classifyRevert(new Error(message))).toBe('balance');
+  });
+});
+
+describe('resolveFeeBlock', () => {
+  const base = { gasEstimationError: '', sponsored: false, isPayingWithErc20: false };
+
+  it('is payable while one token of several can pay', () => {
+    const fee = resolveFeeBlock({ ...base, feeTokens: [{ isSelectable: false }, { isSelectable: true }] });
+    expect(fee).toMatchObject({ blockReason: null, hasSelectablePaymentOption: true });
+  });
+
+  it('treats a list that has not loaded yet as payable', () => {
+    expect(resolveFeeBlock({ ...base, feeTokens: [] }).blockReason).toBeNull();
+    expect(resolveFeeBlock(base).blockReason).toBeNull();
+  });
+
+  it('reports the first recorded failure', () => {
+    const fee = resolveFeeBlock({
+      ...base,
+      feeTokens: [{ isSelectable: false }, { isSelectable: false, estimationFailure: 'reverted' }],
+    });
+    expect(fee).toMatchObject({ blockReason: 'estimation-failed', feeEstimationFailure: 'reverted' });
   });
 });

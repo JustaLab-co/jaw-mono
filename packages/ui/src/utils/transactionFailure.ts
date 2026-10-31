@@ -28,14 +28,20 @@ const BALANCE_REVERT_PATTERNS = [
   'subtraction overflow', // pre-0.8 SafeMath underflow on a balance decrement
 ];
 
+/** The text of a rejection: the value itself when it is a string, else its `message`. */
+export function messageOf(error: unknown): string {
+  if (typeof error === 'string') return error;
+  const message = (error as { message?: unknown } | null | undefined)?.message;
+  return typeof message === 'string' ? message : '';
+}
+
 /**
  * Classify a revert from its reason. viem puts the decoded reason, or the raw error data when
  * it can't decode, in `error.message` — so one substring sweep covers both. Used on both
  * simulation failures and bundler estimation failures.
  */
 export function classifyRevert(error: unknown): RevertCause {
-  const message = error instanceof Error ? error.message : String(error ?? '');
-  const haystack = message.toLowerCase();
+  const haystack = messageOf(error).toLowerCase();
   return BALANCE_REVERT_PATTERNS.some((p) => haystack.includes(p)) ? 'balance' : 'other';
 }
 
@@ -48,6 +54,8 @@ export type BlockReason =
   | 'funds'
   /** Estimation failed, so no userOp can be built. */
   | 'will-fail'
+  /** The account holds a fee token, but the paymaster estimation for it failed for another reason. */
+  | 'estimation-failed'
   | null;
 
 export interface BlockReasonInput {
@@ -57,20 +65,52 @@ export interface BlockReasonInput {
   sponsored: boolean;
   isPayingWithErc20: boolean;
   revertCause?: RevertCause;
+  /** Why a fee token with a balance could not be estimated, when it was not a shortfall. */
+  feeEstimationFailure?: string;
 }
 
-/** Funding outranks a revert: "add funds" is actionable, and a shortfall usually caused the revert. */
+/**
+ * Funding outranks a revert: "add funds" is actionable, and a shortfall usually caused the revert.
+ * A funded token that failed to estimate outranks a shortfall that only the fee shows, because
+ * that token might pay once the estimation works.
+ */
 export function resolveBlockReason({
   hasSelectablePaymentOption,
   gasEstimationError,
   sponsored,
   isPayingWithErc20,
   revertCause,
+  feeEstimationFailure,
 }: BlockReasonInput): BlockReason {
   const gasError = !!gasEstimationError && !sponsored && !isPayingWithErc20;
   if (hasSelectablePaymentOption && !gasError) return null;
 
-  const shortfall =
-    !hasSelectablePaymentOption || gasEstimationError === INSUFFICIENT_FUNDS_ERROR || revertCause === 'balance';
-  return shortfall ? 'funds' : 'will-fail';
+  if (revertCause === 'balance') return 'funds';
+
+  // No option can pay, or the ETH leg fell short of the prefund (dust ETH stays selectable).
+  const feeShort = !hasSelectablePaymentOption || gasEstimationError === INSUFFICIENT_FUNDS_ERROR;
+  if (feeShort && feeEstimationFailure) return 'estimation-failed';
+  return feeShort ? 'funds' : 'will-fail';
+}
+
+/** The fee-token facts the block reason depends on. */
+interface FeeTokenFacts {
+  isSelectable: boolean;
+  estimationFailure?: string;
+}
+
+/**
+ * The block reason read from the fee-token list, shared by every dialog with a fee row so a
+ * blocked fee reads the same on each. A list that has not loaded yet counts as payable.
+ */
+export function resolveFeeBlock({
+  feeTokens,
+  ...input
+}: Omit<BlockReasonInput, 'hasSelectablePaymentOption' | 'feeEstimationFailure'> & {
+  feeTokens?: FeeTokenFacts[];
+}) {
+  const hasSelectablePaymentOption = !feeTokens?.length || feeTokens.some((t) => t.isSelectable);
+  const feeEstimationFailure = feeTokens?.find((t) => t.estimationFailure)?.estimationFailure;
+  const blockReason = resolveBlockReason({ ...input, hasSelectablePaymentOption, feeEstimationFailure });
+  return { blockReason, hasSelectablePaymentOption, feeEstimationFailure };
 }

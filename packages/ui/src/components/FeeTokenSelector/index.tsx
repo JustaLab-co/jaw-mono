@@ -28,6 +28,8 @@ export interface FeeTokenOption {
   gasCostFormatted?: string;
   /** Worst-case fee ceiling (the "up to" amount reserved/approved). */
   gasCostMaxFormatted?: string;
+  /** Why the paymaster estimation for this token failed, when it failed for a reason other than funds. */
+  estimationFailure?: string;
   // Optional: Token logo URI from API
   logoURI?: string;
 }
