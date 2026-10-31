@@ -40,9 +40,13 @@ const NOT_SIGNER = notThisAccount('The recipient', OTHER);
 const REFUND_NOT_SIGNER = notThisAccount('The refund address', OTHER);
 const UNPAIRED = 'This batch has an approval that the deposit does not use. Check its token, amount and spender.';
 const APPROVE_UNKNOWN = 'This batch approves a token this screen does not know. Check its address before you confirm.';
-const CANNOT_READ_RELAY = 'This screen cannot read this Relay call. Check the raw details before you confirm.';
-const CANNOT_READ_ACROSS = 'This screen cannot read this Across call. Check the raw details before you confirm.';
-const CANNOT_READ = { alert: CANNOT_READ_RELAY };
+const CANNOT_READ_RELAY_1 = 'Cannot read the Relay call in step 1. Check its raw details before you confirm.';
+const CANNOT_READ_RELAY_2 = 'Cannot read the Relay call in step 2. Check its raw details before you confirm.';
+const CANNOT_READ_ACROSS_2 = 'Cannot read the Across call in step 2. Check its raw details before you confirm.';
+const CANNOT_READ_ACROSS_BOTH =
+  'Cannot read the Across calls in steps 1 and 2. Check their raw details before you confirm.';
+const CANNOT_READ_ACROSS_ONLY = 'Cannot read this Across call. Check its raw details before you confirm.';
+const CANNOT_READ = { unreadable: true };
 const PLAIN_STEP = null;
 const CHECK = 'Check it before you confirm.';
 const alsoCalls = (step: number, to: string) => `Step ${step} calls ${getAddress(to)} outside the bridge. ${CHECK}`;
@@ -159,7 +163,7 @@ describe('given an allowance change in place of the plain approve', () => {
     const batch = readBridgeBatch(contracts, [call, RELAY_USDC_DEPOSIT], SIGNER);
     expect(batch?.transfer).toBeDefined();
     expect(batch?.steps).toEqual([CANNOT_READ, PLAIN_STEP]);
-    expect(batch?.alerts).toEqual([CANNOT_READ_RELAY]);
+    expect(batch?.alerts).toEqual([CANNOT_READ_RELAY_1]);
     expect(batch?.notices).toEqual([RELAY_HIDDEN]);
   });
 });
@@ -190,7 +194,7 @@ describe('given batches that are not one bridge deposit', () => {
     expect(readBridgeBatch(contracts, [RELAY_USDC_APPROVE, unreadable], SIGNER)).toEqual({
       transfer: undefined,
       steps: [PLAIN_STEP, CANNOT_READ],
-      alerts: [CANNOT_READ_RELAY],
+      alerts: [CANNOT_READ_RELAY_2],
       notices: [],
     });
   });
@@ -205,7 +209,7 @@ describe('given batches that are not one bridge deposit', () => {
   it('when an unreadable deposit sits next to a call outside the bridge, then both warnings show', () => {
     const unreadable = { ...RELAY_USDC_DEPOSIT, data: RELAY_USDC_DEPOSIT.data + '00' };
     const batch = readBridgeBatch(contracts, [unreadable, transfer], SIGNER);
-    expect(batch?.alerts).toEqual([CANNOT_READ_RELAY]);
+    expect(batch?.alerts).toEqual([CANNOT_READ_RELAY_1]);
     expect(batch?.notices).toEqual([sendsTo(2, 'USDC', OTHER)]);
   });
 
@@ -312,8 +316,8 @@ describe('given an Across deposit that swaps on one side', () => {
     const call = { ...ACROSS_CALLS.usdcToArb, data: ACROSS_CALLS.usdcToArb.data + '00' };
     const batch = readBridgeBatch(contracts, [approve(BASE_SPOKE_POOL, '989680'), call], SIGNER);
     expect(batch?.transfer).toBeUndefined();
-    expect(batch?.steps).toEqual([PLAIN_STEP, { alert: CANNOT_READ_ACROSS }]);
-    expect(batch?.alerts).toEqual([CANNOT_READ_ACROSS]);
+    expect(batch?.steps).toEqual([PLAIN_STEP, CANNOT_READ]);
+    expect(batch?.alerts).toEqual([CANNOT_READ_ACROSS_2]);
   });
 
   it('when it swaps on the origin, then the approve to the periphery pairs with the USDC it pulls', () => {
@@ -430,7 +434,7 @@ describe('given an approve the owner must check', () => {
     const snapshot = new BridgeContracts({ version: 1, chains }, 'snapshot');
     const live = new BridgeContracts({ version: 2, chains }, 'live');
     const batch = readBridgeBatch(snapshot, [ACROSS_CALLS.prod], SIGNER);
-    expect(batch?.alerts).toEqual([CANNOT_READ_ACROSS]);
+    expect(batch?.alerts).toEqual([CANNOT_READ_ACROSS_ONLY]);
     expect(batch?.notices).toContain(stale);
     expect(readBridgeBatch(live, [ACROSS_CALLS.prod], SIGNER)?.notices).not.toContain(stale);
   });
@@ -542,11 +546,11 @@ describe('given a bridge deposit and calls outside the bridge', () => {
     expect(batch?.notices.filter((notice) => notice === RELAY_HIDDEN)).toHaveLength(1);
   });
 
-  it('when two calls cannot be read the same way, then the red alert shows once and its steps both carry it', () => {
+  it('when two calls cannot be read the same way, then one alert names both steps and each step is marked unreadable', () => {
     const bad = { ...ACROSS_CALLS.prod, data: ACROSS_CALLS.prod.data + '00' };
     const batch = readBridgeBatch(contracts, [bad, bad], SIGNER);
-    expect(batch?.alerts).toEqual([CANNOT_READ_ACROSS]);
-    expect(batch?.steps).toEqual([{ alert: CANNOT_READ_ACROSS }, { alert: CANNOT_READ_ACROSS }]);
+    expect(batch?.alerts).toEqual([CANNOT_READ_ACROSS_BOTH]);
+    expect(batch?.steps).toEqual([CANNOT_READ, CANNOT_READ]);
   });
 
   it.each([

@@ -1,9 +1,10 @@
 'use client';
 
 import { Code, TriangleAlert } from 'lucide-react';
+import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover';
 import { AccordionContent, AccordionItem, AccordionTrigger } from '../ui/accordion';
 import { CopyButton } from '../CopyButton';
-import { Eyebrow, InlineWarning, PartyRow, Row, ValueAmount } from '../primitives';
+import { Eyebrow, PartyRow, Row, ValueAmount } from '../primitives';
 import { useAddressIdentity, type IdentitySource } from '../../hooks/useAddressIdentities';
 import { useDecodedCalldata, type DecodeResult } from '../../hooks/useDecodedCalldata';
 import { formatNativeValue } from '../../utils/displayFormat';
@@ -31,15 +32,19 @@ interface DecodeContext {
 }
 
 interface StepOverride {
-  alert?: string;
+  unreadable?: boolean;
 }
 
-function StepAlert({ text }: { text?: string }) {
-  if (!text) return null;
+/** Marks an unreadable step in its header. The header icon carries the words. */
+function UnreadableMark({ show }: { show: boolean }) {
+  if (!show) return null;
   return (
-    <div role="alert" className="px-3 pt-3">
-      <InlineWarning text={text} />
-    </div>
+    <TriangleAlert
+      aria-label="Unreadable call"
+      role="img"
+      className="text-destructive size-3.5 flex-none"
+      strokeWidth={2}
+    />
   );
 }
 
@@ -57,14 +62,13 @@ export function SingleCallData({
   data,
   decode,
   allowanceFlag,
-  alert,
+  unreadable,
   ...ctx
 }: DecodeContext &
   StepOverride & { to: string; data: string; decode: DecodeResult; allowanceFlag: AllowanceFlag | null }) {
   const flag = readableFlag(decode, allowanceFlag);
   return (
     <AccordionItem value="calldata" className="border-border rounded-box overflow-hidden border">
-      <StepAlert text={alert} />
       <AccordionTrigger className="group items-center p-3 hover:no-underline">
         <span className="flex min-w-0 items-center gap-3">
           <span className="border-border bg-secondary rounded-chip flex size-7 flex-none items-center justify-center border">
@@ -74,6 +78,7 @@ export function SingleCallData({
             <Eyebrow>Calldata</Eyebrow>
             <span className="text-foreground text-value mt-1 truncate">{callLabel(decode, 'Contract call')}</span>
           </span>
+          <UnreadableMark show={!!unreadable} />
         </span>
         <HeaderFlag flag={flag} />
       </AccordionTrigger>
@@ -96,7 +101,7 @@ export function BatchStep({
   nativeSymbol,
   nativeTokenPrice,
   allowanceFlag,
-  alert,
+  unreadable,
   ...ctx
 }: Omit<DecodeContext, 'chainId'> &
   StepOverride & {
@@ -118,7 +123,6 @@ export function BatchStep({
 
   return (
     <AccordionItem value={`transaction-${index}`} className="border-border rounded-box overflow-hidden border">
-      <StepAlert text={alert} />
       <AccordionTrigger className="group items-center p-3 hover:no-underline">
         <span className="flex min-w-0 items-center gap-2">
           <span className="bg-secondary text-foreground text-body-xs flex size-5 flex-none items-center justify-center rounded-full font-semibold">
@@ -127,6 +131,7 @@ export function BatchStep({
           <span className="text-foreground text-value truncate">
             {callLabel(decode, transaction.action ?? stepFallbackLabel(index, hasData, value))}
           </span>
+          <UnreadableMark show={!!unreadable} />
           {/* Native value in the header, so a collapsed step still shows what it moves.
               Token amounts live in the calldata, so they only appear once expanded. */}
           {value && (
@@ -219,5 +224,34 @@ export function BridgeNotices({ messages }: { messages: readonly string[] }) {
         </p>
       ))}
     </div>
+  );
+}
+
+/** A small warning icon in the header. Tap it for what the screen could not read. */
+export function BridgeAlerts({ messages }: { messages: readonly string[] }) {
+  if (messages.length === 0) return null;
+  return (
+    <>
+      <Popover>
+        <PopoverTrigger asChild>
+          {/* p-1 -m-1 grows the tap area without moving the icon. */}
+          <button
+            type="button"
+            aria-label={messages.join(' ')}
+            className="text-destructive -m-1 flex-none cursor-pointer border-0 bg-transparent p-1"
+          >
+            <TriangleAlert className="size-4" strokeWidth={2} />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent side="bottom" align="start" className="text-body-sm w-64 p-3">
+          {messages.map((message) => (
+            <p key={message}>{message}</p>
+          ))}
+        </PopoverContent>
+      </Popover>
+      <span role="status" className="sr-only">
+        {messages.join(' ')}
+      </span>
+    </>
   );
 }

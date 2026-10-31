@@ -26,7 +26,7 @@ import { callTitle } from './DecodedCalldata';
 import { resolveBlockReason } from '../../utils/transactionFailure';
 import { allowanceFlag } from '../../utils/allowances';
 import { isBlockingPermissionProblem, PERMISSION_PROBLEM_TEXT } from '../../utils/permissionExecution';
-import { BatchStep, BridgeDetails, BridgeNotices, NAME_SOURCES, SingleCallData } from './CallSections';
+import { BatchStep, BridgeAlerts, BridgeDetails, BridgeNotices, NAME_SOURCES, SingleCallData } from './CallSections';
 import { InlineWarning, PartyRow, Row, ValueAmount } from '../primitives';
 import { NetworkFeeRow } from '../NetworkFeeRow';
 
@@ -215,7 +215,10 @@ export const TransactionDialog = ({
                 />
               </div>
             )}
-            <h2 className="text-foreground text-title-xl truncate pr-9">{title}</h2>
+            <div className="flex items-center gap-2 pr-9">
+              <h2 className="text-foreground text-title-xl min-w-0 truncate">{title}</h2>
+              {bridge && <BridgeAlerts messages={bridge.alerts} />}
+            </div>
             {totalTransactions > 1 && currentTransaction?.description && (
               <p className="text-muted-foreground text-body mt-1">
                 {currentTransaction.action}: {currentTransaction.description}
@@ -328,12 +331,6 @@ export const TransactionDialog = ({
                 />
               </div>
             )}
-
-            {bridge?.alerts.map((alert) => (
-              <div key={alert} role="alert">
-                <InlineWarning text={alert} />
-              </div>
-            ))}
 
             {/* Asset changes — a native send shows the same information in its hero. */}
             {!isNativeSend && (
