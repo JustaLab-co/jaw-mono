@@ -291,4 +291,44 @@ describe('AssetPreview bridge receive side for a token read from the chain', () 
     expect(get(out)).toContain('2500000000000000000 base units');
     expect(out).not.toContain('unverified');
   });
+
+  it('says the token could not be read when it is in base units', () => {
+    const out = html({ bridge: transferTo({ address: AAPL, known: false }) });
+    expect(get(out)).toContain('Could not read this token.');
+  });
+});
+
+describe('AssetPreview simulated rows with unusable decimals', () => {
+  const raw: AssetDelta = { ...usdcOut, decimals: 0, amountFormatted: '1234567', baseUnits: true };
+
+  it('shows the amount in base units, right after it, with the note', async () => {
+    await mount({ assetsOut: [raw] });
+    expect(host.textContent).toContain('\u22121234567 base units');
+    expect(host.textContent).toContain('Could not read the decimals.');
+    expect(host.textContent).not.toContain('In base units');
+  });
+
+  it('asks for no price for a base units row', async () => {
+    prices.fetch.mockResolvedValue(1);
+    await mount({ assetsOut: [raw] });
+    await settle();
+    expect(prices.fetch).not.toHaveBeenCalled();
+  });
+
+  it('labels a token with no symbol by its short address and asks for no price', async () => {
+    prices.fetch.mockResolvedValue(1);
+    await mount({ assetsOut: [{ ...usdcOut, symbol: undefined }] });
+    await settle();
+    expect(host.textContent).toContain('You send');
+    expect(host.textContent).toContain('0x036c...cf7e');
+    expect(prices.fetch).not.toHaveBeenCalled();
+  });
+
+  it('shows no dollar value for a pinned token whose amount is in base units', async () => {
+    prices.fetch.mockResolvedValue(1);
+    await mount({ assetsIn: [{ ...raw, direction: 'in', amountFormatted: '5000000' }] });
+    await settle();
+    expect(host.textContent).toContain('5000000 base units');
+    expect(host.textContent).not.toContain('$');
+  });
 });
