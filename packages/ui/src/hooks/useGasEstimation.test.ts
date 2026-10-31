@@ -97,10 +97,12 @@ function Probe({
   account,
   initialTokens,
   initialCalls = CALLS,
+  isSponsored = false,
 }: {
   account: Account;
   initialTokens: FeeTokenOption[];
   initialCalls?: TransactionCall[];
+  isSponsored?: boolean;
 }) {
   const [tokens, setTokens] = useState(initialTokens);
   const [calls, setCalls] = useState(initialCalls);
@@ -115,6 +117,7 @@ function Probe({
     chainId: 84532,
     apiKey,
     feeTokens: tokens,
+    isSponsored,
     onFeeTokensUpdate: setTokens,
   });
   return null;
@@ -685,6 +688,60 @@ describe('useGasEstimation fee-token outcome per ERC-20 result', () => {
       await retry();
       expect(usdcNow()).toMatchObject({ isSelectable: false, estimationFailure: undefined });
     });
+  });
+
+  // A round that throws before its legs run still replaces what the previous round recorded.
+  describe('a round that throws before estimating', () => {
+    let accountError: unknown;
+    const account = {
+      calculateGasCost: async () => {
+        throw new Error("AA21 didn't pay prefund");
+      },
+      getSmartAccountFor: async () => {
+        if (accountError) throw accountError;
+        return {};
+      },
+      getChain: () => ({ id: 84532 }),
+    } as unknown as Account;
+    const failThenThrow = async (error: unknown) => {
+      accountError = undefined;
+      erc20Mock.mockRejectedValueOnce(new Error('execution reverted: Across quote expired'));
+      await mount(account, [nativeEth(0n), token({})]);
+      expect(usdcNow().estimationFailure).toBe('execution reverted: Across quote expired');
+
+      accountError = error;
+      await act(async () => hook.refetch());
+      await flush();
+    };
+
+    it('reports its own error, not the earlier one', async () => {
+      await failThenThrow(new Error('smart account lookup timed out'));
+
+      expect(usdcNow()).toMatchObject({ isSelectable: false, estimationFailure: 'smart account lookup timed out' });
+      expect(blockNow()).toBe('estimation-failed');
+    });
+
+    it('reads as a shortfall when it is a balance revert', async () => {
+      await failThenThrow(new Error('ERC20: transfer amount exceeds balance'));
+
+      expect(usdcNow().estimationFailure).toBeUndefined();
+      expect(blockNow()).toBe('funds');
+    });
+  });
+
+  it('a switch to a sponsored fee drops the earlier failure', async () => {
+    erc20Mock.mockRejectedValueOnce(new Error('execution reverted'));
+    const account = makeAccount(async () => {
+      throw new Error("AA21 didn't pay prefund");
+    });
+    const initialTokens = [nativeEth(0n), token({})];
+    await mount(account, initialTokens);
+    expect(usdcNow().estimationFailure).toBe('execution reverted');
+
+    await act(async () => root!.render(createElement(Probe, { account, initialTokens, isSponsored: true })));
+    await flush();
+
+    expect(tokensNow.filter((t) => t.estimationFailure)).toEqual([]);
   });
 
   // A token the paymaster leaves out of a quote is unproven, whatever an earlier round said of it.

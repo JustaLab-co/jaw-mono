@@ -132,6 +132,19 @@ function unpriced(token: FeeTokenOption): FeeTokenOption {
   };
 }
 
+/**
+ * Every funded ERC-20 marked as failed to estimate. The reason is recorded unless the error is a
+ * balance revert, which is a real shortfall and keeps reading as one.
+ */
+function markEstimationFailed(tokens: FeeTokenOption[], error: unknown): FeeTokenOption[] {
+  const estimationFailure = classifyRevert(error) === 'balance' ? undefined : describeFailure(error);
+  return tokens.map((token) => {
+    if (token.isNative) return token;
+    if (token.balance === 0n) return unpriced(token);
+    return { ...unpriced(token), gasCostFormatted: 'Estimation failed', estimationFailure };
+  });
+}
+
 // ============================================================================
 // Hook Implementation
 // ============================================================================
@@ -271,6 +284,10 @@ export function useGasEstimation({
       setGasFee('sponsored');
       setGasFeeLoading(false);
       setGasEstimationError('');
+      const tokens = feeTokensRef.current;
+      if (tokens.some((t) => t.estimationFailure)) {
+        onFeeTokensUpdateRef.current?.(tokens.map((t) => ({ ...t, estimationFailure: undefined })));
+      }
       return;
     }
 
@@ -399,15 +416,7 @@ export function useGasEstimation({
         } else {
           // Unexpected error - log it and show estimation failed
           console.error('[useGasEstimation] ERC-20 estimation failed:', erc20Result.reason);
-          // A balance revert is a real shortfall and keeps reading as one.
-          const estimationFailure =
-            classifyRevert(erc20Result.reason) === 'balance' ? undefined : describeFailure(erc20Result.reason);
-          updatedFeeTokens = currentFeeTokens.map((token) => {
-            if (token.isNative) return token;
-
-            if (token.balance === 0n) return unpriced(token);
-            return { ...unpriced(token), gasCostFormatted: 'Estimation failed', estimationFailure };
-          });
+          updatedFeeTokens = markEstimationFailed(currentFeeTokens, erc20Result.reason);
         }
         onFeeTokensUpdateRef.current?.(updatedFeeTokens);
       }
@@ -434,6 +443,8 @@ export function useGasEstimation({
         return;
       }
       ethEstimatedForRef.current = '';
+      // Nothing was estimated, so no earlier quote or failure still holds.
+      onFeeTokensUpdateRef.current?.(markEstimationFailed(feeTokensRef.current, error));
       handleEstimationError(error);
     } finally {
       // Only update loading states if this is still the current estimation
