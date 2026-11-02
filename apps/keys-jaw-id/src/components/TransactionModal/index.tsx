@@ -211,6 +211,8 @@ export const TransactionModal = ({
     selectedFeeToken,
     setSelectedFeeToken,
     isPayingWithErc20,
+    refetch: retryEstimation,
+    estimatingTokenCosts,
   } = useGasEstimation({
     account,
     transactionCalls,
@@ -521,6 +523,8 @@ export const TransactionModal = ({
       selectedFeeToken={selectedFeeToken}
       onFeeTokenSelect={setSelectedFeeToken}
       showFeeTokenSelector={showFeeTokenSelector}
+      onRetryEstimation={retryEstimation}
+      estimatingTokenCosts={estimatingTokenCosts}
       isPayingWithErc20={isPayingWithErc20}
       nativeCurrencySymbol={chain?.nativeCurrency?.symbol}
     />
