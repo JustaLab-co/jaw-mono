@@ -60,6 +60,13 @@ function flagPlacement(param: DecodedParam | undefined, flag: AllowanceFlag): 'r
   return isUnlimitedAmount(flag.amount) ? 'replace' : 'beside';
 }
 
+const TrailingBytes = ({ hex }: { hex: string }) => (
+  <div className="flex flex-col gap-1">
+    <span className="text-muted-foreground text-xs font-semibold">{(hex.length - 2) / 2} bytes not decoded</span>
+    <p className="text-foreground break-all font-mono text-xs leading-normal">{hex}</p>
+  </div>
+);
+
 /**
  * ERC-8213 Calldata Digest, collapsed behind a disclosure like the raw calldata
  * view. Shown only for non-empty calldata; the spec omits the digest when
@@ -174,6 +181,7 @@ export const DecodedCalldataView = ({
                       <p className="text-foreground break-all font-mono text-xs leading-normal">{param.value}</p>
                     </div>
                   ))}
+                  {decoded.trailing && <TrailingBytes hex={decoded.trailing} />}
                 </div>
               </>
             ) : null}
@@ -257,6 +265,7 @@ export const DecodedCalldataView = ({
             </div>
           );
         })}
+        {decoded.trailing && <TrailingBytes hex={decoded.trailing} />}
       </div>
 
       <details className="text-xs">

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { encodeFunctionData, parseAbi, toFunctionSelector, type Hex } from 'viem';
-import { decodeWithAbi } from './useDecodedCalldata';
+import { decodeWithAbi } from './decodeWithAbi';
 
 const abi4 = parseAbi(['function depositErc20(address depositor, address token, uint256 amount, bytes32 id)']);
 const abi3 = parseAbi(['function depositErc20(address depositor, address token, bytes32 id)']);
@@ -28,8 +28,36 @@ describe('decodeWithAbi', () => {
     ]);
   });
 
-  it('returns null when the calldata carries bytes the signature does not encode', () => {
-    expect(decodeWithAbi(abi4, `${data}00`)).toBeNull();
+  it('decodes calldata with a suffix and reports the bytes it did not decode', () => {
+    const decoded = decodeWithAbi(abi4, `${data}8021802180218021` as Hex);
+    expect(decoded?.signature).toBe('depositErc20(address, address, uint256, bytes32)');
+    expect(decoded?.trailing).toBe('0x8021802180218021');
+  });
+
+  it('reports no tail on exact calldata', () => {
+    expect(decodeWithAbi(abi4, data)?.trailing).toBeUndefined();
+  });
+
+  it.each([
+    [
+      'uint128 vs uint256',
+      'function f(uint128 a, address b)',
+      'function f(uint256 a, address b)',
+      'f(uint128, address)',
+    ],
+    ['bytes32 vs string', 'function g(bytes32 a)', 'function g(string a)', 'g(bytes32)'],
+    ['address vs bytes20', 'function h(address a)', 'function h(bytes20 a)', 'h(address)'],
+  ])('picks the overload by selector for %s in either declaration order', (_, called, other, sig) => {
+    const callAbi = parseAbi([called]);
+    const otherAbi = parseAbi([other]);
+    const args = sig.startsWith('g')
+      ? ['0x' + '11'.repeat(32)]
+      : sig.startsWith('h')
+        ? ['0xfAbc9dDe6d43b39E087122A80f05E80615110b65']
+        : [5n, '0xfAbc9dDe6d43b39E087122A80f05E80615110b65'];
+    const calldata = encodeFunctionData({ abi: callAbi, functionName: callAbi[0].name, args: args as never });
+    expect(decodeWithAbi([...callAbi, ...otherAbi], calldata)?.signature).toBe(sig);
+    expect(decodeWithAbi([...otherAbi, ...callAbi], calldata)?.signature).toBe(sig);
   });
 
   it('returns null when no ABI entry has the selector', () => {
@@ -80,5 +108,11 @@ describe('decodeWithAbi', () => {
       undefined,
       undefined,
     ]);
+  });
+
+  it('decodes a function with no arguments to an empty param list', () => {
+    const noArgs = parseAbi(['function pause()']);
+    const calldata = encodeFunctionData({ abi: noArgs, functionName: 'pause' });
+    expect(decodeWithAbi(noArgs, calldata)).toMatchObject({ signature: 'pause()', params: [] });
   });
 });

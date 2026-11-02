@@ -333,3 +333,17 @@ describe('DecodedCalldataView allowance flag', () => {
     expect(text()).not.toContain('Unlimited');
   });
 });
+
+describe('DecodedCalldataView suffix', () => {
+  it('names the bytes after the last argument and prints them', () => {
+    const decoded = { ...approveDecode.decoded!, trailing: '0x8021802180218021' as const };
+    show({ ...approveDecode, decoded }, null);
+    expect(text()).toContain('8 bytes not decoded');
+    expect(text()).toContain('0x8021802180218021');
+  });
+
+  it('shows no tail row for exact calldata', () => {
+    show(approveDecode, null);
+    expect(text()).not.toContain('not decoded');
+  });
+});

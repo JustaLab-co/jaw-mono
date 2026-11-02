@@ -140,3 +140,41 @@ describe('allowance flag on a collapsed call', () => {
     expect(header()).not.toContain('Unlimited');
   });
 });
+
+describe('unlimited approval with a calldata suffix', () => {
+  it('still shows the decoded call and the Unlimited flag on the signing screen', async () => {
+    const { encodeFunctionData, maxUint256, parseAbi } = await import('viem');
+    const { decodeWithAbi } = await import('../../utils/decodeWithAbi');
+    const { allowanceFlag } = await import('../../utils/allowances');
+    const abi = parseAbi(['function approve(address spender, uint256 amount)']);
+    const approve = encodeFunctionData({
+      abi,
+      functionName: 'approve',
+      args: ['0x1111111111111111111111111111111111111111', maxUint256],
+    });
+    const data = `${approve}8021802180218021` as `0x${string}`;
+    const decoded = decodeWithAbi(abi, data);
+    lookup = { clearSigned: null, isLoading: false, decoded };
+    const flag = allowanceFlag({ to: TOKEN, data });
+
+    act(() => {
+      root.render(
+        createElement(
+          Accordion,
+          { type: 'single', collapsible: true },
+          createElement(SingleCallData, {
+            to: TOKEN,
+            data,
+            decode: lookup,
+            chainId: 8453,
+            mainnetRpcUrl: 'https://rpc.test/mainnet',
+            allowanceFlag: flag,
+          })
+        )
+      );
+    });
+
+    expect(header()).toContain('approve');
+    expect(header()).toContain('Unlimited');
+  });
+});

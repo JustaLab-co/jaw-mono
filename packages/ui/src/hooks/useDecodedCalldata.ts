@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { decodeFunctionData, encodeFunctionData, getAbiItem, type Abi, type Hex } from 'viem';
+import type { Abi, Hex } from 'viem';
 import { getPublicClient, jawRpcUrl } from '../utils/publicClient';
 import {
   applyFormat,
@@ -11,6 +11,7 @@ import {
   resolveCalldataDescriptor,
   type ClearSigningDisplay,
 } from '../utils/clearSigning';
+import { decodeWithAbi } from '../utils/decodeWithAbi';
 
 export interface DecodedParam {
   name: string;
@@ -23,6 +24,8 @@ export interface DecodedCalldata {
   functionName: string;
   signature: string;
   params: DecodedParam[];
+  /** Bytes after the last argument (a builder-code or referral suffix), when the call has any. */
+  trailing?: Hex;
 }
 
 /**
@@ -79,42 +82,6 @@ async function fetchAbi(address: string, rpcUrl: string, chainId: number): Promi
     return await promise;
   } finally {
     abiInflight.delete(key);
-  }
-}
-
-function formatParamValue(value: unknown): string {
-  if (typeof value === 'bigint') return value.toString();
-  if (Array.isArray(value)) return `[${value.map(formatParamValue).join(', ')}]`;
-  if (typeof value === 'object' && value !== null) return JSON.stringify(value);
-  return String(value);
-}
-
-/**
- * Decodes with the one ABI entry the calldata's selector names. An ABI can hold several
- * overloads of one name, so the entry is taken from the decoder, never looked up by name. A
- * decode that does not re-encode to the same bytes is dropped rather than shown with types that
- * do not match.
- */
-export function decodeWithAbi(abi: Abi, data: Hex): DecodedCalldata | null {
-  try {
-    const { functionName, args } = decodeFunctionData({ abi, data });
-    const item = getAbiItem({ abi, name: functionName, args });
-    if (!item || item.type !== 'function') return null;
-    if (encodeFunctionData({ abi: [item], functionName, args }).toLowerCase() !== data.toLowerCase()) return null;
-    const { inputs } = item;
-    return {
-      functionName,
-      signature: `${functionName}(${inputs.map((inp) => inp.type).join(', ')})`,
-      params: (args ?? []).map((arg, i) => ({
-        name: inputs[i].name || `param${i}`,
-        type: inputs[i].type,
-        value: formatParamValue(arg),
-        ...(inputs[i].type === 'address' && typeof arg === 'string' ? { rawValue: arg } : {}),
-      })),
-    };
-  } catch (err) {
-    console.debug('[useDecodedCalldata] raw decode failed:', err);
-    return null;
   }
 }
 
