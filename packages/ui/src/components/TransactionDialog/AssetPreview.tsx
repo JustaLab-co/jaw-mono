@@ -257,6 +257,23 @@ const sentDeltas = ({ amount, token }: TokenAmount): AssetDelta[] =>
       ]
     : [];
 
+// The simulation reads the token on its own and can miss what the bridge's read got, as with a
+// bytes32 symbol. The bridge's read then names and scales the simulated amount.
+function withBridgeRead(delta: AssetDelta, { token }: TokenAmount): AssetDelta {
+  if (delta.symbol && !delta.baseUnits) return delta;
+  if (!token.known && !token.unverified) return delta;
+  if (delta.address.toLowerCase() !== token.address.toLowerCase()) return delta;
+  const magnitude = delta.diff < 0n ? -delta.diff : delta.diff;
+  return {
+    ...delta,
+    symbol: token.symbol,
+    decimals: token.decimals,
+    amountFormatted: formatUnits(magnitude, token.decimals),
+    unverified: token.known ? undefined : true,
+    baseUnits: undefined,
+  };
+}
+
 // Cut, not rounded: a minimum must never read higher than it is. Four decimals, or four
 // significant digits when the amount is smaller than that.
 function floorAmount(exact: string): string {
@@ -377,7 +394,9 @@ export const AssetPreview = ({
 
   // The simulation cannot see the other chain, so a bridge view takes its receive side from the
   // decoded deposit alone. Simulated incoming tokens are a different thing and stay out of it.
-  const bridgeOut = bridge && (!error && assetsOut.length > 0 ? assetsOut : sentDeltas(bridge.send));
+  const bridgeOut =
+    bridge &&
+    (!error && assetsOut.length > 0 ? assetsOut.map((d) => withBridgeRead(d, bridge.send)) : sentDeltas(bridge.send));
   const bridgeIn = bridge?.receive ? receivedDeltas(bridge.receive) : [];
   const shown = bridgeOut ? bridgeOut : [...assetsOut, ...assetsIn];
   // An unverified symbol is the token's own word, and a base units row has no price to scale, so

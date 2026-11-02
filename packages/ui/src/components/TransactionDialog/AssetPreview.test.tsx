@@ -298,6 +298,47 @@ describe('AssetPreview bridge receive side for a token read from the chain', () 
   });
 });
 
+describe('AssetPreview bridge send side when the simulation could not read the token', () => {
+  const MKR = '0x9f8F72aA9304c8B593d555F12eF6589cC3A579A2';
+  const bridge: BridgeTransfer = {
+    provider: 'across',
+    title: 'Bridge to Base',
+    send: {
+      chainId: 1,
+      amount: 2_000_000_000_000_000_000n,
+      token: { address: MKR, known: true, symbol: 'MKR', decimals: 18 },
+    },
+    origin: { name: 'Ethereum', nativeSymbol: 'ETH' },
+    details: [],
+  };
+  const simulated: AssetDelta = {
+    address: MKR.toLowerCase(),
+    decimals: 18,
+    diff: -2_000_000_000_000_000_000n,
+    direction: 'out',
+    amountFormatted: '2',
+    isNative: false,
+  };
+
+  it('names a row the simulation left without a symbol by the symbol the bridge read', () => {
+    const out = html({ assetsOut: [simulated], bridge });
+    expect(out).toContain('MKR');
+  });
+
+  it('scales a row the simulation left in base units by the decimals the bridge read', () => {
+    const raw = {
+      ...simulated,
+      symbol: 'MKR',
+      decimals: 0,
+      amountFormatted: '2000000000000000000',
+      baseUnits: true as const,
+    };
+    const out = html({ assetsOut: [raw], bridge });
+    expect(out).not.toContain('base units');
+    expect(out).not.toContain('Could not read the decimals.');
+  });
+});
+
 describe('AssetPreview simulated rows with unusable decimals', () => {
   const raw: AssetDelta = { ...usdcOut, decimals: 0, amountFormatted: '1234567', baseUnits: true };
 
