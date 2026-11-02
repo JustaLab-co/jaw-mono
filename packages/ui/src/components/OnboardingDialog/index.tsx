@@ -12,8 +12,8 @@ import { selectDefaultAccount } from './selectDefaultAccount';
 import { backfillLocalAccountAddresses } from './accountHelpers';
 import { useState, useEffect, useMemo } from 'react';
 import { getJustaNameInstance } from '../../utils/justaNameInstance';
-import { useAddressIdentities, useAddressIdentity } from '../../hooks/useAddressIdentities';
-import { ENS_AVATAR_ONLY, ENS_ONLY } from '../../utils/addressIdentity';
+import { useAddressIdentities } from '../../hooks/useAddressIdentities';
+import { ENS_ONLY } from '../../utils/addressIdentity';
 import { identityKey } from '../../utils/reverseResolve';
 import { cn } from '../../lib/utils';
 import { toCoinType } from 'viem';
@@ -427,17 +427,13 @@ export function OnboardingDialog({
     const address = addressOf(account);
     return address ? identities[identityKey(address, 1)] : undefined;
   };
-  // Only the "Continue as" tile shows an avatar, so only its account asks for one. The avatar
-  // arrives after the name and never holds the tile's skeleton.
-  const defaultAddress = defaultAccount ? addressOf(defaultAccount) : undefined;
-  const defaultIdentity = useAddressIdentity(defaultAddress, 1, { mainnetRpcUrl, include: ENS_AVATAR_ONLY });
-  const defaultAvatar = defaultIdentity?.ensAvatar ?? undefined;
+  const avatarFor = (account: LocalStorageAccount) => identityOf(account)?.ensAvatar ?? undefined;
   const displayNameOf = (account: LocalStorageAccount) => identityOf(account)?.ensPlainName ?? account.username;
   /**
-   * True while this account's name is still unknown: either its address is
-   * being backfilled, or the address's reverse resolution hasn't settled.
-   * Drives the skeleton so the tile reveals once, without the username→name
-   * flip. The avatar is not waited for: it fills in over the identicon.
+   * True while this account's final identity is still unknown: either its
+   * address is being backfilled, or the address's reverse resolution hasn't
+   * settled. Drives the skeleton so the tile reveals once, without the
+   * blob→avatar / username→name flip.
    */
   const identityPending = (account: LocalStorageAccount) => {
     const address = addressOf(account);
@@ -538,7 +534,8 @@ export function OnboardingDialog({
           className="bg-primary hover:bg-primary/90 rounded-box mt-6 flex cursor-pointer items-center gap-3 p-3 text-left transition-colors disabled:cursor-default disabled:opacity-70"
         >
           {identityPending(defaultAccount) ? (
-            // Skeleton until the name settles — no username→name flip.
+            // Skeleton until the identity settles — one reveal, no
+            // blob→avatar / username→name flip.
             <>
               {/* bg override: the default bg-accent token is near-invisible on this white tile */}
               <Skeleton className="bg-primary-foreground/10 rounded-box h-10 w-10 flex-none" />
@@ -554,7 +551,7 @@ export function OnboardingDialog({
                   that predate address persistence. */}
               <AccountAvatar
                 seed={defaultAccount.address ?? defaultAccount.username}
-                avatarUrl={defaultAvatar}
+                avatarUrl={avatarFor(defaultAccount)}
                 size={40}
                 className="rounded-box h-10 w-10"
               />

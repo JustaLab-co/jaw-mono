@@ -160,17 +160,13 @@ export async function reverseResolveWithAvatars(
 }
 
 /**
- * Like {@link reverseResolveWithAvatars}, but says which addresses went unanswered instead of
+ * Like {@link reverseResolveAddresses}, but says which addresses went unanswered instead of
  * reading a failed request as "no name". For callers that keep the answer: a miss is worth
  * keeping for the session, an outage is not.
  *
- * `withRecords: false` asks for the names alone. The records lookup behind an avatar can take
- * tens of seconds upstream, while the names come back in about a second.
+ * Names only, without `records=true`: the records lookup can take tens of seconds upstream,
+ * while the names come back in about a second.
  */
-export function reverseResolveIdentities(
-  inputs: ReverseInput[],
-  rpcUrl: string,
-  withRecords = true
-): Promise<ReverseResolution> {
-  return reverseResolve(inputs, rpcUrl, withRecords);
+export function reverseResolveIdentities(inputs: ReverseInput[], rpcUrl: string): Promise<ReverseResolution> {
+  return reverseResolve(inputs, rpcUrl, false);
 }

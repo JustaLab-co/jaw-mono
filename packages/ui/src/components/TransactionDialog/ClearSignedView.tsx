@@ -2,7 +2,7 @@ import { ethAddress } from 'viem';
 import type { ClearSigningDisplay, DisplayRow } from '../../utils/clearSigning';
 import { useAddressIdentities } from '../../hooks/useAddressIdentities';
 import { formatAddress, identityKey } from '../../utils';
-import { ENS_WITH_AVATAR } from '../../utils/addressIdentity';
+import { ENS_ONLY } from '../../utils/addressIdentity';
 import { dateTone, formatUnixDate, groupNumber, isUnlimitedAmount } from '../../utils/displayFormat';
 import { TriangleAlert } from 'lucide-react';
 import { IdentityAvatar } from '../IdentityAvatar';
@@ -90,7 +90,7 @@ export const ClearSignedView = ({ display, chainId, mainnetRpcUrl }: ClearSigned
   const rowAddresses = display.rows
     .filter((r) => r.kind === 'address' && r.rawValue)
     .map((r) => ({ address: r.rawValue as string, chainId }));
-  const identities = useAddressIdentities(rowAddresses, { mainnetRpcUrl, include: ENS_WITH_AVATAR });
+  const identities = useAddressIdentities(rowAddresses, { mainnetRpcUrl, include: ENS_ONLY });
 
   const hasHeader = !!display.intent;
   const hasRows = display.rows.length > 0;

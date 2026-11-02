@@ -5,30 +5,30 @@ import { caip10, getDefaultDescriptorSource } from './clearSigning/source';
 import type { CalldataIndex } from './clearSigning/types';
 import { getJawPublicClient } from './publicClient';
 import { getChainLabel } from './resolveChainLabel';
-import { identityKey, reverseResolveIdentities, type ReverseInput, type ReverseResolution } from './reverseResolve';
+import {
+  ensMetadataAvatarUrl,
+  identityKey,
+  reverseResolveIdentities,
+  type ReverseInput,
+  type ReverseResolution,
+} from './reverseResolve';
 import { tokenIconUrl } from './tokenIcon';
 
 // ============================================================================
 //  Address identity loader
 // ----------------------------------------------------------------------------
-// Answers, per address and chain, what an address can be known by: its ENS name
-// and avatar, the token it is, and its ERC-7730 clear-signing name.
+// Answers, per address and chain, the three things an address can be known by:
+// its ENS name, the token it is, and its ERC-7730 clear-signing name.
 //
 // Every answer is published for display, and listeners hear about it. Only a
 // complete answer is also kept, which spares later callers the request: a clean
 // miss is kept, an outage is not, so the next caller asks again.
 // ============================================================================
 
-export type IdentitySource = 'ens' | 'ensAvatar' | 'token' | 'clearSigning';
+export type IdentitySource = 'ens' | 'token' | 'clearSigning';
 
-/** For a screen that shows who an address is and nothing else, without avatars. */
+/** For a screen that shows who an address is and nothing else. */
 export const ENS_ONLY: readonly IdentitySource[] = ['ens'];
-
-/** {@link ENS_ONLY} with each name's avatar, which arrives after the name. */
-export const ENS_WITH_AVATAR: readonly IdentitySource[] = ['ens', 'ensAvatar'];
-
-/** The avatar alone, for an address whose name is already asked for on its own. */
-export const ENS_AVATAR_ONLY: readonly IdentitySource[] = ['ensAvatar'];
 
 /** For a contract named only from the clear-signing registry, never by a name it chose itself. */
 export const CLEAR_SIGNING_ONLY: readonly IdentitySource[] = ['clearSigning'];
@@ -38,10 +38,10 @@ export interface EnsIdentity {
   name: string;
   /** The same name without the suffix. For anything acted on. */
   plainName: string;
-}
-
-export interface EnsAvatarIdentity {
-  /** The avatar, served through the ENS metadata proxy. */
+  /**
+   * The name's avatar through the ENS metadata proxy, built from the name alone: whether the
+   * name has one is not asked, so it can 404, and every avatar renderer falls back on error.
+   */
   avatar: string;
 }
 
@@ -58,7 +58,6 @@ export interface ClearSigningIdentity {
 
 export interface IdentitySources {
   ens: EnsIdentity;
-  ensAvatar: EnsAvatarIdentity;
   token: TokenIdentity;
   clearSigning: ClearSigningIdentity;
 }
@@ -189,10 +188,9 @@ function remember<T>(key: string, load: () => Promise<Answer<T>>): void {
 // Every address asked for before the current task ends rides one request: a screen's
 // components run their effects in the same commit, so they land in the same batch.
 //
-// Names and avatars go out as separate requests. An avatar needs each name's records, a
-// lookup that can take tens of seconds upstream, while the names alone come back in about
-// a second, so a name never waits on an avatar, and a screen asks for avatars only where
-// it shows one.
+// The request asks for names only. An avatar URL depends on the name alone, so it is built
+// here instead of read from the name's records, a lookup that can take tens of seconds
+// upstream while the names come back in about a second.
 
 interface EnsBatch {
   inputs: ReverseInput[];
@@ -201,34 +199,28 @@ interface EnsBatch {
 
 const ensBatches = new Map<string, EnsBatch>();
 
-function joinEnsBatch(input: ReverseInput, rpcUrl: string, withRecords: boolean): Promise<ReverseResolution> {
-  const batchKey = `${withRecords ? 'records' : 'names'}:${rpcUrl}`;
-  let batch = ensBatches.get(batchKey);
+function joinEnsBatch(input: ReverseInput, rpcUrl: string): Promise<ReverseResolution> {
+  let batch = ensBatches.get(rpcUrl);
   if (!batch) {
     const inputs: ReverseInput[] = [];
     const result = Promise.resolve().then(() => {
-      if (ensBatches.get(batchKey) === batch) ensBatches.delete(batchKey);
-      return reverseResolveIdentities(inputs, rpcUrl, withRecords);
+      if (ensBatches.get(rpcUrl) === batch) ensBatches.delete(rpcUrl);
+      return reverseResolveIdentities(inputs, rpcUrl);
     });
     batch = { inputs, result };
-    ensBatches.set(batchKey, batch);
+    ensBatches.set(rpcUrl, batch);
   }
   batch.inputs.push(input);
   return batch.result;
 }
 
-/** The answer for this input from a batch, throwing when its request failed so an outage is not kept. */
-async function readEnsSlot(input: ReverseInput, rpcUrl: string, withRecords: boolean) {
-  const { resolved, unanswered } = await joinEnsBatch(input, rpcUrl, withRecords);
+async function readEns(input: ReverseInput, { mainnetRpcUrl }: IdentityContext): Promise<Answer<EnsIdentity>> {
+  const { resolved, unanswered } = await joinEnsBatch(input, mainnetRpcUrl);
   const key = identityKey(input.address, input.chainId);
   if (unanswered.some((u) => identityKey(u.address, u.chainId) === key)) {
     throw new Error('Reverse resolution unanswered');
   }
-  return resolved[key];
-}
-
-async function readEns(input: ReverseInput, { mainnetRpcUrl }: IdentityContext): Promise<Answer<EnsIdentity>> {
-  const identity = await readEnsSlot(input, mainnetRpcUrl, false);
+  const identity = resolved[key];
   if (!identity) return { value: null, keep: true, ttlMs: ENS_MISS_TTL_MS };
   // getChainLabel remembers its own answers, a failed lookup included, so the suffix here is
   // whatever every other name on the page carries.
@@ -237,19 +229,10 @@ async function readEns(input: ReverseInput, { mainnetRpcUrl }: IdentityContext):
     value: {
       name: label ? `${identity.name}@${label}` : identity.name,
       plainName: identity.name,
+      avatar: ensMetadataAvatarUrl(identity.name),
     },
     keep: true,
   };
-}
-
-async function readEnsAvatar(
-  input: ReverseInput,
-  { mainnetRpcUrl }: IdentityContext
-): Promise<Answer<EnsAvatarIdentity>> {
-  const identity = await readEnsSlot(input, mainnetRpcUrl, true);
-  // Held like a missed name: an avatar set mid-session shows on the next dialog.
-  if (!identity?.avatar) return { value: null, keep: true, ttlMs: ENS_MISS_TTL_MS };
-  return { value: { avatar: identity.avatar }, keep: true };
 }
 
 // ---- Token -----------------------------------------------------------------
@@ -325,7 +308,7 @@ async function readClearSigning({ address, chainId }: ReverseInput): Promise<Ans
 
 const readers: {
   [S in IdentitySource]: (input: ReverseInput, context: IdentityContext) => Promise<Answer<IdentitySources[S]>>;
-} = { ens: readEns, ensAvatar: readEnsAvatar, token: readToken, clearSigning: readClearSigning };
+} = { ens: readEns, token: readToken, clearSigning: readClearSigning };
 
 /**
  * Asks one source about one address, unless a complete answer is already kept or the same

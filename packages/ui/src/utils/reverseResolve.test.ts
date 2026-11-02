@@ -120,15 +120,13 @@ describe('one name per address and chain', () => {
 describe('reverseResolveIdentities', () => {
   const input = { address: ADDRESS, chainId: 1 };
 
-  it('answers like reverseResolveWithAvatars when the service is up', async () => {
-    stubFetch(slot(ADDRESS, 'alice.eth', 1, [{ key: 'avatar', value: 'https://x/a.png' }]));
+  it('asks for names only, without records', async () => {
+    const mockFetch = stubFetch(slot(ADDRESS, 'alice.eth', 1));
 
     const { resolved, unanswered } = await reverseResolveIdentities([input], RPC_URL);
 
-    expect(resolved[identityKey(ADDRESS, 1)]).toEqual({
-      name: 'alice.eth',
-      avatar: 'https://metadata.ens.domains/mainnet/avatar/alice.eth',
-    });
+    expect(new URL(mockFetch.mock.calls[0][0]).searchParams.get('records')).toBeNull();
+    expect(resolved[identityKey(ADDRESS, 1)]).toEqual({ name: 'alice.eth' });
     expect(unanswered).toEqual([]);
   });
 

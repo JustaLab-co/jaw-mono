@@ -70,12 +70,6 @@ const props = {
 
 let container: HTMLDivElement;
 let root: Root;
-/** Names and avatars go out as separate requests; each kind is batched on its own. */
-const byKind = (requests: URL[]) => ({
-  names: requests.filter((url) => url.searchParams.get('records') !== 'true'),
-  avatars: requests.filter((url) => url.searchParams.get('records') === 'true'),
-});
-
 let ensRequests: URL[];
 
 beforeEach(() => {
@@ -110,8 +104,7 @@ describe('DecodedCalldataView address resolution', () => {
     });
     await settle();
 
-    expect(byKind(ensRequests).names).toHaveLength(1);
-    expect(byKind(ensRequests).avatars).toHaveLength(1);
+    expect(ensRequests).toHaveLength(1);
     expect(container.textContent).toContain(`${ENS_NAME}@base`);
   });
 
@@ -128,8 +121,7 @@ describe('DecodedCalldataView address resolution', () => {
     });
     await settle();
 
-    expect(byKind(ensRequests).names).toHaveLength(1);
-    expect(byKind(ensRequests).avatars).toHaveLength(1);
+    expect(ensRequests).toHaveLength(1);
     expect(countNames()).toBe(2);
   });
 });
@@ -195,7 +187,7 @@ describe('DecodedCalldataView reads the name for its own chain', () => {
 
     expect(container.textContent).toContain(MAINNET_NAME);
     expect(container.textContent).toContain(BASE_NAME);
-    expect(byKind(ensRequests).names[0].searchParams.getAll('address')).toEqual([
+    expect(ensRequests[0].searchParams.getAll('address')).toEqual([
       `${RECIPIENT}@eip155:1`,
       `${RECIPIENT}@eip155:8453`,
     ]);

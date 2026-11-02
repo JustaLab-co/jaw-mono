@@ -15,9 +15,10 @@ const OTHER = '0x2222222222222222222222222222222222222222';
 
 const NAMES: Record<string, string> = { [LAST_USED]: 'ghadi.justan.id', [OTHER]: 'other.justan.id' };
 
+// The "Continue as" account is second, and not the newest, so only the credential match picks it.
 const accounts: LocalStorageAccount[] = [
+  { username: 'other', creationDate: new Date('2026-01-03'), credentialId: 'cred-other', address: OTHER },
   { username: 'ghadi', creationDate: new Date('2026-01-02'), credentialId: 'cred-last', address: LAST_USED },
-  { username: 'other', creationDate: new Date('2026-01-01'), credentialId: 'cred-other', address: OTHER },
 ];
 
 const props: OnboardingDialogProps = {
@@ -38,34 +39,25 @@ const props: OnboardingDialogProps = {
 let reverseRequests: URL[];
 
 /**
- * Names answer straight away. A `records=true` request, the only one that carries
- * avatars, answers only when `releaseRecords` is called, as when the records lookup
- * stalls upstream.
+ * Names answer straight away. A `records=true` request never answers, as when the records
+ * lookup stalls upstream, so anything that waits on one never shows.
  */
-let releaseRecords: () => void;
-
 function stubNetwork() {
   reverseRequests = [];
-  let release: () => void = () => undefined;
-  const recordsGate = new Promise<void>((resolve) => (release = resolve));
-  releaseRecords = () => release();
-
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: string) => {
       const url = new URL(input);
       if (!url.pathname.startsWith('/ens/v2/reverse')) return new Response('{}', { status: 200 });
       reverseRequests.push(url);
-      const withRecords = url.searchParams.get('records') === 'true';
-      if (withRecords) await recordsGate;
+      if (url.searchParams.get('records') === 'true') return new Promise<Response>(() => undefined);
       const data = url.searchParams.getAll('address').map((param) => {
         const [address, chain] = param.split('@eip155:');
-        const name = NAMES[address.toLowerCase()] ?? null;
         return {
           address: address.toLowerCase(),
-          name,
+          name: NAMES[address.toLowerCase()] ?? null,
           coinType: Number(toCoinType(Number(chain))),
-          records: withRecords && name ? { records: { texts: [{ key: 'avatar', value: 'https://x/a.png' }] } } : null,
+          records: null,
         };
       });
       return new Response(JSON.stringify({ result: { data } }), { status: 200 });
@@ -84,8 +76,7 @@ async function settle() {
   }
 }
 
-const avatarImage = () =>
-  Array.from(container.querySelectorAll('img')).find((img) => img.src.includes('/avatar/ghadi.justan.id'));
+const avatarImages = () => Array.from(container.querySelectorAll('img')).filter((img) => img.src.includes('/avatar/'));
 
 beforeEach(() => {
   clearAddressIdentityCache();
@@ -102,41 +93,29 @@ afterEach(() => {
 });
 
 describe('OnboardingDialog "Continue as" tile', () => {
-  it('shows the name while the avatar is still on the way', async () => {
+  it('shows the name and its avatar from the names request alone', async () => {
     await act(async () => {
       root.render(createElement(OnboardingDialog, props));
     });
     await settle();
 
     expect(container.textContent).toContain('ghadi.justan.id');
-    expect(avatarImage()).toBeUndefined();
+    expect(avatarImages().map((img) => img.src)).toEqual([
+      'https://metadata.ens.domains/mainnet/avatar/ghadi.justan.id',
+    ]);
   });
 
-  it('fills in the avatar once it answers', async () => {
+  it('asks every account in one request, without records', async () => {
     await act(async () => {
       root.render(createElement(OnboardingDialog, props));
     });
     await settle();
-    releaseRecords();
-    await settle();
 
-    expect(container.textContent).toContain('ghadi.justan.id');
-    expect(avatarImage()).toBeDefined();
-  });
-
-  it('asks names for every account, and an avatar only for the "Continue as" account', async () => {
-    await act(async () => {
-      root.render(createElement(OnboardingDialog, props));
-    });
-    await settle();
-    releaseRecords();
-    await settle();
-
-    const names = reverseRequests.filter((url) => url.searchParams.get('records') !== 'true');
-    const avatars = reverseRequests.filter((url) => url.searchParams.get('records') === 'true');
-    expect(names).toHaveLength(1);
-    expect(names[0].searchParams.getAll('address').sort()).toEqual([`${LAST_USED}@eip155:1`, `${OTHER}@eip155:1`]);
-    expect(avatars).toHaveLength(1);
-    expect(avatars[0].searchParams.getAll('address')).toEqual([`${LAST_USED}@eip155:1`]);
+    expect(reverseRequests).toHaveLength(1);
+    expect(reverseRequests[0].searchParams.get('records')).toBeNull();
+    expect(reverseRequests[0].searchParams.getAll('address').sort()).toEqual([
+      `${LAST_USED}@eip155:1`,
+      `${OTHER}@eip155:1`,
+    ]);
   });
 });
