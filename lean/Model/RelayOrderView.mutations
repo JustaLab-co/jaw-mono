@@ -1,0 +1,29 @@
+# Mutations for mutate.py. Each one swaps a piece of RelayOrderView.lean for a
+# plausible bug. The text after `- ` must occur exactly once in the model;
+# `+ ` lines replace it.
+
+mutation show terms of any order, not only the one that hashes to the deposit id
+-   if hash o = orderId then termsOf table o else none
++   termsOf table o
+
+mutation skip a refund on a chain outside the table instead of refusing the order
+-     | none => none
+-     | some c => if isAddress r.recipient
++     | none => refundRows table rs
++     | some c => if isAddress r.recipient
+
+mutation show only the first refund
+-     | some c => if isAddress r.recipient then (refundRows table rs).map ((c, r.recipient.val) :: ·) else none
++     | some c => if isAddress r.recipient then some [(c, r.recipient.val)] else none
+
+mutation accept a 32-byte payment recipient
+-         if isAddress p.recipient then (refundsOf
++         if true then (refundsOf
+
+mutation drop the notice for a refund to a third address
+-   (v.refunds.map Prod.snd).filter fun a => decide (a ≠ account ∧ a ≠ v.recipient)
++   []
+
+mutation the original bug: show the order only when every refund goes to one address
+-   | some (x :: xs) => some (x :: xs)
++   | some (x :: xs) => if (x :: xs).all (·.2 == x.2) then some (x :: xs) else none

@@ -1,0 +1,1008 @@
+{
+  "format": 1,
+  "toolchain": "leanprover/lean4:v4.34.1",
+  "module": "Model.RelayOrderView",
+  "declarations": [
+    {
+      "name": "RelayOrderView.Bytes",
+      "kind": "inductive",
+      "type": "Type",
+      "typeHash": "7051ab654d793c216d744f7920d98d672357a0efa67248ee75d146d668f60997",
+      "valueHash": null
+    },
+    {
+      "name": "RelayOrderView.Bytes.casesOn",
+      "kind": "definition",
+      "type": "{motive : RelayOrderView.Bytes → Sort u} → (t : RelayOrderView.Bytes) → ((len val : Nat) → motive { len := len, val := val }) → motive t",
+      "typeHash": "782f626cb44e1592be9f30c738c305491b054009f25442381bc125de7bc9f6cf",
+      "valueHash": "8dd6d63edd83e6d61dfdf9eb8bf73b0ccbcc523bb928a6bc4880d749236ef5a8"
+    },
+    {
+      "name": "RelayOrderView.Bytes.ctorIdx",
+      "kind": "definition",
+      "type": "RelayOrderView.Bytes → Nat",
+      "typeHash": "c804f4e4d7de3e7049682b19e43dc2b8cd64423bbff14eb2aa7d19806177bd43",
+      "valueHash": "c6136ac02c94a29d2f1091e915219f25d0b3c5e274e82e6818e5eae6e9b52acb"
+    },
+    {
+      "name": "RelayOrderView.Bytes.len",
+      "kind": "definition",
+      "type": "RelayOrderView.Bytes → Nat",
+      "typeHash": "7d7e151c97b56ba0d4b83b3fee06228446ddcb7387f01507bdc0dd3325096e65",
+      "valueHash": "09b76572ab17c7aed24456fdaff26497defe0c47727badfdc226e2bb8368dac8"
+    },
+    {
+      "name": "RelayOrderView.Bytes.mk",
+      "kind": "constructor",
+      "type": "Nat → Nat → RelayOrderView.Bytes",
+      "typeHash": "538c6fa937e0be881a2828a60079cca1d5333f51e39bbc080580ff64920bb710",
+      "valueHash": null
+    },
+    {
+      "name": "RelayOrderView.Bytes.mk.inj",
+      "kind": "theorem",
+      "type": "∀ {len val len_1 val_1 : Nat}, { len := len, val := val } = { len := len_1, val := val_1 } → len = len_1 ∧ val = val_1",
+      "typeHash": "5d3bcd56aa2a9297c911b4d3803fef2daa819eec1d933f345b1581f5d1c1d83d",
+      "valueHash": null
+    },
+    {
+      "name": "RelayOrderView.Bytes.mk.injEq",
+      "kind": "theorem",
+      "type": "∀ (len val len_1 val_1 : Nat), ({ len := len, val := val } = { len := len_1, val := val_1 }) = (len = len_1 ∧ val = val_1)",
+      "typeHash": "cce05aa4f3455e79704ca4977b50d107ade9d0d4cf30ad78bb978a87d58848e8",
+      "valueHash": null
+    },
+    {
+      "name": "RelayOrderView.Bytes.mk.noConfusion",
+      "kind": "definition",
+      "type": "{P : Sort u} → {len val len' val' : Nat} → { len := len, val := val } = { len := len', val := val' } → (len = len' → val = val' → P) → P",
+      "typeHash": "be187379fdcd3e0ff88641e30cff24eaf2ceaa9956a94befd4fd737182e45b32",
+      "valueHash": "b6ed3f4a38f6de8f62572c67cd5bb3e416323e0141a14aa23ffffda29baa8baf"
+    },
+    {
+      "name": "RelayOrderView.Bytes.mk.sizeOf_spec",
+      "kind": "theorem",
+      "type": "∀ (len val : Nat), sizeOf { len := len, val := val } = 1 + sizeOf len + sizeOf val",
+      "typeHash": "c44ded7a0ba3c3bb831a9d51a51aaa2008663daa144fa06d3a7c8e1f5de73ffc",
+      "valueHash": null
+    },
+    {
+      "name": "RelayOrderView.Bytes.noConfusion",
+      "kind": "definition",
+      "type": "{P : Sort u} → {t t' : RelayOrderView.Bytes} → t = t' → RelayOrderView.Bytes.noConfusionType P t t'",
+      "typeHash": "7a3325e5b3fe7931bdc7ecfa87c52c69e9d6d11bd7472bdda9b957786c582b4d",
+      "valueHash": "aa1cd6de79b4f9683c71c08922bcdbe131aeb9d55d30142ac5e37ed687273aa4"
+    },
+    {
+      "name": "RelayOrderView.Bytes.noConfusionType",
+      "kind": "definition",
+      "type": "Sort u → RelayOrderView.Bytes → RelayOrderView.Bytes → Sort u",
+      "typeHash": "44e7e38817374c92b661ded58855b79e0bd14b798f4150aaf055c7fa897f8293",
+      "valueHash": "1fc25a2665e6491c0567f0dea1208fca5fa3bb2c75ef382b431d653e678f52c6"
+    },
+    {
+      "name": "RelayOrderView.Bytes.rec",
+      "kind": "recursor",
+      "type": "{motive : RelayOrderView.Bytes → Sort u} → ((len val : Nat) → motive { len := len, val := val }) → (t : RelayOrderView.Bytes) → motive t",
+      "typeHash": "97214c42961af492b6423414a9d0c22f83455ce9f296f719946ed5502c4df85c",
+      "valueHash": null
+    },
+    {
+      "name": "RelayOrderView.Bytes.recOn",
+      "kind": "definition",
+      "type": "{motive : RelayOrderView.Bytes → Sort u} → (t : RelayOrderView.Bytes) → ((len val : Nat) → motive { len := len, val := val }) → motive t",
+      "typeHash": "782f626cb44e1592be9f30c738c305491b054009f25442381bc125de7bc9f6cf",
+      "valueHash": "b7c4e2fb8e81ec24d8fe10e3895cc733a8801ef36df0154ebcd19fb9dfb55cac"
+    },
+    {
+      "name": "RelayOrderView.Bytes.val",
+      "kind": "definition",
+      "type": "RelayOrderView.Bytes → Nat",
+      "typeHash": "7d7e151c97b56ba0d4b83b3fee06228446ddcb7387f01507bdc0dd3325096e65",
+      "valueHash": "6ed68ca53876fb19981c8ee4ffdb44e3940774981465776e8de55d479dd8eedf"
+    },
+    {
+      "name": "RelayOrderView.Order",
+      "kind": "inductive",
+      "type": "Type",
+      "typeHash": "7051ab654d793c216d744f7920d98d672357a0efa67248ee75d146d668f60997",
+      "valueHash": null
+    },
+    {
+      "name": "RelayOrderView.Order.calls",
+      "kind": "definition",
+      "type": "RelayOrderView.Order → Nat",
+      "typeHash": "20f9f180eac28fd235bbbbe9d0096e4a08acb7f91882e045bf14b44bbbf70b37",
+      "valueHash": "935e8a13625ba20358146b72122e9adcafa2614a5a5b9f431fd71f9289b7f2aa"
+    },
+    {
+      "name": "RelayOrderView.Order.casesOn",
+      "kind": "definition",
+      "type": "{motive : RelayOrderView.Order → Sort u} → (t : RelayOrderView.Order) → ((version outChain : Nat) → (payments : List RelayOrderView.Payment) → (calls fees : Nat) → (refunds : List RelayOrderView.Refund) → motive { version := version, outChain := outChain, payments := payments, calls := calls, fees := fees, refunds := refunds }) → motive t",
+      "typeHash": "61f5a4f10a1ce4716b87a9ca92f4081c4f275b0b5ac5acdf89372e3328c3de6a",
+      "valueHash": "f59346f6248641bdf8f8671cc3348c06183bb6d1f6ff3ec1bc05058f99213664"
+    },
+    {
+      "name": "RelayOrderView.Order.ctorIdx",
+      "kind": "definition",
+      "type": "RelayOrderView.Order → Nat",
+      "typeHash": "1be330d6ce4d1b50876d92c97f6c1423090e5f8cc908125a6fcb0966ead4a37b",
+      "valueHash": "10c151c0be7ab068daea60fc9445cac5e9ddd01d3a488ddbf8c43e3c9851118f"
+    },
+    {
+      "name": "RelayOrderView.Order.fees",
+      "kind": "definition",
+      "type": "RelayOrderView.Order → Nat",
+      "typeHash": "20f9f180eac28fd235bbbbe9d0096e4a08acb7f91882e045bf14b44bbbf70b37",
+      "valueHash": "95a944b3b216536edf4f54e98ffd7663c8ba5c592931839735ff7959035703e2"
+    },
+    {
+      "name": "RelayOrderView.Order.mk",
+      "kind": "constructor",
+      "type": "Nat → Nat → List RelayOrderView.Payment → Nat → Nat → List RelayOrderView.Refund → RelayOrderView.Order",
+      "typeHash": "ecf69f2cc0f200465c5a62af8f3913693af0f9740aee32780ae0a8509a193230",
+      "valueHash": null
+    },
+    {
+      "name": "RelayOrderView.Order.mk.inj",
+      "kind": "theorem",
+      "type": "∀ {version outChain : Nat} {payments : List RelayOrderView.Payment} {calls fees : Nat} {refunds : List RelayOrderView.Refund} {version_1 outChain_1 : Nat} {payments_1 : List RelayOrderView.Payment} {calls_1 fees_1 : Nat} {refunds_1 : List RelayOrderView.Refund}, { version := version, outChain := outChain, payments := payments, calls := calls, fees := fees, refunds := refunds } = { version := version_1, outChain := outChain_1, payments := payments_1, calls := calls_1, fees := fees_1, refunds := refunds_1 } → version = version_1 ∧ outChain = outChain_1 ∧ payments = payments_1 ∧ calls = calls_1 ∧ fees = fees_1 ∧ refunds = refunds_1",
+      "typeHash": "95b05c4b033b9d438da452eb11e9b36fd7befc300f4099dc8468693f07e9fe49",
+      "valueHash": null
+    },
+    {
+      "name": "RelayOrderView.Order.mk.injEq",
+      "kind": "theorem",
+      "type": "∀ (version outChain : Nat) (payments : List RelayOrderView.Payment) (calls fees : Nat) (refunds : List RelayOrderView.Refund) (version_1 outChain_1 : Nat) (payments_1 : List RelayOrderView.Payment) (calls_1 fees_1 : Nat) (refunds_1 : List RelayOrderView.Refund), ({ version := version, outChain := outChain, payments := payments, calls := calls, fees := fees, refunds := refunds } = { version := version_1, outChain := outChain_1, payments := payments_1, calls := calls_1, fees := fees_1, refunds := refunds_1 }) = (version = version_1 ∧ outChain = outChain_1 ∧ payments = payments_1 ∧ calls = calls_1 ∧ fees = fees_1 ∧ refunds = refunds_1)",
+      "typeHash": "7380431e589f7e381c9a21f130717673562d8c35d87965ea74afb08a5a970f02",
+      "valueHash": null
+    },
+    {
+      "name": "RelayOrderView.Order.mk.noConfusion",
+      "kind": "definition",
+      "type": "{P : Sort u} → {version outChain : Nat} → {payments : List RelayOrderView.Payment} → {calls fees : Nat} → {refunds : List RelayOrderView.Refund} → {version' outChain' : Nat} → {payments' : List RelayOrderView.Payment} → {calls' fees' : Nat} → {refunds' : List RelayOrderView.Refund} → { version := version, outChain := outChain, payments := payments, calls := calls, fees := fees, refunds := refunds } = { version := version', outChain := outChain', payments := payments', calls := calls', fees := fees', refunds := refunds' } → (version = version' → outChain = outChain' → payments = payments' → calls = calls' → fees = fees' → refunds = refunds' → P) → P",
+      "typeHash": "7831e96557916aee8d23a7ccb075d1f359d20926dd4a45d4f524fd92ded480ff",
+      "valueHash": "8dcc20493885e047066f7ee5da8aaee9201aaa0bb18305ffb3e86e64f5162e8a"
+    },
+    {
+      "name": "RelayOrderView.Order.mk.sizeOf_spec",
+      "kind": "theorem",
+      "type": "∀ (version outChain : Nat) (payments : List RelayOrderView.Payment) (calls fees : Nat) (refunds : List RelayOrderView.Refund), sizeOf { version := version, outChain := outChain, payments := payments, calls := calls, fees := fees, refunds := refunds } = 1 + sizeOf version + sizeOf outChain + sizeOf payments + sizeOf calls + sizeOf fees + sizeOf refunds",
+      "typeHash": "aef2d8035a0993b748e0d18eebbb7ae37e257123a72fcd87a15ad733fb85cf7b",
+      "valueHash": null
+    },
+    {
+      "name": "RelayOrderView.Order.noConfusion",
+      "kind": "definition",
+      "type": "{P : Sort u} → {t t' : RelayOrderView.Order} → t = t' → RelayOrderView.Order.noConfusionType P t t'",
+      "typeHash": "b46adf9ec4e58900d15806ea2a31e980738dd4a41d457953cccdf163528bbf3b",
+      "valueHash": "cb622b2e54ffce28de5fa32bfbc698ff3d638d7f8bc596efdc38e2c0458d2410"
+    },
+    {
+      "name": "RelayOrderView.Order.noConfusionType",
+      "kind": "definition",
+      "type": "Sort u → RelayOrderView.Order → RelayOrderView.Order → Sort u",
+      "typeHash": "8e8017ef1184a4c3316038cb89b37f6f6811e69a7360042272e66e87d8f8168c",
+      "valueHash": "5efc4ffd540c141cb4478384878f334029c2a2bccdae789f119263cf9eeb2687"
+    },
+    {
+      "name": "RelayOrderView.Order.outChain",
+      "kind": "definition",
+      "type": "RelayOrderView.Order → Nat",
+      "typeHash": "20f9f180eac28fd235bbbbe9d0096e4a08acb7f91882e045bf14b44bbbf70b37",
+      "valueHash": "6fe537c3b23679924810c72caef6ca9e29aa617f3dbb521512eae84278a118d2"
+    },
+    {
+      "name": "RelayOrderView.Order.payments",
+      "kind": "definition",
+      "type": "RelayOrderView.Order → List RelayOrderView.Payment",
+      "typeHash": "dd56ecf7baa872a778a1785399d7afe49aa7dfe1f69e22e30a108fcc71fd68a2",
+      "valueHash": "fa6ff5c25e87ad0f1380be6bf5198af28a038c1b0a4d591c872123e8e695a1b0"
+    },
+    {
+      "name": "RelayOrderView.Order.rec",
+      "kind": "recursor",
+      "type": "{motive : RelayOrderView.Order → Sort u} → ((version outChain : Nat) → (payments : List RelayOrderView.Payment) → (calls fees : Nat) → (refunds : List RelayOrderView.Refund) → motive { version := version, outChain := outChain, payments := payments, calls := calls, fees := fees, refunds := refunds }) → (t : RelayOrderView.Order) → motive t",
+      "typeHash": "aa09146946ccd009281ed3f1cb66ae1a00632c058d8a675a4ddcf7f3728091ae",
+      "valueHash": null
+    },
+    {
+      "name": "RelayOrderView.Order.recOn",
+      "kind": "definition",
+      "type": "{motive : RelayOrderView.Order → Sort u} → (t : RelayOrderView.Order) → ((version outChain : Nat) → (payments : List RelayOrderView.Payment) → (calls fees : Nat) → (refunds : List RelayOrderView.Refund) → motive { version := version, outChain := outChain, payments := payments, calls := calls, fees := fees, refunds := refunds }) → motive t",
+      "typeHash": "61f5a4f10a1ce4716b87a9ca92f4081c4f275b0b5ac5acdf89372e3328c3de6a",
+      "valueHash": "7aa88663fb969db25556fd6b4cd0e009f9f43b24ed2eb9c62bc4f2eedecf5234"
+    },
+    {
+      "name": "RelayOrderView.Order.refunds",
+      "kind": "definition",
+      "type": "RelayOrderView.Order → List RelayOrderView.Refund",
+      "typeHash": "9330bddb52d432f8ba9254c11b6b6b8f3fa8362fe27ebe4eea5ea564d80da2d1",
+      "valueHash": "a5a3848ffc82031d75df0cf5667d510f5dee2e036886497ccc1e97b9c12e2da3"
+    },
+    {
+      "name": "RelayOrderView.Order.version",
+      "kind": "definition",
+      "type": "RelayOrderView.Order → Nat",
+      "typeHash": "20f9f180eac28fd235bbbbe9d0096e4a08acb7f91882e045bf14b44bbbf70b37",
+      "valueHash": "17a366b256d2c4d35ff41e8b22b4a8b83be040f742e11ed67c597bd90527685e"
+    },
+    {
+      "name": "RelayOrderView.Payment",
+      "kind": "inductive",
+      "type": "Type",
+      "typeHash": "7051ab654d793c216d744f7920d98d672357a0efa67248ee75d146d668f60997",
+      "valueHash": null
+    },
+    {
+      "name": "RelayOrderView.Payment.casesOn",
+      "kind": "definition",
+      "type": "{motive : RelayOrderView.Payment → Sort u} → (t : RelayOrderView.Payment) → ((recipient : RelayOrderView.Bytes) → (minimum : Nat) → motive { recipient := recipient, minimum := minimum }) → motive t",
+      "typeHash": "d1f0431be8f7167dfe6be44e1d7b955eebbb15cf0fd3a17c37e38e061ea88f38",
+      "valueHash": "fc55b6fcb5dbabd725316b409c46128ff4e52fea0f331c8caf82fcdb7485fb33"
+    },
+    {
+      "name": "RelayOrderView.Payment.ctorIdx",
+      "kind": "definition",
+      "type": "RelayOrderView.Payment → Nat",
+      "typeHash": "7974ef52bd92ccfaba5f44e8387da4233c673e4b35a7113442d23b9787ee58fb",
+      "valueHash": "f7543eb8e0276ad5ee8360e32666c3bbfcb6c7a243b87ca93ec2b942b883f00f"
+    },
+    {
+      "name": "RelayOrderView.Payment.minimum",
+      "kind": "definition",
+      "type": "RelayOrderView.Payment → Nat",
+      "typeHash": "b4e13bd33dbef241457411fa0f02f57c5b8e6f2165f47691f543e79315969e9f",
+      "valueHash": "ff62bc32c30c011952e4c91b816f3d7a3a8e08da401995c5d8812311762172f8"
+    },
+    {
+      "name": "RelayOrderView.Payment.mk",
+      "kind": "constructor",
+      "type": "RelayOrderView.Bytes → Nat → RelayOrderView.Payment",
+      "typeHash": "124b161e8b2a687ea0477b2282eb23ca43910726fa3d157143edb49ca65119c6",
+      "valueHash": null
+    },
+    {
+      "name": "RelayOrderView.Payment.mk.inj",
+      "kind": "theorem",
+      "type": "∀ {recipient : RelayOrderView.Bytes} {minimum : Nat} {recipient_1 : RelayOrderView.Bytes} {minimum_1 : Nat}, { recipient := recipient, minimum := minimum } = { recipient := recipient_1, minimum := minimum_1 } → recipient = recipient_1 ∧ minimum = minimum_1",
+      "typeHash": "2f807b5349ce589f9e2c02f68983efd7032a6ef9bd27ad010566668d38e5001d",
+      "valueHash": null
+    },
+    {
+      "name": "RelayOrderView.Payment.mk.injEq",
+      "kind": "theorem",
+      "type": "∀ (recipient : RelayOrderView.Bytes) (minimum : Nat) (recipient_1 : RelayOrderView.Bytes) (minimum_1 : Nat), ({ recipient := recipient, minimum := minimum } = { recipient := recipient_1, minimum := minimum_1 }) = (recipient = recipient_1 ∧ minimum = minimum_1)",
+      "typeHash": "40c933c1d2d13519097a6e7266e32c1732493491b1e2ecfd9733e6178350581b",
+      "valueHash": null
+    },
+    {
+      "name": "RelayOrderView.Payment.mk.noConfusion",
+      "kind": "definition",
+      "type": "{P : Sort u} → {recipient : RelayOrderView.Bytes} → {minimum : Nat} → {recipient' : RelayOrderView.Bytes} → {minimum' : Nat} → { recipient := recipient, minimum := minimum } = { recipient := recipient', minimum := minimum' } → (recipient = recipient' → minimum = minimum' → P) → P",
+      "typeHash": "ae9341fbac5c79cea81c7e12e3cde3e4904eb0cde27caa046e53b731348c25aa",
+      "valueHash": "8804a3e3b78efe76381a73f6f4c9e335ca5922e4011e0b2cfaada2dd67c3bb2e"
+    },
+    {
+      "name": "RelayOrderView.Payment.mk.sizeOf_spec",
+      "kind": "theorem",
+      "type": "∀ (recipient : RelayOrderView.Bytes) (minimum : Nat), sizeOf { recipient := recipient, minimum := minimum } = 1 + sizeOf recipient + sizeOf minimum",
+      "typeHash": "3d93370a1a787dcab1a73cae3a035e67b0fbcecfd8525cc15673c16e33fb6cf5",
+      "valueHash": null
+    },
+    {
+      "name": "RelayOrderView.Payment.noConfusion",
+      "kind": "definition",
+      "type": "{P : Sort u} → {t t' : RelayOrderView.Payment} → t = t' → RelayOrderView.Payment.noConfusionType P t t'",
+      "typeHash": "6030072f45a04097a0df2aaf5a848c340e4dfa27a772da54ad25a741bd6e44dd",
+      "valueHash": "967d8b2e932e6fb0f8db5dc49de031c935a7b1f4b365b57c2ed9c7c45ea259ba"
+    },
+    {
+      "name": "RelayOrderView.Payment.noConfusionType",
+      "kind": "definition",
+      "type": "Sort u → RelayOrderView.Payment → RelayOrderView.Payment → Sort u",
+      "typeHash": "63bfdf4827987a18b2aebc02981106fa2d354d19a643f2cc458222f10bfa71e0",
+      "valueHash": "07433450f282cc7e5527436b8b5fae59a86e03228620fd9c171fdf14eff4c1c0"
+    },
+    {
+      "name": "RelayOrderView.Payment.rec",
+      "kind": "recursor",
+      "type": "{motive : RelayOrderView.Payment → Sort u} → ((recipient : RelayOrderView.Bytes) → (minimum : Nat) → motive { recipient := recipient, minimum := minimum }) → (t : RelayOrderView.Payment) → motive t",
+      "typeHash": "a9bbd8f65d994a41d616cbf3a78927d0affdf403c69247c3e3743104fccbea7b",
+      "valueHash": null
+    },
+    {
+      "name": "RelayOrderView.Payment.recOn",
+      "kind": "definition",
+      "type": "{motive : RelayOrderView.Payment → Sort u} → (t : RelayOrderView.Payment) → ((recipient : RelayOrderView.Bytes) → (minimum : Nat) → motive { recipient := recipient, minimum := minimum }) → motive t",
+      "typeHash": "d1f0431be8f7167dfe6be44e1d7b955eebbb15cf0fd3a17c37e38e061ea88f38",
+      "valueHash": "f7b79e77f16c7a3786c8b6dd25344f3a185f1c06ba91c5d48e69de39eddb61be"
+    },
+    {
+      "name": "RelayOrderView.Payment.recipient",
+      "kind": "definition",
+      "type": "RelayOrderView.Payment → RelayOrderView.Bytes",
+      "typeHash": "b202de368704ecc3702526a4f289393a51c640841849e91fbdc7fac40cdf9003",
+      "valueHash": "ed66fb4932fd6a0be1484740980517674fd8a81ac3e917df0b0b88f39cf62143"
+    },
+    {
+      "name": "RelayOrderView.Refund",
+      "kind": "inductive",
+      "type": "Type",
+      "typeHash": "7051ab654d793c216d744f7920d98d672357a0efa67248ee75d146d668f60997",
+      "valueHash": null
+    },
+    {
+      "name": "RelayOrderView.Refund.casesOn",
+      "kind": "definition",
+      "type": "{motive : RelayOrderView.Refund → Sort u} → (t : RelayOrderView.Refund) → ((chain : Nat) → (recipient : RelayOrderView.Bytes) → motive { chain := chain, recipient := recipient }) → motive t",
+      "typeHash": "7bff24475e930b26a70069698acbb6a59c27eef897db9860a54fa63bdd48403e",
+      "valueHash": "90bf0115051f4af8a667c9b2e90e072d442a6ffadac46cc5c710f89b72cced2c"
+    },
+    {
+      "name": "RelayOrderView.Refund.chain",
+      "kind": "definition",
+      "type": "RelayOrderView.Refund → Nat",
+      "typeHash": "ba91a3130b81fe94cc4a7b009549149bb39683c0ccf0300d897236c2fa13bdd3",
+      "valueHash": "0165c05e2535370319aedfefc23a7cb516a3bcd8dc055c5da08ea3737fc0bdfa"
+    },
+    {
+      "name": "RelayOrderView.Refund.ctorIdx",
+      "kind": "definition",
+      "type": "RelayOrderView.Refund → Nat",
+      "typeHash": "7a8f26ee45b67ae2a4506e35985d3249e6e328c8caab3fed976528ac8eb97c56",
+      "valueHash": "a9071960718f8771892debc75b1e75f3fba4245de8309aa95a370c67f33e89f3"
+    },
+    {
+      "name": "RelayOrderView.Refund.mk",
+      "kind": "constructor",
+      "type": "Nat → RelayOrderView.Bytes → RelayOrderView.Refund",
+      "typeHash": "d9469b7cae30c1e2b22ebe19e75ea513ad088213b26fe75c0e2f48b8503d01d6",
+      "valueHash": null
+    },
+    {
+      "name": "RelayOrderView.Refund.mk.inj",
+      "kind": "theorem",
+      "type": "∀ {chain : Nat} {recipient : RelayOrderView.Bytes} {chain_1 : Nat} {recipient_1 : RelayOrderView.Bytes}, { chain := chain, recipient := recipient } = { chain := chain_1, recipient := recipient_1 } → chain = chain_1 ∧ recipient = recipient_1",
+      "typeHash": "eff8986b1327ad8d738c02d987130a1cd6c777998313434608270e078d0070f4",
+      "valueHash": null
+    },
+    {
+      "name": "RelayOrderView.Refund.mk.injEq",
+      "kind": "theorem",
+      "type": "∀ (chain : Nat) (recipient : RelayOrderView.Bytes) (chain_1 : Nat) (recipient_1 : RelayOrderView.Bytes), ({ chain := chain, recipient := recipient } = { chain := chain_1, recipient := recipient_1 }) = (chain = chain_1 ∧ recipient = recipient_1)",
+      "typeHash": "7056d4e22f6029c4cb7a80b302a8f3c335d0f836813de92f0d9c1b42a4d30a63",
+      "valueHash": null
+    },
+    {
+      "name": "RelayOrderView.Refund.mk.noConfusion",
+      "kind": "definition",
+      "type": "{P : Sort u} → {chain : Nat} → {recipient : RelayOrderView.Bytes} → {chain' : Nat} → {recipient' : RelayOrderView.Bytes} → { chain := chain, recipient := recipient } = { chain := chain', recipient := recipient' } → (chain = chain' → recipient = recipient' → P) → P",
+      "typeHash": "01619e579f25bd7c4bcfa47a110a4e18deb2f60f5c89a01c8b0f68ddfe26aed9",
+      "valueHash": "8c7f6e580d005ab64a05551699d3b70499eb51312aad74e5466705e4d61b3d6a"
+    },
+    {
+      "name": "RelayOrderView.Refund.mk.sizeOf_spec",
+      "kind": "theorem",
+      "type": "∀ (chain : Nat) (recipient : RelayOrderView.Bytes), sizeOf { chain := chain, recipient := recipient } = 1 + sizeOf chain + sizeOf recipient",
+      "typeHash": "0004c18745eb9256254dad883b7c7984496d46f132e19bd8c87c1eee47ac5cfc",
+      "valueHash": null
+    },
+    {
+      "name": "RelayOrderView.Refund.noConfusion",
+      "kind": "definition",
+      "type": "{P : Sort u} → {t t' : RelayOrderView.Refund} → t = t' → RelayOrderView.Refund.noConfusionType P t t'",
+      "typeHash": "8a8a1a8665947e55a8bc24d0f379e25105eb17aaa5c491d0ad10ee113d602660",
+      "valueHash": "d10bc47620dc9dff7aac347ba63a1641ef9a416aecc7feb1132c47075f75cdbb"
+    },
+    {
+      "name": "RelayOrderView.Refund.noConfusionType",
+      "kind": "definition",
+      "type": "Sort u → RelayOrderView.Refund → RelayOrderView.Refund → Sort u",
+      "typeHash": "633ab7b0fb576a98abcd357173ebebe03b4cffd10b190fb0026669a2d84a029a",
+      "valueHash": "8d0c3eea4ced5411c1d7bf55e08fc3618629dc66adb7e3835549eb23718b21fc"
+    },
+    {
+      "name": "RelayOrderView.Refund.rec",
+      "kind": "recursor",
+      "type": "{motive : RelayOrderView.Refund → Sort u} → ((chain : Nat) → (recipient : RelayOrderView.Bytes) → motive { chain := chain, recipient := recipient }) → (t : RelayOrderView.Refund) → motive t",
+      "typeHash": "32fe9de0a0c38c05c375af3ead16291ea3dc2c042276eaefbfcea68d7166f99d",
+      "valueHash": null
+    },
+    {
+      "name": "RelayOrderView.Refund.recOn",
+      "kind": "definition",
+      "type": "{motive : RelayOrderView.Refund → Sort u} → (t : RelayOrderView.Refund) → ((chain : Nat) → (recipient : RelayOrderView.Bytes) → motive { chain := chain, recipient := recipient }) → motive t",
+      "typeHash": "7bff24475e930b26a70069698acbb6a59c27eef897db9860a54fa63bdd48403e",
+      "valueHash": "7c35b91059bda8259f5b28d7b332fe337b3a7f87746569c5ca41eac44c2cd7e6"
+    },
+    {
+      "name": "RelayOrderView.Refund.recipient",
+      "kind": "definition",
+      "type": "RelayOrderView.Refund → RelayOrderView.Bytes",
+      "typeHash": "69e8a09f65da6bc3a7998e5dd6843e2483bed074e895892a2400058e372987cb",
+      "valueHash": "3e94c926da2cce1c2754316cec69b5eb137a026158fe69c4331308f039b372f5"
+    },
+    {
+      "name": "RelayOrderView.Table",
+      "kind": "definition",
+      "type": "Type",
+      "typeHash": "7051ab654d793c216d744f7920d98d672357a0efa67248ee75d146d668f60997",
+      "valueHash": "1e3fe735b73646f01f1703229fa284dd88677b2b325e8ff5bbfbc21a6f3180c6"
+    },
+    {
+      "name": "RelayOrderView.View",
+      "kind": "inductive",
+      "type": "Type",
+      "typeHash": "7051ab654d793c216d744f7920d98d672357a0efa67248ee75d146d668f60997",
+      "valueHash": null
+    },
+    {
+      "name": "RelayOrderView.View.casesOn",
+      "kind": "definition",
+      "type": "{motive : RelayOrderView.View → Sort u} → (t : RelayOrderView.View) → ((dest recipient minimum : Nat) → (refunds : List (Nat × Nat)) → motive { dest := dest, recipient := recipient, minimum := minimum, refunds := refunds }) → motive t",
+      "typeHash": "9316b36a659d71c69cfcff65ee75ce98d7074a844eb167cee3a4053822e762b2",
+      "valueHash": "d1f5f2db5c9b9be0f60611cd6439898a427318bd116894bc00684f9b861d98d4"
+    },
+    {
+      "name": "RelayOrderView.View.ctorIdx",
+      "kind": "definition",
+      "type": "RelayOrderView.View → Nat",
+      "typeHash": "d7e0571364cf08f4f03f6492a1ff1a4c722c15f210b030b6b5020544b81978de",
+      "valueHash": "7dd4d2b98ce7b866b95ada899b70d42a8ba68e5bfcf4b9fa3c648f5d5a912777"
+    },
+    {
+      "name": "RelayOrderView.View.dest",
+      "kind": "definition",
+      "type": "RelayOrderView.View → Nat",
+      "typeHash": "7644e4852dfc95840ec45ae5565e52fee49d25f4a8919f2b2beb9441b091652d",
+      "valueHash": "1eace865d818f914a2b18b85ca1fb7033bbdecbf07de18d0a6b85e26f0114ced"
+    },
+    {
+      "name": "RelayOrderView.View.minimum",
+      "kind": "definition",
+      "type": "RelayOrderView.View → Nat",
+      "typeHash": "7644e4852dfc95840ec45ae5565e52fee49d25f4a8919f2b2beb9441b091652d",
+      "valueHash": "d821133642b6e9562d4a21038bdc855e08668fe4b2b61507051f571a77ab245d"
+    },
+    {
+      "name": "RelayOrderView.View.mk",
+      "kind": "constructor",
+      "type": "Nat → Nat → Nat → List (Nat × Nat) → RelayOrderView.View",
+      "typeHash": "4583384ef2d9d5f592c2af1424dfb3fa22e82d170cdcce795e8990addeed9d5a",
+      "valueHash": null
+    },
+    {
+      "name": "RelayOrderView.View.mk.inj",
+      "kind": "theorem",
+      "type": "∀ {dest recipient minimum : Nat} {refunds : List (Nat × Nat)} {dest_1 recipient_1 minimum_1 : Nat} {refunds_1 : List (Nat × Nat)}, { dest := dest, recipient := recipient, minimum := minimum, refunds := refunds } = { dest := dest_1, recipient := recipient_1, minimum := minimum_1, refunds := refunds_1 } → dest = dest_1 ∧ recipient = recipient_1 ∧ minimum = minimum_1 ∧ refunds = refunds_1",
+      "typeHash": "952110ceb93a20e6926aa6d9371a80cf9b45362cb8d5a8506df635c9f93c91f3",
+      "valueHash": null
+    },
+    {
+      "name": "RelayOrderView.View.mk.injEq",
+      "kind": "theorem",
+      "type": "∀ (dest recipient minimum : Nat) (refunds : List (Nat × Nat)) (dest_1 recipient_1 minimum_1 : Nat) (refunds_1 : List (Nat × Nat)), ({ dest := dest, recipient := recipient, minimum := minimum, refunds := refunds } = { dest := dest_1, recipient := recipient_1, minimum := minimum_1, refunds := refunds_1 }) = (dest = dest_1 ∧ recipient = recipient_1 ∧ minimum = minimum_1 ∧ refunds = refunds_1)",
+      "typeHash": "3b01b57cd63a49a62c87fb6d1fd16db5bcaf983e7ce1480368fdd140ba1ce495",
+      "valueHash": null
+    },
+    {
+      "name": "RelayOrderView.View.mk.noConfusion",
+      "kind": "definition",
+      "type": "{P : Sort u} → {dest recipient minimum : Nat} → {refunds : List (Nat × Nat)} → {dest' recipient' minimum' : Nat} → {refunds' : List (Nat × Nat)} → { dest := dest, recipient := recipient, minimum := minimum, refunds := refunds } = { dest := dest', recipient := recipient', minimum := minimum', refunds := refunds' } → (dest = dest' → recipient = recipient' → minimum = minimum' → refunds = refunds' → P) → P",
+      "typeHash": "f427f7fb5f98c2c9bebb621a3635449213e87d2e7d82141e35cad9cab46c3a66",
+      "valueHash": "4da2c42b486591cbb52a4798d73956e596d0bf9f38772f1c94a6b2f01fa9dfac"
+    },
+    {
+      "name": "RelayOrderView.View.mk.sizeOf_spec",
+      "kind": "theorem",
+      "type": "∀ (dest recipient minimum : Nat) (refunds : List (Nat × Nat)), sizeOf { dest := dest, recipient := recipient, minimum := minimum, refunds := refunds } = 1 + sizeOf dest + sizeOf recipient + sizeOf minimum + sizeOf refunds",
+      "typeHash": "d225a9a8dcfc6d3ba15fbca09b19dd278b2353c9f2ae80f0e20a59d55a309e0f",
+      "valueHash": null
+    },
+    {
+      "name": "RelayOrderView.View.noConfusion",
+      "kind": "definition",
+      "type": "{P : Sort u} → {t t' : RelayOrderView.View} → t = t' → RelayOrderView.View.noConfusionType P t t'",
+      "typeHash": "ddc333f2fb7ce927187b255dc099216e56597ceec5cc540443d6a2e5615b27c7",
+      "valueHash": "a8eb002bd21238cd82344515f9a78bf507d9bbf304149f005e1ccb2ca5d0b27f"
+    },
+    {
+      "name": "RelayOrderView.View.noConfusionType",
+      "kind": "definition",
+      "type": "Sort u → RelayOrderView.View → RelayOrderView.View → Sort u",
+      "typeHash": "928ead6ae9943a8d4e8d804d53a07f864657cc3d473ac11683794074249a5d4c",
+      "valueHash": "2aee7f05cf78cedd53da053e40b2a9fde526ebbb4226d605248c6708b7201fc2"
+    },
+    {
+      "name": "RelayOrderView.View.rec",
+      "kind": "recursor",
+      "type": "{motive : RelayOrderView.View → Sort u} → ((dest recipient minimum : Nat) → (refunds : List (Nat × Nat)) → motive { dest := dest, recipient := recipient, minimum := minimum, refunds := refunds }) → (t : RelayOrderView.View) → motive t",
+      "typeHash": "60d60de2257db37c85b6bd7a3c4314e74e6a3448687f0dfbfd36542976cd8b72",
+      "valueHash": null
+    },
+    {
+      "name": "RelayOrderView.View.recOn",
+      "kind": "definition",
+      "type": "{motive : RelayOrderView.View → Sort u} → (t : RelayOrderView.View) → ((dest recipient minimum : Nat) → (refunds : List (Nat × Nat)) → motive { dest := dest, recipient := recipient, minimum := minimum, refunds := refunds }) → motive t",
+      "typeHash": "9316b36a659d71c69cfcff65ee75ce98d7074a844eb167cee3a4053822e762b2",
+      "valueHash": "b1e421cba2d500e1432c62f0cf0cf6d8dfe06fae8aacf3bdee5757a797a350dc"
+    },
+    {
+      "name": "RelayOrderView.View.recipient",
+      "kind": "definition",
+      "type": "RelayOrderView.View → Nat",
+      "typeHash": "7644e4852dfc95840ec45ae5565e52fee49d25f4a8919f2b2beb9441b091652d",
+      "valueHash": "384ae63dd3124c9ae8292a358d6d7feb7f036bcab0b378dbb5ad59a43e634df4"
+    },
+    {
+      "name": "RelayOrderView.View.refunds",
+      "kind": "definition",
+      "type": "RelayOrderView.View → List (Nat × Nat)",
+      "typeHash": "2f3f395a24af0ba574c1538837faaeb663e79bfa73f13a5a9d21a7c5c773510f",
+      "valueHash": "e50318abfb2005e88b3e8e98445a07d6593bc7a74a67bfd70c9d47551b604c17"
+    },
+    {
+      "name": "RelayOrderView.badOrders",
+      "kind": "definition",
+      "type": "List RelayOrderView.Order",
+      "typeHash": "86999f1422de33bfa09e69a1a4f09946c7bec965267bccbaa7109d81cf052e66",
+      "valueHash": "885ac69ce99301cfeacbeedc73966746e11220d25bc5a18fe1dbbd9f8e6cf9f3"
+    },
+    {
+      "name": "RelayOrderView.badOrders.match_1",
+      "kind": "definition",
+      "type": "(motive : Option RelayOrderView.View → Sort u_1) → (x : Option RelayOrderView.View) → ((v : RelayOrderView.View) → motive (some v)) → (Unit → motive none) → motive x",
+      "typeHash": "0ed307d3242e18dcc356ca9c30a6c5d2d72161e0435c5bff918542b54ac5b736",
+      "valueHash": "5bc391ff03267a900042e14ec6f1e527bef61cfb648aae0ef53e18d24c138819"
+    },
+    {
+      "name": "RelayOrderView.bytes",
+      "kind": "definition",
+      "type": "List RelayOrderView.Bytes",
+      "typeHash": "2c918d4a45ed80a9ef1910c3d34bb2feb7055324a2b817574e92b555a44be47c",
+      "valueHash": "59123860f04fcb7ffb2aab75c3dcad9b111b3ec04b5976e7133e4629a3933b7f"
+    },
+    {
+      "name": "RelayOrderView.commits",
+      "kind": "definition",
+      "type": "RelayOrderView.Table → RelayOrderView.Order → RelayOrderView.View → Prop",
+      "typeHash": "de7b1f6a53505e81b741f29d0c3bfffd2d1bc18834ee89d8397d84e3d4949e00",
+      "valueHash": "73802c7868f5d68f5e07dd9973bf9e29d39b28cf30bf21e58fe5581db8d156a8"
+    },
+    {
+      "name": "RelayOrderView.instDecidableCommits",
+      "kind": "definition",
+      "type": "(table : RelayOrderView.Table) → (o : RelayOrderView.Order) → (v : RelayOrderView.View) → Decidable (RelayOrderView.commits table o v)",
+      "typeHash": "e8b19298e15a03ff9063e6835e30cf8d68ea14f21b908703ff146c2229cb293d",
+      "valueHash": "f135e466f5e8c3c7cff4af04adb8d0840f025364490196cb51c2189054bc5d77"
+    },
+    {
+      "name": "RelayOrderView.instDecidableEqBytes",
+      "kind": "definition",
+      "type": "DecidableEq RelayOrderView.Bytes",
+      "typeHash": "4a41f4616f142e5f901f42911831190976f15d6720ad5598cb97f7f32dcb7b2c",
+      "valueHash": "8d7c3271b9210f8a08c360c415ad8ed2725a41d040d2a540b3ce046c757dc2ce"
+    },
+    {
+      "name": "RelayOrderView.instDecidableEqBytes.decEq",
+      "kind": "definition",
+      "type": "(x x_1 : RelayOrderView.Bytes) → Decidable (x = x_1)",
+      "typeHash": "7d10aad1d9846cd0d3ac2c099caa41c287e804ab3ee604c0781b7f3bf4ffc69e",
+      "valueHash": "73a92273d6e055817290cd60f9bcbef2b367de3645a68dff43198ff8489c7a73"
+    },
+    {
+      "name": "RelayOrderView.instDecidableEqBytes.decEq.match_1",
+      "kind": "definition",
+      "type": "(motive : RelayOrderView.Bytes → RelayOrderView.Bytes → Sort u_1) → (x x_1 : RelayOrderView.Bytes) → ((a a_1 b b_1 : Nat) → motive { len := a, val := a_1 } { len := b, val := b_1 }) → motive x x_1",
+      "typeHash": "b634e6d048fc619bee7ed42bf14e56305c248b7ee2f371d2eebc3eaad068d640",
+      "valueHash": "badec0726d58a4f333ce17a3e98c579066e40c976c4659837791c6354c88029e"
+    },
+    {
+      "name": "RelayOrderView.instDecidableEqOrder",
+      "kind": "definition",
+      "type": "DecidableEq RelayOrderView.Order",
+      "typeHash": "64f55518f7c2e1dedb0751322ab0137b735732b8e556fdd51750f1843302de04",
+      "valueHash": "04072859ebb995b7fe7a66a034e06038e7bc4046e52dc3bb1ef326e6b22158a8"
+    },
+    {
+      "name": "RelayOrderView.instDecidableEqOrder.decEq",
+      "kind": "definition",
+      "type": "(x x_1 : RelayOrderView.Order) → Decidable (x = x_1)",
+      "typeHash": "5093a969334031ca64229c032d03cc237d3a2f9b93cd332d0bc9f476e3e126a6",
+      "valueHash": "3f5c6a7946fd3264d453adcc01a2a98c1e54d724d0c4f75d46e3345aa7ce226b"
+    },
+    {
+      "name": "RelayOrderView.instDecidableEqOrder.decEq.match_1",
+      "kind": "definition",
+      "type": "(motive : RelayOrderView.Order → RelayOrderView.Order → Sort u_1) → (x x_1 : RelayOrderView.Order) → ((a a_1 : Nat) → (a_2 : List RelayOrderView.Payment) → (a_3 a_4 : Nat) → (a_5 : List RelayOrderView.Refund) → (b b_1 : Nat) → (b_2 : List RelayOrderView.Payment) → (b_3 b_4 : Nat) → (b_5 : List RelayOrderView.Refund) → motive { version := a, outChain := a_1, payments := a_2, calls := a_3, fees := a_4, refunds := a_5 } { version := b, outChain := b_1, payments := b_2, calls := b_3, fees := b_4, refunds := b_5 }) → motive x x_1",
+      "typeHash": "9d6fadfa4892c37800de7b78c72653865c81f617c862acbce424c5d3407debbf",
+      "valueHash": "54a5676e623255d1e0b9f47584bcb27e3553a2b56c1e63946a6125848bfcc3b4"
+    },
+    {
+      "name": "RelayOrderView.instDecidableEqPayment",
+      "kind": "definition",
+      "type": "DecidableEq RelayOrderView.Payment",
+      "typeHash": "6bbaff0e82d8817a1a62dd437c75a1adb348fd92f94326b235c52ad8acdbb891",
+      "valueHash": "64e13a19e43039a11bf5a82804ececcb43181fe0cabe33e5c5b587e342721d5d"
+    },
+    {
+      "name": "RelayOrderView.instDecidableEqPayment.decEq",
+      "kind": "definition",
+      "type": "(x x_1 : RelayOrderView.Payment) → Decidable (x = x_1)",
+      "typeHash": "7a5c5615666d0a4ec5f5b13229314e5aeb0cbcb559dd21c43b9e88a08896fbce",
+      "valueHash": "8fbcc77a8a81cda2e31e4a0e61d7d81e9f780c5faf52aaf835f270e4af72e698"
+    },
+    {
+      "name": "RelayOrderView.instDecidableEqPayment.decEq.match_1",
+      "kind": "definition",
+      "type": "(motive : RelayOrderView.Payment → RelayOrderView.Payment → Sort u_1) → (x x_1 : RelayOrderView.Payment) → ((a : RelayOrderView.Bytes) → (a_1 : Nat) → (b : RelayOrderView.Bytes) → (b_1 : Nat) → motive { recipient := a, minimum := a_1 } { recipient := b, minimum := b_1 }) → motive x x_1",
+      "typeHash": "125afc376fea57bfdfb42caeabd384078e4295335a787456df5b744966ff95d0",
+      "valueHash": "2b6963934b42a3e8fae5607b717269a8677b776c6d2e75a32a8f1de402bb5c44"
+    },
+    {
+      "name": "RelayOrderView.instDecidableEqRefund",
+      "kind": "definition",
+      "type": "DecidableEq RelayOrderView.Refund",
+      "typeHash": "9e8fe844ad8dfe7e2c23602564cda378ff0c6857fe29701055bf13bd69e23ed5",
+      "valueHash": "39910bcde1e977969591b736bea8f54ee94b68a665c2660458675e4073c4a575"
+    },
+    {
+      "name": "RelayOrderView.instDecidableEqRefund.decEq",
+      "kind": "definition",
+      "type": "(x x_1 : RelayOrderView.Refund) → Decidable (x = x_1)",
+      "typeHash": "2a9bf7afdb5afbb2953bca37fb9c3f94ca262e00f07a3161ba68d6a09a802230",
+      "valueHash": "8dc67221be55a633bfe33e5ad47b2661e00bcb637f7d9e45aa6017db3064e98b"
+    },
+    {
+      "name": "RelayOrderView.instDecidableEqRefund.decEq.match_1",
+      "kind": "definition",
+      "type": "(motive : RelayOrderView.Refund → RelayOrderView.Refund → Sort u_1) → (x x_1 : RelayOrderView.Refund) → ((a : Nat) → (a_1 : RelayOrderView.Bytes) → (b : Nat) → (b_1 : RelayOrderView.Bytes) → motive { chain := a, recipient := a_1 } { chain := b, recipient := b_1 }) → motive x x_1",
+      "typeHash": "1bc3e9397f1cdb4451d83134be8c6a430bb00700921a3973f217a5536bfdeb03",
+      "valueHash": "422fe120b87d0a07e1c8a540d6841b2e401c7e362389be025937beab4a274208"
+    },
+    {
+      "name": "RelayOrderView.instDecidableEqView",
+      "kind": "definition",
+      "type": "DecidableEq RelayOrderView.View",
+      "typeHash": "d3117374dbd8c43a7c88178a9e33e719922c353a112594717a05351d409ff948",
+      "valueHash": "6e2481d5ad64cb668b42bcf766ef5b9405a55822154e665d0d90e0dd6e579f54"
+    },
+    {
+      "name": "RelayOrderView.instDecidableEqView.decEq",
+      "kind": "definition",
+      "type": "(x x_1 : RelayOrderView.View) → Decidable (x = x_1)",
+      "typeHash": "1b9e5107927107b11d044eba121543d7ed27473cd77828f4d86f758eaa62fa4f",
+      "valueHash": "b13cfd53e389cfd399da4b1b37c7b0868d9040884a5702712259f3364f535a79"
+    },
+    {
+      "name": "RelayOrderView.instDecidableEqView.decEq.match_1",
+      "kind": "definition",
+      "type": "(motive : RelayOrderView.View → RelayOrderView.View → Sort u_1) → (x x_1 : RelayOrderView.View) → ((a a_1 a_2 : Nat) → (a_3 : List (Nat × Nat)) → (b b_1 b_2 : Nat) → (b_3 : List (Nat × Nat)) → motive { dest := a, recipient := a_1, minimum := a_2, refunds := a_3 } { dest := b, recipient := b_1, minimum := b_2, refunds := b_3 }) → motive x x_1",
+      "typeHash": "dc420429255375de879ec3ee0ac175e1e36a247533e43514b842d30506a8ff0e",
+      "valueHash": "fac972d0e87908b4bd93c6bc2bf6658596089fda6001f5fb9641d3fc9a86167c"
+    },
+    {
+      "name": "RelayOrderView.instReprBytes",
+      "kind": "definition",
+      "type": "Repr RelayOrderView.Bytes",
+      "typeHash": "df09ed413cc0a614177bee9ea333bbf409ae9b13d5819c1a37c39abd27e86170",
+      "valueHash": "4d28ef106bee696f2368153f1e4b80f777992eaf4ba9d4092594b12506a0b98b"
+    },
+    {
+      "name": "RelayOrderView.instReprBytes.repr",
+      "kind": "definition",
+      "type": "RelayOrderView.Bytes → Nat → Format",
+      "typeHash": "3a072725bd72baa7e6c272c4b826a490c01612739de8f23a3ef080bba723669c",
+      "valueHash": "9c1a02943d919ee88275454685a0af7a97ec2921c28e03e1c549828c1bc1e8ba"
+    },
+    {
+      "name": "RelayOrderView.instReprOrder",
+      "kind": "definition",
+      "type": "Repr RelayOrderView.Order",
+      "typeHash": "4640d5048430e50de621937e134be286d5d946f5a9963120f279211df34a02d8",
+      "valueHash": "7e1a844a07f40b90954e437e530a4b253986aa6ed68fc569dadc89115af5498c"
+    },
+    {
+      "name": "RelayOrderView.instReprOrder.repr",
+      "kind": "definition",
+      "type": "RelayOrderView.Order → Nat → Format",
+      "typeHash": "ecd3d11c7cea61d77c1d0a61cc6d4e7488dee7b8ec4dbd1d88059c09b41c0631",
+      "valueHash": "913f3b10473c560d1295c0e31049223f39980a7969be2becf180a7d217c3afec"
+    },
+    {
+      "name": "RelayOrderView.instReprPayment",
+      "kind": "definition",
+      "type": "Repr RelayOrderView.Payment",
+      "typeHash": "7a19f09dd38ffbea781139dc250e848e7fae3c5aec5ee3292cb069202be3d0de",
+      "valueHash": "87545835af1b5c452b1cbffee95930ffb738dba45f667f7776983ed99a1980b4"
+    },
+    {
+      "name": "RelayOrderView.instReprPayment.repr",
+      "kind": "definition",
+      "type": "RelayOrderView.Payment → Nat → Format",
+      "typeHash": "a35717a3b25ecb1ffd65d7e3644a2aec589ac1e3f4dd89349fc174fbc4b9e92f",
+      "valueHash": "b1957d755ea01ddc5402a26bbfc3a54419add95833d71a78ce32c6c231f7b244"
+    },
+    {
+      "name": "RelayOrderView.instReprRefund",
+      "kind": "definition",
+      "type": "Repr RelayOrderView.Refund",
+      "typeHash": "df0a20f4d49f12a21c730971dc53a50cc518521b3d2bf34a0be443d86a03a4ef",
+      "valueHash": "dcd2e40ddd31f02982ac743b001775f3f0e4621553533d9fca208513018904c5"
+    },
+    {
+      "name": "RelayOrderView.instReprRefund.repr",
+      "kind": "definition",
+      "type": "RelayOrderView.Refund → Nat → Format",
+      "typeHash": "f27cf0f07b1dd81c4c094e6b8bb0b5817cd4b3d8799a23cb25b146e40eab2b16",
+      "valueHash": "45975f85d17794f28da79a0d31bda447c71952ef0f8193ee3a0626d6c29d9cb4"
+    },
+    {
+      "name": "RelayOrderView.instReprView",
+      "kind": "definition",
+      "type": "Repr RelayOrderView.View",
+      "typeHash": "c47fc4d779099acaf681bd5af88bb0714350dbd17f04e305f092fff25e73f015",
+      "valueHash": "5b8244d10270540d3bb8d3b7c9fe6df346cabfc484c632e4430afe09b6d68af0"
+    },
+    {
+      "name": "RelayOrderView.instReprView.repr",
+      "kind": "definition",
+      "type": "RelayOrderView.View → Nat → Format",
+      "typeHash": "641802f55ef1463264c683feb978a54f690ff9ac7ab8dcf0fe8e6be33120c34b",
+      "valueHash": "95e32d7bb398b70a9cb832bd67861251b42fc08e955d21968abb329fd4e693df"
+    },
+    {
+      "name": "RelayOrderView.isAddress",
+      "kind": "definition",
+      "type": "RelayOrderView.Bytes → Bool",
+      "typeHash": "26ef185783c2b57f6c0eb6c989f2f73b8a983f823232d2a03895cda4de2002d0",
+      "valueHash": "a6c621845506f0aa3cf9c16cd1fa76a20e2236e4516346f6af2fb2e6498190b1"
+    },
+    {
+      "name": "RelayOrderView.order11c",
+      "kind": "definition",
+      "type": "RelayOrderView.Order",
+      "typeHash": "64318535eed170437ece4297b1562aae822ed2a1f741b4677a417c52fa180534",
+      "valueHash": "2a6e827137bd971832753e976b996fe7133c8bedeaa20870c5661b6b98700f7c"
+    },
+    {
+      "name": "RelayOrderView.orders",
+      "kind": "definition",
+      "type": "List RelayOrderView.Order",
+      "typeHash": "86999f1422de33bfa09e69a1a4f09946c7bec965267bccbaa7109d81cf052e66",
+      "valueHash": "020743e14d16c0131a661d4fd97af12603ba32246a947868a5f0332ac00904ec"
+    },
+    {
+      "name": "RelayOrderView.readRelayOrder",
+      "kind": "definition",
+      "type": "(RelayOrderView.Order → Nat) → Nat → RelayOrderView.Table → RelayOrderView.Order → Option RelayOrderView.View",
+      "typeHash": "27b80a8fe35912674b7edeb86c8ba9232fe039b61be5b7ddcf83dcf34f8d8227",
+      "valueHash": "46fd0c084cf663e820c427d82bf9e6dbfd9c3ff2676093aedb70155c75ed5b8a"
+    },
+    {
+      "name": "RelayOrderView.refundRows",
+      "kind": "definition",
+      "type": "RelayOrderView.Table → List RelayOrderView.Refund → Option (List (Nat × Nat))",
+      "typeHash": "86c6509ad9602341fb015e54c880603fd21e96438d5f798caec95a6e18ca3ede",
+      "valueHash": "e671ec16a3197ea3f6f30d19fd1a01b6a10f4b79880b9a9130011c5ddff55f02"
+    },
+    {
+      "name": "RelayOrderView.refundRows.eq_1",
+      "kind": "theorem",
+      "type": "∀ (table : RelayOrderView.Table), RelayOrderView.refundRows table [] = some []",
+      "typeHash": "b994b568d6d5f4c264ee23766f903d1a4ff53b23796b8136d48d13169668edd9",
+      "valueHash": null
+    },
+    {
+      "name": "RelayOrderView.refundRows.eq_2",
+      "kind": "theorem",
+      "type": "∀ (table : RelayOrderView.Table) (r : RelayOrderView.Refund) (rs : List RelayOrderView.Refund), RelayOrderView.refundRows table (r :: rs) = match table r.chain with | none => none | some c => if RelayOrderView.isAddress r.recipient = true then Option.map (fun x => (c, r.recipient.val) :: x) (RelayOrderView.refundRows table rs) else none",
+      "typeHash": "ed9a6a1d3027ba686e4934ff2c5cc9aee956e4c7e9c737a074620f7a397cb573",
+      "valueHash": null
+    },
+    {
+      "name": "RelayOrderView.refundRows.eq_def",
+      "kind": "theorem",
+      "type": "∀ (table : RelayOrderView.Table) (x : List RelayOrderView.Refund), RelayOrderView.refundRows table x = match x with | [] => some [] | r :: rs => match table r.chain with | none => none | some c => if RelayOrderView.isAddress r.recipient = true then Option.map (fun x => (c, r.recipient.val) :: x) (RelayOrderView.refundRows table rs) else none",
+      "typeHash": "0373543865f0106f0a1dcfb220457a95147f8b77867938d2ad99e11e95f529c2",
+      "valueHash": null
+    },
+    {
+      "name": "RelayOrderView.refundRows.match_1",
+      "kind": "definition",
+      "type": "(motive : Option Nat → Sort u_1) → (x : Option Nat) → (Unit → motive none) → ((c : Nat) → motive (some c)) → motive x",
+      "typeHash": "b978526449341730134aaed049f32b4084c2562314c3666a2066859f18f938f6",
+      "valueHash": "7637c35562d8803116fdabcb9c7aa5c4b5a34424ed35080c7a05c9cd2d54105e"
+    },
+    {
+      "name": "RelayOrderView.refundRows.match_1.eq_1",
+      "kind": "theorem",
+      "type": "∀ (motive : Option Nat → Sort u_1) (h_1 : Unit → motive none) (h_2 : (c : Nat) → motive (some c)), (match none with | none => h_1 () | some c => h_2 c) = h_1 ()",
+      "typeHash": "8ccb127689f332508ed6bd40076ae69f68acbfd6bb1c214143d1d22cb5e76417",
+      "valueHash": null
+    },
+    {
+      "name": "RelayOrderView.refundRows.match_1.eq_2",
+      "kind": "theorem",
+      "type": "∀ (motive : Option Nat → Sort u_1) (c : Nat) (h_1 : Unit → motive none) (h_2 : (c : Nat) → motive (some c)), (match some c with | none => h_1 () | some c => h_2 c) = h_2 c",
+      "typeHash": "30b56d83eeffd942810c14402bc60b8ef2b0afcf88278edc369413a29a82889f",
+      "valueHash": null
+    },
+    {
+      "name": "RelayOrderView.refundRows.match_1.splitter",
+      "kind": "definition",
+      "type": "(motive : Option Nat → Sort u_1) → (x : Option Nat) → (Unit → motive none) → ((c : Nat) → motive (some c)) → motive x",
+      "typeHash": "b978526449341730134aaed049f32b4084c2562314c3666a2066859f18f938f6",
+      "valueHash": "25abda305c23cc39fa0de26277877935925c5b1caf8bffd549b0556f522c3c5a"
+    },
+    {
+      "name": "RelayOrderView.refundRows.match_3",
+      "kind": "definition",
+      "type": "(motive : List RelayOrderView.Refund → Sort u_1) → (x : List RelayOrderView.Refund) → (Unit → motive []) → ((r : RelayOrderView.Refund) → (rs : List RelayOrderView.Refund) → motive (r :: rs)) → motive x",
+      "typeHash": "545c2739af9c35e203f849cff95ca19ca1fa48c532034d3af80fb14d0a1a0ad8",
+      "valueHash": "5ce1d6f5f5c3ae9fe37d59e49f83edbe8f1f580448baf7f10e5c0074daf7eb2c"
+    },
+    {
+      "name": "RelayOrderView.refundRows.match_3.eq_1",
+      "kind": "theorem",
+      "type": "∀ (motive : List RelayOrderView.Refund → Sort u_1) (h_1 : Unit → motive []) (h_2 : (r : RelayOrderView.Refund) → (rs : List RelayOrderView.Refund) → motive (r :: rs)), (match [] with | [] => h_1 () | r :: rs => h_2 r rs) = h_1 ()",
+      "typeHash": "0a9d974dd14e616c299663877b681c333904cee3902f0da157b0eaa4e8762506",
+      "valueHash": null
+    },
+    {
+      "name": "RelayOrderView.refundRows.match_3.eq_2",
+      "kind": "theorem",
+      "type": "∀ (motive : List RelayOrderView.Refund → Sort u_1) (r : RelayOrderView.Refund) (rs : List RelayOrderView.Refund) (h_1 : Unit → motive []) (h_2 : (r : RelayOrderView.Refund) → (rs : List RelayOrderView.Refund) → motive (r :: rs)), (match r :: rs with | [] => h_1 () | r :: rs => h_2 r rs) = h_2 r rs",
+      "typeHash": "eb3ad06470f6255fe49930c450a0b24a7309a1cf5cf179fe1293c4cd6a4cb27b",
+      "valueHash": null
+    },
+    {
+      "name": "RelayOrderView.refundRows.match_3.splitter",
+      "kind": "definition",
+      "type": "(motive : List RelayOrderView.Refund → Sort u_1) → (x : List RelayOrderView.Refund) → (Unit → motive []) → ((r : RelayOrderView.Refund) → (rs : List RelayOrderView.Refund) → motive (r :: rs)) → motive x",
+      "typeHash": "545c2739af9c35e203f849cff95ca19ca1fa48c532034d3af80fb14d0a1a0ad8",
+      "valueHash": "28f7bfd2c7839857e4f9507e2515c600ff30ff9f4e7a8baa205ad5ab960d6646"
+    },
+    {
+      "name": "RelayOrderView.refundRows_sound",
+      "kind": "theorem",
+      "type": "∀ (table : RelayOrderView.Table) (rs : List RelayOrderView.Refund) (rows : List (Nat × Nat)), RelayOrderView.refundRows table rs = some rows → (∀ (row : Nat × Nat), row ∈ rows → ∃ r, r ∈ rs ∧ table r.chain = some row.fst ∧ RelayOrderView.isAddress r.recipient = true ∧ r.recipient.val = row.snd) ∧ ∀ (r : RelayOrderView.Refund), r ∈ rs → ∃ row, row ∈ rows ∧ table r.chain = some row.fst ∧ row.snd = r.recipient.val",
+      "typeHash": "f4ccc2c501b5ce71ef97cf8356c303b8cfb2dbe7987aba201d9b24c6e9a4f2ab",
+      "valueHash": null
+    },
+    {
+      "name": "RelayOrderView.refundsOf",
+      "kind": "definition",
+      "type": "RelayOrderView.Table → List RelayOrderView.Refund → Option (List (Nat × Nat))",
+      "typeHash": "f7d1defc95fc73980b07a987189cfe59573110eb8fb8737ea8f5b363399d578a",
+      "valueHash": "22cfcc093163e4e4d76c4bd1ec2799def275a8a917ea923386650826ccd32c45"
+    },
+    {
+      "name": "RelayOrderView.refundsOf.match_1",
+      "kind": "definition",
+      "type": "(motive : Option (List (Nat × Nat)) → Sort u_1) → (x : Option (List (Nat × Nat))) → ((x : Nat × Nat) → (xs : List (Nat × Nat)) → motive (some (x :: xs))) → ((x : Option (List (Nat × Nat))) → motive x) → motive x",
+      "typeHash": "9ad73d8ec678232c2ef5f2ad42334a4ff22648e7a060e300dad515a883e3888b",
+      "valueHash": "ae4b664a7c1826f22d04e4d9ecca890a887d80e9b4a3f5f084bac91140397a4c"
+    },
+    {
+      "name": "RelayOrderView.refundsOf.match_1.eq_1",
+      "kind": "theorem",
+      "type": "∀ (motive : Option (List (Nat × Nat)) → Sort u_1) (x : Nat × Nat) (xs : List (Nat × Nat)) (h_1 : (x : Nat × Nat) → (xs : List (Nat × Nat)) → motive (some (x :: xs))) (h_2 : (x : Option (List (Nat × Nat))) → motive x), (match some (x :: xs) with | some (x :: xs) => h_1 x xs | x => h_2 x) = h_1 x xs",
+      "typeHash": "aeb3edca81415e64f2ad8400c04d2b78664bad3015b99691591c87e2283989b6",
+      "valueHash": null
+    },
+    {
+      "name": "RelayOrderView.refundsOf.match_1.eq_2",
+      "kind": "theorem",
+      "type": "∀ (motive : Option (List (Nat × Nat)) → Sort u_1) (x : Option (List (Nat × Nat))) (h_1 : (x : Nat × Nat) → (xs : List (Nat × Nat)) → motive (some (x :: xs))) (h_2 : (x : Option (List (Nat × Nat))) → motive x), (∀ (x_1 : Nat × Nat) (xs : List (Nat × Nat)), x = some (x_1 :: xs) → False) → (match x with | some (x :: xs) => h_1 x xs | x => h_2 x) = h_2 x",
+      "typeHash": "e5800a6cfda3430ed66fdc0956700f25887165ad4d7b39692ea6afc20aa90a34",
+      "valueHash": null
+    },
+    {
+      "name": "RelayOrderView.refundsOf.match_1.splitter",
+      "kind": "definition",
+      "type": "(motive : Option (List (Nat × Nat)) → Sort u_1) → (x : Option (List (Nat × Nat))) → ((x : Nat × Nat) → (xs : List (Nat × Nat)) → motive (some (x :: xs))) → ((x : Option (List (Nat × Nat))) → (∀ (x_1 : Nat × Nat) (xs : List (Nat × Nat)), x = some (x_1 :: xs) → False) → motive x) → motive x",
+      "typeHash": "06aed922cf8aa12b0051c3823b99f402c8a1eeed48568033b06a90ec59e9e7c6",
+      "valueHash": "11a15241aae227f83d73d8092283ce8c2518a8886db449365d4e809ba9a6ced4"
+    },
+    {
+      "name": "RelayOrderView.shown",
+      "kind": "definition",
+      "type": "RelayOrderView.View → List Nat",
+      "typeHash": "f90d0fea1eda7b44327c1929e57abe9157e939c1d5996b2fb158049ba8e17ddd",
+      "valueHash": "baa5d0015b99ec10ffc3800689024da9ef34ca4a7bd1cdde379fd53725501ca1"
+    },
+    {
+      "name": "RelayOrderView.shown.eq_1",
+      "kind": "theorem",
+      "type": "∀ (v : RelayOrderView.View), RelayOrderView.shown v = v.recipient :: List.map Prod.snd v.refunds",
+      "typeHash": "7629e650a18e7c14debc0925a35bf094540745ff691390fe65f1b32306ef874e",
+      "valueHash": null
+    },
+    {
+      "name": "RelayOrderView.shown_is_account_or_warned",
+      "kind": "theorem",
+      "type": "∀ (account : Nat) (v : RelayOrderView.View) (a : Nat), a ∈ RelayOrderView.shown v → a = account ∨ a ∈ RelayOrderView.warned account v",
+      "typeHash": "84534eb3a4da61e103dedea1e22504eb1645efccb9cb10dedaee6687ce1b48ec",
+      "valueHash": null
+    },
+    {
+      "name": "RelayOrderView.shown_terms_commit",
+      "kind": "theorem",
+      "type": "∀ (hash : RelayOrderView.Order → Nat), Function.Injective hash → ∀ (committed o : RelayOrderView.Order) (orderId : Nat), hash committed = orderId → ∀ (table : RelayOrderView.Table) (v : RelayOrderView.View), RelayOrderView.readRelayOrder hash orderId table o = some v → RelayOrderView.commits table committed v",
+      "typeHash": "deac7af0268576c45c1b3a801de590938a758f1ee955ffc4053bced723528f67",
+      "valueHash": null
+    },
+    {
+      "name": "RelayOrderView.table",
+      "kind": "definition",
+      "type": "RelayOrderView.Table",
+      "typeHash": "39a0d63fb842003170578a3dc7a1a063b82d753501986c6709da83df17b579c9",
+      "valueHash": "ace5d6012e178ef8b82d438e205473005afd92daa1e1292ffbbcd740031262f2"
+    },
+    {
+      "name": "RelayOrderView.termsOf",
+      "kind": "definition",
+      "type": "RelayOrderView.Table → RelayOrderView.Order → Option RelayOrderView.View",
+      "typeHash": "441f4220b1175a441e9dc5bcfa8d1bb4b84311a196d053e413bc8b151806e70a",
+      "valueHash": "594fb513e896b14b527fcea82f5732affc8a57b30a672240c6ac7bffeb934e2c"
+    },
+    {
+      "name": "RelayOrderView.termsOf.match_1",
+      "kind": "definition",
+      "type": "(motive : List RelayOrderView.Payment → Sort u_1) → (x : List RelayOrderView.Payment) → ((p : RelayOrderView.Payment) → motive [p]) → ((x : List RelayOrderView.Payment) → motive x) → motive x",
+      "typeHash": "3706f33d7dae4df5f46dd62fa395a113031cb53fabd30eb24a31ce2e2f9436b8",
+      "valueHash": "2b18c4ca6cf7761e96fad1ca7708af27faa6474e5f97c5c7da36debbd5784b42"
+    },
+    {
+      "name": "RelayOrderView.termsOf.match_1.eq_1",
+      "kind": "theorem",
+      "type": "∀ (motive : List RelayOrderView.Payment → Sort u_1) (p : RelayOrderView.Payment) (h_1 : (p : RelayOrderView.Payment) → motive [p]) (h_2 : (x : List RelayOrderView.Payment) → motive x), (match [p] with | [p] => h_1 p | x => h_2 x) = h_1 p",
+      "typeHash": "a77d9e1c0edda278114a0374f1f7ba8cfef3a45327355763089ff26f5f61957e",
+      "valueHash": null
+    },
+    {
+      "name": "RelayOrderView.termsOf.match_1.eq_2",
+      "kind": "theorem",
+      "type": "∀ (motive : List RelayOrderView.Payment → Sort u_1) (x : List RelayOrderView.Payment) (h_1 : (p : RelayOrderView.Payment) → motive [p]) (h_2 : (x : List RelayOrderView.Payment) → motive x), (∀ (p : RelayOrderView.Payment), x = [p] → False) → (match x with | [p] => h_1 p | x => h_2 x) = h_2 x",
+      "typeHash": "a0dfda5d9168f24a3ca9b84fc5c63cf005f1ddd661ebc122bd8cef478ec4a00c",
+      "valueHash": null
+    },
+    {
+      "name": "RelayOrderView.termsOf.match_1.splitter",
+      "kind": "definition",
+      "type": "(motive : List RelayOrderView.Payment → Sort u_1) → (x : List RelayOrderView.Payment) → ((p : RelayOrderView.Payment) → motive [p]) → ((x : List RelayOrderView.Payment) → (∀ (p : RelayOrderView.Payment), x = [p] → False) → motive x) → motive x",
+      "typeHash": "efcd37186592adc24e3afad571eed56e52f648170ac4adfea94bff69b44a880e",
+      "valueHash": "3fb662487a0eb747d4897de7dd319ae3f2a32cdd0bcb3d79a9c7c1c0db92be87"
+    },
+    {
+      "name": "RelayOrderView.termsOf_commits",
+      "kind": "theorem",
+      "type": "∀ (table : RelayOrderView.Table) (o : RelayOrderView.Order) (v : RelayOrderView.View), RelayOrderView.termsOf table o = some v → RelayOrderView.commits table o v",
+      "typeHash": "291bb4ed86ba72cc6192edf1d5b40e7b938c613c9dfa64e79d352fc3a5996d98",
+      "valueHash": null
+    },
+    {
+      "name": "RelayOrderView.upTo2",
+      "kind": "definition",
+      "type": "{α : Type u_1} → List α → List (List α)",
+      "typeHash": "95babc917bd125fd1977c84642dbdb26c1db0a84c40828baeb7b1368e70d49c0",
+      "valueHash": "8020b6882a2cea521d55e5fa0aaec5f0bcf2baa9b7e717a732d2523a5a6e93df"
+    },
+    {
+      "name": "RelayOrderView.warned",
+      "kind": "definition",
+      "type": "Nat → RelayOrderView.View → List Nat",
+      "typeHash": "afa3eda88743860d129f106c76992715e224ef8f009b893b1c64e0b08d6f70a3",
+      "valueHash": "448b70954e55792a8a1aa144466f1901706eaa1164e23ac33d531d5e26a03a8a"
+    },
+    {
+      "name": "RelayOrderView.warned.eq_1",
+      "kind": "theorem",
+      "type": "∀ (account : Nat) (v : RelayOrderView.View), RelayOrderView.warned account v = (if v.recipient ≠ account then [v.recipient] else []) ++ List.filter (fun a => decide (a ≠ account ∧ a ≠ v.recipient)) (List.map Prod.snd v.refunds)",
+      "typeHash": "0d3fdc426837532bd713d70b705c5a89634842359d1e93c331b0c6f65edc4a78",
+      "valueHash": null
+    }
+  ]
+}
