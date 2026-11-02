@@ -706,7 +706,7 @@ describe('useGasEstimation fee-token outcome per ERC-20 result', () => {
   });
 
   it('dust ETH short of the prefund does not hide a funded token that failed to estimate', async () => {
-    erc20Mock.mockRejectedValue(new Error('execution reverted: Across quote expired'));
+    erc20Mock.mockRejectedValue(new Error('HTTP request failed. Status: 503'));
     await mount(
       makeAccount(async () => {
         throw new Error("AA21 didn't pay prefund");
@@ -715,6 +715,33 @@ describe('useGasEstimation fee-token outcome per ERC-20 result', () => {
     );
 
     expect(tokensNow.find((t) => t.isNative)?.isSelectable).toBe(true);
+    expect(blockNow()).toBe('estimation-failed');
+  });
+
+  // Retrying the same calls can't undo a revert, so it reads as will-fail with or without ETH.
+  it.each([0n, 5n])('a fee estimation that reverts reads as will-fail with %s wei of ETH', async (wei) => {
+    erc20Mock.mockRejectedValue(new Error('execution reverted: Across quote expired'));
+    await mount(
+      makeAccount(async () => {
+        throw new Error("AA21 didn't pay prefund");
+      }),
+      [nativeEth(wei), token({})]
+    );
+
+    expect(usdcNow()).toMatchObject({ gasCostFormatted: 'Estimation failed', estimationReverted: true });
+    expect(blockNow()).toBe('will-fail');
+  });
+
+  it('a fee estimation that fails without a revert stays retryable', async () => {
+    erc20Mock.mockRejectedValue(new Error('HTTP request failed. Status: 503'));
+    await mount(
+      makeAccount(async () => {
+        throw new Error("AA21 didn't pay prefund");
+      }),
+      [nativeEth(0n), token({})]
+    );
+
+    expect(usdcNow().estimationReverted).toBe(false);
     expect(blockNow()).toBe('estimation-failed');
   });
 
@@ -813,7 +840,7 @@ describe('useGasEstimation fee-token outcome per ERC-20 result', () => {
     };
 
     it('drops the failure text an earlier round left on it', async () => {
-      erc20Mock.mockRejectedValueOnce(new Error('execution reverted'));
+      erc20Mock.mockRejectedValueOnce(new Error('HTTP request failed. Status: 503'));
       await mount(ethShort(), [nativeEth(0n), token({}), token({ symbol: 'USDT', address: USDT })]);
       expect(blockNow()).toBe('estimation-failed');
 

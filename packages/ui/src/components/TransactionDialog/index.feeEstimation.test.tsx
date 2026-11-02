@@ -59,7 +59,7 @@ describe('TransactionDialog fee estimation failure', () => {
   it('does not claim insufficient funds when a funded token failed to estimate', () => {
     const html = render([
       eth(0n),
-      usdc({ gasCostFormatted: 'Estimation failed', estimationFailure: 'execution reverted' }),
+      usdc({ gasCostFormatted: 'Estimation failed', estimationFailure: 'HTTP request failed' }),
     ]);
     expect(html).not.toContain('Insufficient');
     expect(html).toContain('Fee estimation failed');
@@ -69,22 +69,34 @@ describe('TransactionDialog fee estimation failure', () => {
     // A few wei make ETH selectable, but its leg still ends in a prefund shortfall.
     const html = render([
       eth(5n),
-      usdc({ gasCostFormatted: 'Estimation failed', estimationFailure: 'execution reverted' }),
+      usdc({ gasCostFormatted: 'Estimation failed', estimationFailure: 'HTTP request failed' }),
     ]);
     expect(html).not.toContain('Insufficient');
     expect(html).toContain('Fee estimation failed');
   });
 
   it('offers a retry when the caller can re-run the estimation', () => {
-    const failed = [eth(0n), usdc({ gasCostFormatted: 'Estimation failed', estimationFailure: 'reverted' })];
+    const failed = [eth(0n), usdc({ gasCostFormatted: 'Estimation failed', estimationFailure: 'HTTP request failed' })];
     expect(render(failed, () => undefined)).toContain('Retry');
     expect(render(failed)).not.toContain('Retry');
   });
 
   it('holds Retry while the fee-token costs are being estimated', () => {
-    const failed = [eth(0n), usdc({ gasCostFormatted: 'Estimation failed', estimationFailure: 'reverted' })];
+    const failed = [eth(0n), usdc({ gasCostFormatted: 'Estimation failed', estimationFailure: 'HTTP request failed' })];
     expect(render(failed, () => undefined, true)).toMatch(/<button[^>]* disabled=""[^>]*>Retrying…<\/button>/);
     expect(render(failed, () => undefined)).not.toMatch(/<button[^>]* disabled=""[^>]*>Retry<\/button>/);
+  });
+
+  it('says the transaction will fail, with no Retry or contract text, when the fee estimation reverted', () => {
+    const reverted = usdc({
+      gasCostFormatted: 'Estimation failed',
+      estimationFailure: 'execution reverted: top up at example.xyz',
+      estimationReverted: true,
+    });
+    const html = render([eth(0n), reverted], () => undefined);
+    expect(html).toContain('Transaction will fail');
+    expect(html).not.toContain('Retry');
+    expect(html).not.toContain('example.xyz');
   });
 
   it('still says insufficient funds when ETH and USDC are both empty', () => {

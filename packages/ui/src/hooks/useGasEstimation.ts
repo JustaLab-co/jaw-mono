@@ -3,7 +3,7 @@ import type { Address, Hex } from 'viem';
 import type { Account, TokenEstimate, TransactionCall } from '@jaw.id/core';
 import { estimateErc20PaymasterCosts, jawPaymasterUrl } from '@jaw.id/core';
 import type { FeeTokenOption } from '../components/FeeTokenSelector';
-import { classifyRevert, INSUFFICIENT_FUNDS_ERROR, messageOf } from '../utils/transactionFailure';
+import { classifyRevert, INSUFFICIENT_FUNDS_ERROR, isRevert, messageOf } from '../utils/transactionFailure';
 
 // ============================================================================
 // Types
@@ -126,6 +126,7 @@ function unpriced(token: FeeTokenOption): FeeTokenOption {
   return {
     ...token,
     estimationFailure: undefined,
+    estimationReverted: undefined,
     gasCostFormatted: undefined,
     gasCostMaxFormatted: undefined,
     isSelectable: false,
@@ -134,14 +135,17 @@ function unpriced(token: FeeTokenOption): FeeTokenOption {
 
 /**
  * Every funded ERC-20 marked as failed to estimate. The reason is recorded unless the error is a
- * balance revert, which is a real shortfall and keeps reading as one.
+ * balance revert, which is a real shortfall and keeps reading as one, along with whether the calls
+ * reverted.
  */
 function markEstimationFailed(tokens: FeeTokenOption[], error: unknown): FeeTokenOption[] {
-  const estimationFailure = classifyRevert(error) === 'balance' ? undefined : describeFailure(error);
+  const balance = classifyRevert(error) === 'balance';
+  const estimationFailure = balance ? undefined : describeFailure(error);
+  const estimationReverted = !balance && isRevert(error);
   return tokens.map((token) => {
     if (token.isNative) return token;
     if (token.balance === 0n) return unpriced(token);
-    return { ...unpriced(token), gasCostFormatted: 'Estimation failed', estimationFailure };
+    return { ...unpriced(token), gasCostFormatted: 'Estimation failed', estimationFailure, estimationReverted };
   });
 }
 
@@ -286,7 +290,9 @@ export function useGasEstimation({
       setGasEstimationError('');
       const tokens = feeTokensRef.current;
       if (tokens.some((t) => t.estimationFailure)) {
-        onFeeTokensUpdateRef.current?.(tokens.map((t) => ({ ...t, estimationFailure: undefined })));
+        onFeeTokensUpdateRef.current?.(
+          tokens.map((t) => ({ ...t, estimationFailure: undefined, estimationReverted: undefined }))
+        );
       }
       return;
     }
@@ -383,6 +389,7 @@ export function useGasEstimation({
           return {
             ...token,
             estimationFailure: undefined,
+            estimationReverted: undefined,
             gasCostFormatted: estimate.tokenCostFormatted,
             gasCostMaxFormatted: estimate.tokenCostMaxFormatted,
             isSelectable: estimate.hasSufficientBalance,

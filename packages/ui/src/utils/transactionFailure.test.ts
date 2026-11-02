@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   INSUFFICIENT_FUNDS_ERROR,
   classifyRevert,
+  isRevert,
   resolveBlockReason,
   resolveFeeBlock,
   type BlockReasonInput,
@@ -256,5 +257,25 @@ describe('resolveFeeBlock', () => {
       feeTokens: [{ isSelectable: false }, { isSelectable: false, estimationFailure: 'reverted' }],
     });
     expect(fee).toMatchObject({ blockReason: 'estimation-failed', feeEstimationFailure: 'reverted' });
+  });
+
+  it('reads a fee estimation that reverted as will-fail when no simulation ran', () => {
+    const feeTokens = [{ isSelectable: false, estimationFailure: 'execution reverted', estimationReverted: true }];
+    expect(resolveFeeBlock({ ...base, feeTokens }).blockReason).toBe('will-fail');
+    expect(resolveFeeBlock({ ...base, feeTokens, revertCause: 'balance' }).blockReason).toBe('funds');
+  });
+});
+
+describe('isRevert', () => {
+  it('recognises reverts from viem, an RPC node and the bundler', () => {
+    expect(isRevert(new Error('Execution reverted with reason: paused.'))).toBe(true);
+    expect(isRevert({ code: 3, message: 'execution reverted' })).toBe(true);
+    expect(isRevert('UserOperation reverted during simulation with reason: AA23 reverted')).toBe(true);
+  });
+
+  it('leaves transport and service errors retryable', () => {
+    expect(isRevert(new Error('HTTP request failed. Status: 503'))).toBe(false);
+    expect(isRevert(new Error('The request took too long to respond.'))).toBe(false);
+    expect(isRevert(undefined)).toBe(false);
   });
 });

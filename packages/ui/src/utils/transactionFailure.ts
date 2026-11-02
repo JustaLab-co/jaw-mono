@@ -46,6 +46,14 @@ export function classifyRevert(error: unknown): RevertCause {
 }
 
 /**
+ * True when the error says the calls reverted. viem and the bundler both name the revert ahead of
+ * the contract's reason, so a contract can't word its reason to avoid this.
+ */
+export function isRevert(error: unknown): boolean {
+  return messageOf(error).toLowerCase().includes('revert');
+}
+
+/**
  * The single reason a transaction can't be submitted, so the fee row, the fee-token picker and
  * the confirm button can't disagree about why.
  */
@@ -98,6 +106,8 @@ export function resolveBlockReason({
 interface FeeTokenFacts {
   isSelectable: boolean;
   estimationFailure?: string;
+  /** The estimation failed because the calls revert, so a retry can't change the outcome. */
+  estimationReverted?: boolean;
 }
 
 /**
@@ -111,7 +121,10 @@ export function resolveFeeBlock({
   feeTokens?: FeeTokenFacts[];
 }) {
   const hasSelectablePaymentOption = !feeTokens?.length || feeTokens.some((t) => t.isSelectable);
-  const feeEstimationFailure = feeTokens?.find((t) => t.estimationFailure)?.estimationFailure;
-  const blockReason = resolveBlockReason({ ...input, hasSelectablePaymentOption, feeEstimationFailure });
+  const failed = feeTokens?.find((t) => t.estimationFailure);
+  const feeEstimationFailure = failed?.estimationFailure;
+  // A reverting fee estimation proves the calls revert even where no asset simulation ran.
+  const revertCause = input.revertCause ?? (failed?.estimationReverted ? 'other' : undefined);
+  const blockReason = resolveBlockReason({ ...input, revertCause, hasSelectablePaymentOption, feeEstimationFailure });
   return { blockReason, hasSelectablePaymentOption, feeEstimationFailure };
 }
