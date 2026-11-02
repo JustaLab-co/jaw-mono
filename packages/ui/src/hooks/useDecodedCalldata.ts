@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { decodeFunctionData, type Abi, type Hex } from 'viem';
+import { decodeFunctionData, encodeFunctionData, getAbiItem, type Abi, type Hex } from 'viem';
 import { getPublicClient, jawRpcUrl } from '../utils/publicClient';
 import {
   applyFormat,
@@ -89,23 +89,38 @@ function formatParamValue(value: unknown): string {
   return String(value);
 }
 
-async function rawDecode(to: string, data: string, rpcUrl: string, chainId: number): Promise<DecodedCalldata | null> {
+/**
+ * Decodes with the one ABI entry the calldata's selector names. An ABI can hold several
+ * overloads of one name, so the entry is taken from the decoder, never looked up by name. A
+ * decode that does not re-encode to the same bytes is dropped rather than shown with types that
+ * do not match.
+ */
+export function decodeWithAbi(abi: Abi, data: Hex): DecodedCalldata | null {
   try {
-    const abi = await fetchAbi(to, rpcUrl, chainId);
-    const { functionName, args } = decodeFunctionData({ abi, data: data as Hex });
-    const abiItem = abi.find((item) => 'name' in item && item.name === functionName && item.type === 'function');
-    const inputs = abiItem && 'inputs' in abiItem ? (abiItem.inputs ?? []) : [];
-    const params: DecodedParam[] = (args ?? []).map((arg, i) => ({
-      name: inputs[i]?.name || `param${i}`,
-      type: inputs[i]?.type || 'unknown',
-      value: formatParamValue(arg),
-      ...(inputs[i]?.type === 'address' && typeof arg === 'string' ? { rawValue: arg } : {}),
-    }));
+    const { functionName, args } = decodeFunctionData({ abi, data });
+    const item = getAbiItem({ abi, name: functionName, args });
+    if (!item || item.type !== 'function') return null;
+    if (encodeFunctionData({ abi: [item], functionName, args }).toLowerCase() !== data.toLowerCase()) return null;
+    const { inputs } = item;
     return {
       functionName,
       signature: `${functionName}(${inputs.map((inp) => inp.type).join(', ')})`,
-      params,
+      params: (args ?? []).map((arg, i) => ({
+        name: inputs[i].name || `param${i}`,
+        type: inputs[i].type,
+        value: formatParamValue(arg),
+        ...(inputs[i].type === 'address' && typeof arg === 'string' ? { rawValue: arg } : {}),
+      })),
     };
+  } catch (err) {
+    console.debug('[useDecodedCalldata] raw decode failed:', err);
+    return null;
+  }
+}
+
+async function rawDecode(to: string, data: string, rpcUrl: string, chainId: number): Promise<DecodedCalldata | null> {
+  try {
+    return decodeWithAbi(await fetchAbi(to, rpcUrl, chainId), data as Hex);
   } catch (err) {
     console.debug('[useDecodedCalldata] raw decode failed:', err);
     return null;
