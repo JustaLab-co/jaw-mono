@@ -69,4 +69,16 @@ describe('decodeWithAbi', () => {
       expect(decodeWithAbi(abi4, data.slice(0, len) as Hex)).toBeNull();
     }
   });
+
+  it('labels params by ABI name, falls back to their index, and keeps rawValue for addresses only', () => {
+    const unnamed = parseAbi(['function depositErc20(address, address token, uint256, bytes32)']);
+    const decoded = decodeWithAbi(unnamed, data);
+    expect(decoded?.params.map((p) => p.name)).toEqual(['param0', 'token', 'param2', 'param3']);
+    expect(decoded?.params.map((p) => p.rawValue)).toEqual([
+      '0xfAbc9dDe6d43b39E087122A80f05E80615110b65',
+      '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+      undefined,
+      undefined,
+    ]);
+  });
 });
