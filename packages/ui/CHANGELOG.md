@@ -1,3 +1,13 @@
+## 1.11.3 (2026-11-02)
+
+### 🩹 Fixes
+
+- **ui:** show Relay orders whose solver chain is outside the route ([#618](https://github.com/JustaLab-co/jaw-mono/pull/618))
+
+### ❤️ Thank You
+
+- Ghadi @Ghadi8
+
 ## 1.11.2 (2026-10-30)
 
 ### 🩹 Fixes
