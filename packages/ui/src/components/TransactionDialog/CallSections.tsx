@@ -189,8 +189,8 @@ export function BridgeDetails({ details }: { details: readonly Detail[] }) {
       </AccordionTrigger>
       <AccordionContent className="px-3 pb-3">
         <dl className="divide-border/40 flex flex-col divide-y">
-          {details.map(({ label, value, copy }) => (
-            <div key={label} className="flex items-baseline justify-between gap-3 py-2 first:pt-0 last:pb-0">
+          {details.map(({ label, value, copy }, at) => (
+            <div key={at} className="flex items-baseline justify-between gap-3 py-2 first:pt-0 last:pb-0">
               <dt className="text-muted-foreground text-body-sm flex-none font-medium">{label}</dt>
               <dd className="text-foreground text-body-sm flex min-w-0 items-start justify-end gap-1.5 text-right font-mono">
                 <span className="[overflow-wrap:anywhere]">{value}</span>

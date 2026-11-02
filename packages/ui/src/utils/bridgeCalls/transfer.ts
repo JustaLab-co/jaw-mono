@@ -116,18 +116,14 @@ function relayTransfer(
   const received = order.minimumReceived.token;
   if (!received.known) notices.push(tokenNotice(received));
   if (!isAddressEqual(order.recipient, account)) notices.push(notThisAccount('The recipient', order.recipient));
-  const refundAddresses = [...new Set(order.refunds.map((refund) => getAddress(refund.to)))];
-  for (const to of refundAddresses) {
-    if (!isAddressEqual(to, account) && !isAddressEqual(to, order.recipient)) {
-      notices.push(notThisAccount('The refund address', to));
-    }
+  // The recipient is only known to hold its address on the destination chain.
+  for (const { chainId, to } of order.refunds) {
+    const toRecipient = chainId === order.destinationChainId && isAddressEqual(to, order.recipient);
+    if (!isAddressEqual(to, account) && !toRecipient) notices.push(notThisAccount('The refund address', to));
   }
-  const refundDetails =
-    refundAddresses.length === 1
-      ? [accountDetail('Refund to', refundAddresses[0], account)]
-      : order.refunds.map((refund) =>
-          accountDetail(`Refund on ${labelOf(contracts, refund.chainId).name}`, refund.to, account)
-        );
+  const refundDetails = order.refunds.map(({ chainId, to }) =>
+    accountDetail(`Refund on ${labelOf(contracts, chainId).name}`, to, account)
+  );
   const destination = labelOf(contracts, order.destinationChainId);
   return {
     transfer: {

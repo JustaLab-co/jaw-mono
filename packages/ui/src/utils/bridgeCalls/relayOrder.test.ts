@@ -96,7 +96,8 @@ const USDC_ORDER_TRANSFER = {
   },
   details: [
     { label: 'Recipient', value: 'This account', copy: SIGNER_CHECKSUM },
-    { label: 'Refund to', value: 'This account', copy: SIGNER_CHECKSUM },
+    { label: 'Refund on Base', value: 'This account', copy: SIGNER_CHECKSUM },
+    { label: 'Refund on Arbitrum', value: 'This account', copy: SIGNER_CHECKSUM },
     CREDITED,
     orderDetail(USDC_ORDER_ID),
   ],
@@ -123,7 +124,7 @@ describe('given the relay-usdc batch and the order the MCP sends with it', () =>
         kind: 'minimum',
         amount: { ...USDC_ORDER_TRANSFER.receive.amount, amount: 9_776_602n },
       },
-      details: [...USDC_ORDER_TRANSFER.details.slice(0, 3), orderDetail(USDC_V32_ORDER_ID)],
+      details: [...USDC_ORDER_TRANSFER.details.slice(0, 4), orderDetail(USDC_V32_ORDER_ID)],
     });
     expect(batch?.notices).toEqual([]);
   });
@@ -314,7 +315,10 @@ describe('given the relay-usdc batch and the order the MCP sends with it', () =>
   it('when a matching order refunds another address, then the refund prints in full with the refund warning', () => {
     const order = edit((o) => o.inputs[0].refunds.forEach((r) => (r.recipient = OTHER)));
     const batch = usdcBatch(order, { rehash: true });
-    expect(batch?.transfer?.details[1]).toEqual({ label: 'Refund to', value: OTHER_CHECKSUM, copy: OTHER_CHECKSUM });
+    expect(batch?.transfer?.details.slice(1, 3)).toEqual([
+      { label: 'Refund on Base', value: OTHER_CHECKSUM, copy: OTHER_CHECKSUM },
+      { label: 'Refund on Arbitrum', value: OTHER_CHECKSUM, copy: OTHER_CHECKSUM },
+    ]);
     expect(batch?.notices).toEqual([notThisAccount('The refund address')]);
   });
 });
@@ -346,11 +350,15 @@ describe('given a live Relay quote that pays another address on Arbitrum', () =>
     expect(batch?.notices).toEqual([`The recipient is not this account: ${RECIPIENT}.`]);
   });
 
-  it('when a refund goes to a third address, then that refund prints in full with the refund warning', () => {
+  const rehashed = (change: (order: typeof RELAY_OTHER_RECIPIENT_ORDER) => void) => {
     const order = structuredClone(RELAY_OTHER_RECIPIENT_ORDER);
-    order.inputs[0].refunds[1].recipient = OTHER;
+    change(order);
     const deposit = withId(RELAY_OTHER_RECIPIENT_DEPOSIT, idOf(order as unknown as Order));
-    const batch = readBridgeBatch(contracts, [RELAY_OTHER_RECIPIENT_APPROVE, deposit], DEPOSITOR, capability(order));
+    return readBridgeBatch(contracts, [RELAY_OTHER_RECIPIENT_APPROVE, deposit], DEPOSITOR, capability(order));
+  };
+
+  it('when a refund goes to a third address, then that refund prints in full with the refund warning', () => {
+    const batch = rehashed((o) => (o.inputs[0].refunds[1].recipient = OTHER));
     expect(batch?.transfer?.details[2]).toEqual({
       label: 'Refund on Arbitrum',
       value: OTHER_CHECKSUM,
@@ -360,6 +368,25 @@ describe('given a live Relay quote that pays another address on Arbitrum', () =>
       `The recipient is not this account: ${RECIPIENT}.`,
       notThisAccount('The refund address'),
     ]);
+  });
+
+  it('when the origin refund goes to the recipient, then that refund is warned, since the recipient may not hold that address on Base', () => {
+    const batch = rehashed((o) => (o.inputs[0].refunds[0].recipient = RECIPIENT.toLowerCase()));
+    expect(batch?.transfer?.details[1]).toEqual({ label: 'Refund on Base', value: RECIPIENT, copy: RECIPIENT });
+    expect(batch?.notices).toEqual([
+      `The recipient is not this account: ${RECIPIENT}.`,
+      `The refund address is not this account: ${RECIPIENT}.`,
+    ]);
+  });
+
+  it.each([
+    ['Base', 'base'],
+    ['Arbitrum', 'arbitrum'],
+  ])('when both refunds name %s, then the terms are not shown', (_, chain) => {
+    const batch = rehashed((o) => o.inputs[0].refunds.forEach((r) => (r.chainId = chain)));
+    expect(batch?.transfer?.title).toBe('Deposit to Relay');
+    expect(batch?.transfer?.otherRecipient).toBeUndefined();
+    expect(batch?.notices).toEqual([RELAY_HIDDEN]);
   });
 });
 
@@ -386,7 +413,8 @@ describe('given the relay-native deposit and its order', () => {
       },
       details: [
         { label: 'Recipient', value: 'This account', copy: SIGNER_CHECKSUM },
-        { label: 'Refund to', value: 'This account', copy: SIGNER_CHECKSUM },
+        { label: 'Refund on Base', value: 'This account', copy: SIGNER_CHECKSUM },
+        { label: 'Refund on Ethereum', value: 'This account', copy: SIGNER_CHECKSUM },
         CREDITED,
         orderDetail(NATIVE_ORDER_ID),
       ],
