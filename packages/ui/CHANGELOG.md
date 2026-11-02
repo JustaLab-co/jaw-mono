@@ -1,3 +1,13 @@
+## 1.11.4 (2026-11-02)
+
+### 🩹 Fixes
+
+- **ui:** show ens names without waiting on records ([#621](https://github.com/JustaLab-co/jaw-mono/pull/621))
+
+### ❤️ Thank You
+
+- Ghadi @Ghadi8
+
 ## 1.11.3 (2026-11-02)
 
 ### 🩹 Fixes
