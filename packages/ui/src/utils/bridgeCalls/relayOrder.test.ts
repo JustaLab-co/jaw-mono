@@ -35,6 +35,8 @@ const BASE_WETH = '0x4200000000000000000000000000000000000006';
 const USDC_V32_ORDER_ID = '0xd9dcfa1b6777423024cd61fed0c44fca59864cd8b5e0619ca3be985fa34ed70e';
 const USDC_ORDER_ID = '0x0de6aaacb71ffd230278e6aa855c6159b4e9e4be35ed782c48d74b1b42193c54';
 const POLYGON_SOLVER = '0xC1A6E71C0f69aD498AA4029BDF9F8CDBa79f9678';
+const POLYGON_USDC = '0x3c499c542cef5e3811e1192ce70d8cc03d5c3359';
+const BASE_SOLVER = '0x56c262027e0de4aea31d2489529cb25d23e58a8b';
 const NOT_ROUTER = pad(OTHER);
 const NATIVE_ORDER_ID = '0x61fb170c281e35e82af8773e6b9c0cbc065e9f74abe896149ad6a480eaf9536e';
 
@@ -132,7 +134,7 @@ describe('given the relay-usdc batch and the order the MCP sends with it', () =>
   });
 
   it.each([
-    ['listed for Base', edit((o) => (o.solver = '0x56c262027e0de4aea31d2489529cb25d23e58a8b'))],
+    ['listed for Base', edit((o) => (o.solver = BASE_SOLVER))],
     ['the shared solver listed for Arbitrum, the destination', edit((o) => (o.solverChainId = 'arbitrum'))],
     ['on a solver chain that is neither side, listed there too', edit((o) => (o.solverChainId = 'optimism'))],
     [
@@ -142,6 +144,19 @@ describe('given the relay-usdc batch and the order the MCP sends with it', () =>
   ])('when a matching order has a solver %s, then the order shows', (_, order) => {
     const batch = usdcBatch(order, { rehash: true });
     expect(batch?.transfer).toMatchObject(toArbitrum);
+    expect(batch?.notices).toEqual([]);
+  });
+
+  it('when a matching order to Polygon has a solver listed only for Polygon, the destination, then the order shows', () => {
+    const order = edit((o) => {
+      o.solver = POLYGON_SOLVER;
+      o.solverChainId = 'polygon';
+      o.output.chainId = 'polygon';
+      o.output.payments[0].currency = POLYGON_USDC;
+      o.inputs[0].refunds[1].chainId = 'polygon';
+    });
+    const batch = usdcBatch(order, { rehash: true });
+    expect(batch?.transfer).toMatchObject({ receive: { kind: 'minimum', amount: { chainId: 137 } } });
     expect(batch?.notices).toEqual([]);
   });
 
@@ -242,7 +257,11 @@ describe('given the relay-usdc batch and the order the MCP sends with it', () =>
       edit((o) => ((o.solverChainId = 'polygon'), (o.solver = POLYGON_SOLVER))),
     ],
     ['a solver chain outside the table', UNKNOWN_ROUTE, edit((o) => (o.solverChainId = 'solana'))],
-    ['a solver chain whose list does not have the solver', UNKNOWN_ROUTE, edit((o) => (o.solverChainId = 'sepolia'))],
+    [
+      'a solver chain whose list does not have the solver',
+      UNKNOWN_ROUTE,
+      edit((o) => ((o.solver = BASE_SOLVER), (o.solverChainId = 'optimism'))),
+    ],
     ['output extraData of another address', UNKNOWN_ROUTE, edit((o) => (o.output.extraData = NOT_ROUTER))],
     ['empty output extraData on a mainnet', UNKNOWN_ROUTE, edit((o) => (o.output.extraData = '0x'))],
     ['output extraData one byte longer', UNKNOWN_ROUTE, edit((o) => (o.output.extraData = `${o.output.extraData}00`))],
@@ -461,6 +480,21 @@ describe('given a Relay order through a router the compiled table does not list'
   it('when the table in use is the snapshot and the route is known, then no refresh line shows', () => {
     const snapshot = new BridgeContracts({ version: 1, chains: BRIDGE_CHAINS }, 'snapshot');
     expect(usdcBatchOn(snapshot, RELAY_USDC_ORDER)?.notices).toEqual([]);
+  });
+});
+
+describe('given a live table that lists the mainnet solver on a testnet', () => {
+  const chains = structuredClone(BRIDGE_CHAINS);
+  for (const chain of Object.values(chains)) {
+    if (chain.relay?.protocolChain === 'sepolia') {
+      chain.relay.solvers = [...chain.relay.solvers, RELAY_USDC_ORDER.solver];
+    }
+  }
+  const live = new BridgeContracts({ version: 2, chains }, 'live');
+
+  it('when a mainnet order names that testnet as its solver chain, then the route is unknown', () => {
+    const order = edit((o) => (o.solverChainId = 'sepolia'));
+    expect(usdcBatchOn(live, order, { rehash: true })?.notices).toEqual([UNKNOWN_ROUTE, RELAY_HIDDEN]);
   });
 });
 

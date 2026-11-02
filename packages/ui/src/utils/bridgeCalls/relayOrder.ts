@@ -172,13 +172,15 @@ function knownRoute(contracts: BridgeContracts, order: Order, origin: string): b
     if (!route) return false;
     return route.erc20Routers.some((router) => sameBytes(extraData, pad(router))) || (testnet && extraData === '0x');
   };
-  // The solver chain may be outside the route, but the solver must be listed for it and for a
-  // chain the funds move on.
+  // The solver chain may be outside the route, but it must be on the route's network, and the
+  // solver must be listed for it and for a chain the funds move on.
   const listed = (relay: RelayContracts | undefined) =>
     relay?.solvers.some((solver) => isAddressEqual(solver, order.solver)) === true;
+  const solverRelay = relayOf(order.solverChainId);
   return (
-    listed(relayOf(order.solverChainId)) &&
-    sides.some((chain) => listed(routeOf(chain))) &&
+    listed(solverRelay) &&
+    (solverRelay?.testnet === true) === testnet &&
+    sides.some((chain) => listed(relayOf(chain))) &&
     viaRouter(order.output.chainId, order.output.extraData) &&
     order.inputs[0].refunds.every((refund) => viaRouter(refund.chainId, refund.extraData))
   );
