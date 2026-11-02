@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { encodeFunctionData, parseAbi } from 'viem';
+import { encodeFunctionData, parseAbi, toFunctionSelector, type Hex } from 'viem';
 import { decodeWithAbi } from './useDecodedCalldata';
 
 const abi4 = parseAbi(['function depositErc20(address depositor, address token, uint256 amount, bytes32 id)']);
@@ -34,5 +34,39 @@ describe('decodeWithAbi', () => {
 
   it('returns null when no ABI entry has the selector', () => {
     expect(decodeWithAbi(abi3, data)).toBeNull();
+  });
+
+  it('drops a decode whose address word has dirty high bytes, which re-encodes differently', () => {
+    const body = data.slice(10);
+    const dirty = `0x${data.slice(2, 10)}ff${body.slice(2)}` as Hex;
+    expect(decodeWithAbi(abi4, dirty)).toBeNull();
+  });
+
+  it('never shows a signature that fails to re-encode to the calldata, over random and truncated bodies', () => {
+    const selector = toFunctionSelector(abi4[0]);
+    let seed = 1;
+    const next = () => (seed = (seed * 1103515245 + 12345) % 2 ** 31);
+    const hex = (bytes: number) =>
+      Array.from({ length: bytes }, () => (next() % 256).toString(16).padStart(2, '0')).join('');
+
+    for (let i = 0; i < 300; i++) {
+      const input = `${selector}${hex(next() % 160)}` as Hex;
+      const decoded = decodeWithAbi(abi4, input);
+      if (!decoded) continue;
+      const types = decoded.params.map((p) => p.type).join(',');
+      expect(decoded.signature).toBe(`depositErc20(${types.replaceAll(',', ', ')})`);
+      const again = encodeFunctionData({
+        abi: abi4,
+        functionName: 'depositErc20',
+        args: decoded.params.map((p, j) => (j === 2 ? BigInt(p.value) : p.value)) as never,
+      });
+      expect(again.toLowerCase()).toBe(input.toLowerCase());
+    }
+  });
+
+  it('decodes nothing for every truncation of valid calldata', () => {
+    for (let len = 10; len < data.length; len += 2) {
+      expect(decodeWithAbi(abi4, data.slice(0, len) as Hex)).toBeNull();
+    }
   });
 });
