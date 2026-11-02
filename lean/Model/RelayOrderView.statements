@@ -547,35 +547,35 @@
       "kind": "definition",
       "type": "List RelayOrderView.Order",
       "typeHash": "86999f1422de33bfa09e69a1a4f09946c7bec965267bccbaa7109d81cf052e66",
-      "valueHash": "885ac69ce99301cfeacbeedc73966746e11220d25bc5a18fe1dbbd9f8e6cf9f3"
+      "valueHash": "7f3f81e4bd85f423fe284ba29db83aa4a6ec1631f428e02053ddc4a7366a30d7"
     },
     {
       "name": "RelayOrderView.badOrders.match_1",
       "kind": "definition",
       "type": "(motive : Option RelayOrderView.View → Sort u_1) → (x : Option RelayOrderView.View) → ((v : RelayOrderView.View) → motive (some v)) → (Unit → motive none) → motive x",
       "typeHash": "0ed307d3242e18dcc356ca9c30a6c5d2d72161e0435c5bff918542b54ac5b736",
-      "valueHash": "5bc391ff03267a900042e14ec6f1e527bef61cfb648aae0ef53e18d24c138819"
+      "valueHash": "46649fa5af832850d832385f202574c9a920f43d0a60692c82fae9c5c0229fd9"
     },
     {
       "name": "RelayOrderView.bytes",
       "kind": "definition",
       "type": "List RelayOrderView.Bytes",
       "typeHash": "2c918d4a45ed80a9ef1910c3d34bb2feb7055324a2b817574e92b555a44be47c",
-      "valueHash": "59123860f04fcb7ffb2aab75c3dcad9b111b3ec04b5976e7133e4629a3933b7f"
+      "valueHash": "4fd502025b07cf2a7a5843afaf7d2b39591bcedbf46816233cd008ee94003078"
     },
     {
       "name": "RelayOrderView.commits",
       "kind": "definition",
       "type": "RelayOrderView.Table → RelayOrderView.Order → RelayOrderView.View → Prop",
       "typeHash": "de7b1f6a53505e81b741f29d0c3bfffd2d1bc18834ee89d8397d84e3d4949e00",
-      "valueHash": "73802c7868f5d68f5e07dd9973bf9e29d39b28cf30bf21e58fe5581db8d156a8"
+      "valueHash": "57de8e15f0e427f2f4143c8e07d9c272bd07d73765675fa9d6f5b88db134047b"
     },
     {
       "name": "RelayOrderView.instDecidableCommits",
       "kind": "definition",
       "type": "(table : RelayOrderView.Table) → (o : RelayOrderView.Order) → (v : RelayOrderView.View) → Decidable (RelayOrderView.commits table o v)",
       "typeHash": "e8b19298e15a03ff9063e6835e30cf8d68ea14f21b908703ff146c2229cb293d",
-      "valueHash": "f135e466f5e8c3c7cff4af04adb8d0840f025364490196cb51c2189054bc5d77"
+      "valueHash": "24a96c0d12b3f2339eccd213d9c3973b7bf82d1de54ff3710add766196ebbafd"
     },
     {
       "name": "RelayOrderView.instDecidableEqBytes",
@@ -760,6 +760,13 @@
       "valueHash": "a6c621845506f0aa3cf9c16cd1fa76a20e2236e4516346f6af2fb2e6498190b1"
     },
     {
+      "name": "RelayOrderView.offchain_refund_warned",
+      "kind": "theorem",
+      "type": "∀ (account : Nat) (v : RelayOrderView.View) (row : Nat × Nat), row ∈ v.refunds → row.snd ≠ account → row.fst ≠ v.dest → row.snd ∈ RelayOrderView.refundWarned account v",
+      "typeHash": "57217950cf9044d2f3345187c358efdf3ac18661029b398be1986b09fa7a98d2",
+      "valueHash": null
+    },
+    {
       "name": "RelayOrderView.order11c",
       "kind": "definition",
       "type": "RelayOrderView.Order",
@@ -771,7 +778,7 @@
       "kind": "definition",
       "type": "List RelayOrderView.Order",
       "typeHash": "86999f1422de33bfa09e69a1a4f09946c7bec965267bccbaa7109d81cf052e66",
-      "valueHash": "020743e14d16c0131a661d4fd97af12603ba32246a947868a5f0332ac00904ec"
+      "valueHash": "c2522921f0b6721dba30f564bba96c1c539fb2c23e1e78173d5b3a4fbc035960"
     },
     {
       "name": "RelayOrderView.readRelayOrder",
@@ -797,78 +804,120 @@
     {
       "name": "RelayOrderView.refundRows.eq_2",
       "kind": "theorem",
-      "type": "∀ (table : RelayOrderView.Table) (r : RelayOrderView.Refund) (rs : List RelayOrderView.Refund), RelayOrderView.refundRows table (r :: rs) = match table r.chain with | none => none | some c => if RelayOrderView.isAddress r.recipient = true then Option.map (fun x => (c, r.recipient.val) :: x) (RelayOrderView.refundRows table rs) else none",
-      "typeHash": "ed9a6a1d3027ba686e4934ff2c5cc9aee956e4c7e9c737a074620f7a397cb573",
+      "type": "∀ (table : RelayOrderView.Table) (r : RelayOrderView.Refund) (rs : List RelayOrderView.Refund), RelayOrderView.refundRows table (r :: rs) = match table r.chain with | none => none | some c => if RelayOrderView.isAddress r.recipient = true then match RelayOrderView.refundRows table rs with | some rows => if (rows.any fun x => x.fst == c) = true then none else some ((c, r.recipient.val) :: rows) | none => none else none",
+      "typeHash": "72db416c13863187e061eedaa3da6ef4e5cd5fc69aa065f104f48d77ddded7fb",
       "valueHash": null
     },
     {
       "name": "RelayOrderView.refundRows.eq_def",
       "kind": "theorem",
-      "type": "∀ (table : RelayOrderView.Table) (x : List RelayOrderView.Refund), RelayOrderView.refundRows table x = match x with | [] => some [] | r :: rs => match table r.chain with | none => none | some c => if RelayOrderView.isAddress r.recipient = true then Option.map (fun x => (c, r.recipient.val) :: x) (RelayOrderView.refundRows table rs) else none",
-      "typeHash": "0373543865f0106f0a1dcfb220457a95147f8b77867938d2ad99e11e95f529c2",
+      "type": "∀ (table : RelayOrderView.Table) (x : List RelayOrderView.Refund), RelayOrderView.refundRows table x = match x with | [] => some [] | r :: rs => match table r.chain with | none => none | some c => if RelayOrderView.isAddress r.recipient = true then match RelayOrderView.refundRows table rs with | some rows => if (rows.any fun x => x.fst == c) = true then none else some ((c, r.recipient.val) :: rows) | none => none else none",
+      "typeHash": "fed855f62bd7b2f237fca1d1ad775870a1892d487c102bef64faca5f36162063",
       "valueHash": null
     },
     {
       "name": "RelayOrderView.refundRows.match_1",
       "kind": "definition",
-      "type": "(motive : Option Nat → Sort u_1) → (x : Option Nat) → (Unit → motive none) → ((c : Nat) → motive (some c)) → motive x",
-      "typeHash": "b978526449341730134aaed049f32b4084c2562314c3666a2066859f18f938f6",
-      "valueHash": "7637c35562d8803116fdabcb9c7aa5c4b5a34424ed35080c7a05c9cd2d54105e"
+      "type": "(motive : Option (List (Nat × Nat)) → Sort u_1) → (x : Option (List (Nat × Nat))) → ((rows : List (Nat × Nat)) → motive (some rows)) → (Unit → motive none) → motive x",
+      "typeHash": "aeaa013f19b4cc1fef810b44851b211b0aa1daf92b7f14f5ac4cfc5dc14e5b14",
+      "valueHash": "e04da038db9d6541898ad212f7eef4f3e91723ae07c7037ce421ec3bac05eda4"
     },
     {
       "name": "RelayOrderView.refundRows.match_1.eq_1",
       "kind": "theorem",
-      "type": "∀ (motive : Option Nat → Sort u_1) (h_1 : Unit → motive none) (h_2 : (c : Nat) → motive (some c)), (match none with | none => h_1 () | some c => h_2 c) = h_1 ()",
-      "typeHash": "8ccb127689f332508ed6bd40076ae69f68acbfd6bb1c214143d1d22cb5e76417",
+      "type": "∀ (motive : Option (List (Nat × Nat)) → Sort u_1) (rows : List (Nat × Nat)) (h_1 : (rows : List (Nat × Nat)) → motive (some rows)) (h_2 : Unit → motive none), (match some rows with | some rows => h_1 rows | none => h_2 ()) = h_1 rows",
+      "typeHash": "256fdafd48f1dcc978450ca7e62553266c236d166e3592a8edc9c08883cd7ef0",
       "valueHash": null
     },
     {
       "name": "RelayOrderView.refundRows.match_1.eq_2",
       "kind": "theorem",
-      "type": "∀ (motive : Option Nat → Sort u_1) (c : Nat) (h_1 : Unit → motive none) (h_2 : (c : Nat) → motive (some c)), (match some c with | none => h_1 () | some c => h_2 c) = h_2 c",
-      "typeHash": "30b56d83eeffd942810c14402bc60b8ef2b0afcf88278edc369413a29a82889f",
+      "type": "∀ (motive : Option (List (Nat × Nat)) → Sort u_1) (h_1 : (rows : List (Nat × Nat)) → motive (some rows)) (h_2 : Unit → motive none), (match none with | some rows => h_1 rows | none => h_2 ()) = h_2 ()",
+      "typeHash": "ce81e1fee6cadb4115b976eac6f44d9296185eb50c28c5f63321ba371b7efbf6",
       "valueHash": null
     },
     {
       "name": "RelayOrderView.refundRows.match_1.splitter",
       "kind": "definition",
-      "type": "(motive : Option Nat → Sort u_1) → (x : Option Nat) → (Unit → motive none) → ((c : Nat) → motive (some c)) → motive x",
-      "typeHash": "b978526449341730134aaed049f32b4084c2562314c3666a2066859f18f938f6",
+      "type": "(motive : Option (List (Nat × Nat)) → Sort u_1) → (x : Option (List (Nat × Nat))) → ((rows : List (Nat × Nat)) → motive (some rows)) → (Unit → motive none) → motive x",
+      "typeHash": "aeaa013f19b4cc1fef810b44851b211b0aa1daf92b7f14f5ac4cfc5dc14e5b14",
       "valueHash": "25abda305c23cc39fa0de26277877935925c5b1caf8bffd549b0556f522c3c5a"
     },
     {
       "name": "RelayOrderView.refundRows.match_3",
       "kind": "definition",
-      "type": "(motive : List RelayOrderView.Refund → Sort u_1) → (x : List RelayOrderView.Refund) → (Unit → motive []) → ((r : RelayOrderView.Refund) → (rs : List RelayOrderView.Refund) → motive (r :: rs)) → motive x",
-      "typeHash": "545c2739af9c35e203f849cff95ca19ca1fa48c532034d3af80fb14d0a1a0ad8",
-      "valueHash": "5ce1d6f5f5c3ae9fe37d59e49f83edbe8f1f580448baf7f10e5c0074daf7eb2c"
+      "type": "(motive : Option Nat → Sort u_1) → (x : Option Nat) → (Unit → motive none) → ((c : Nat) → motive (some c)) → motive x",
+      "typeHash": "b978526449341730134aaed049f32b4084c2562314c3666a2066859f18f938f6",
+      "valueHash": "ad944ccc7f99ef0b56de0faa00a0e5415d40611171b3be55fca45766407c8368"
     },
     {
       "name": "RelayOrderView.refundRows.match_3.eq_1",
       "kind": "theorem",
-      "type": "∀ (motive : List RelayOrderView.Refund → Sort u_1) (h_1 : Unit → motive []) (h_2 : (r : RelayOrderView.Refund) → (rs : List RelayOrderView.Refund) → motive (r :: rs)), (match [] with | [] => h_1 () | r :: rs => h_2 r rs) = h_1 ()",
-      "typeHash": "0a9d974dd14e616c299663877b681c333904cee3902f0da157b0eaa4e8762506",
+      "type": "∀ (motive : Option Nat → Sort u_1) (h_1 : Unit → motive none) (h_2 : (c : Nat) → motive (some c)), (match none with | none => h_1 () | some c => h_2 c) = h_1 ()",
+      "typeHash": "861ef83bcf7b90d3f783591f6b6b51abcc8196455db012e178b2c7b12bfdaadb",
       "valueHash": null
     },
     {
       "name": "RelayOrderView.refundRows.match_3.eq_2",
       "kind": "theorem",
-      "type": "∀ (motive : List RelayOrderView.Refund → Sort u_1) (r : RelayOrderView.Refund) (rs : List RelayOrderView.Refund) (h_1 : Unit → motive []) (h_2 : (r : RelayOrderView.Refund) → (rs : List RelayOrderView.Refund) → motive (r :: rs)), (match r :: rs with | [] => h_1 () | r :: rs => h_2 r rs) = h_2 r rs",
-      "typeHash": "eb3ad06470f6255fe49930c450a0b24a7309a1cf5cf179fe1293c4cd6a4cb27b",
+      "type": "∀ (motive : Option Nat → Sort u_1) (c : Nat) (h_1 : Unit → motive none) (h_2 : (c : Nat) → motive (some c)), (match some c with | none => h_1 () | some c => h_2 c) = h_2 c",
+      "typeHash": "749623048c60d54a2aa12c3d6956b7ffb0f9429a7283b9701b63d130f429a6fe",
       "valueHash": null
     },
     {
       "name": "RelayOrderView.refundRows.match_3.splitter",
       "kind": "definition",
+      "type": "(motive : Option Nat → Sort u_1) → (x : Option Nat) → (Unit → motive none) → ((c : Nat) → motive (some c)) → motive x",
+      "typeHash": "b978526449341730134aaed049f32b4084c2562314c3666a2066859f18f938f6",
+      "valueHash": "28f7bfd2c7839857e4f9507e2515c600ff30ff9f4e7a8baa205ad5ab960d6646"
+    },
+    {
+      "name": "RelayOrderView.refundRows.match_5",
+      "kind": "definition",
       "type": "(motive : List RelayOrderView.Refund → Sort u_1) → (x : List RelayOrderView.Refund) → (Unit → motive []) → ((r : RelayOrderView.Refund) → (rs : List RelayOrderView.Refund) → motive (r :: rs)) → motive x",
       "typeHash": "545c2739af9c35e203f849cff95ca19ca1fa48c532034d3af80fb14d0a1a0ad8",
-      "valueHash": "28f7bfd2c7839857e4f9507e2515c600ff30ff9f4e7a8baa205ad5ab960d6646"
+      "valueHash": "d8d54b11785119c2f3f88ecfa744821b78181cf30c24ea737b064cacadfdc0ac"
+    },
+    {
+      "name": "RelayOrderView.refundRows.match_5.eq_1",
+      "kind": "theorem",
+      "type": "∀ (motive : List RelayOrderView.Refund → Sort u_1) (h_1 : Unit → motive []) (h_2 : (r : RelayOrderView.Refund) → (rs : List RelayOrderView.Refund) → motive (r :: rs)), (match [] with | [] => h_1 () | r :: rs => h_2 r rs) = h_1 ()",
+      "typeHash": "87f9aa65108cbbfc1bdb03e8688a7ccf29238a8fb7622e181a95ff2f8e71c063",
+      "valueHash": null
+    },
+    {
+      "name": "RelayOrderView.refundRows.match_5.eq_2",
+      "kind": "theorem",
+      "type": "∀ (motive : List RelayOrderView.Refund → Sort u_1) (r : RelayOrderView.Refund) (rs : List RelayOrderView.Refund) (h_1 : Unit → motive []) (h_2 : (r : RelayOrderView.Refund) → (rs : List RelayOrderView.Refund) → motive (r :: rs)), (match r :: rs with | [] => h_1 () | r :: rs => h_2 r rs) = h_2 r rs",
+      "typeHash": "d7a5c9e51eb0ebfacd63db0ec3bd5eb048dd8c85eaaa673fd5f7fe41a5c58c97",
+      "valueHash": null
+    },
+    {
+      "name": "RelayOrderView.refundRows.match_5.splitter",
+      "kind": "definition",
+      "type": "(motive : List RelayOrderView.Refund → Sort u_1) → (x : List RelayOrderView.Refund) → (Unit → motive []) → ((r : RelayOrderView.Refund) → (rs : List RelayOrderView.Refund) → motive (r :: rs)) → motive x",
+      "typeHash": "545c2739af9c35e203f849cff95ca19ca1fa48c532034d3af80fb14d0a1a0ad8",
+      "valueHash": "cf639d4852429f078e750966c839daa836598903f80fc67ac48c5516965983a9"
     },
     {
       "name": "RelayOrderView.refundRows_sound",
       "kind": "theorem",
-      "type": "∀ (table : RelayOrderView.Table) (rs : List RelayOrderView.Refund) (rows : List (Nat × Nat)), RelayOrderView.refundRows table rs = some rows → (∀ (row : Nat × Nat), row ∈ rows → ∃ r, r ∈ rs ∧ table r.chain = some row.fst ∧ RelayOrderView.isAddress r.recipient = true ∧ r.recipient.val = row.snd) ∧ ∀ (r : RelayOrderView.Refund), r ∈ rs → ∃ row, row ∈ rows ∧ table r.chain = some row.fst ∧ row.snd = r.recipient.val",
-      "typeHash": "f4ccc2c501b5ce71ef97cf8356c303b8cfb2dbe7987aba201d9b24c6e9a4f2ab",
+      "type": "∀ (table : RelayOrderView.Table) (rs : List RelayOrderView.Refund) (rows : List (Nat × Nat)), RelayOrderView.refundRows table rs = some rows → (List.map Prod.fst rows).Nodup ∧ (∀ (row : Nat × Nat), row ∈ rows → ∃ r, r ∈ rs ∧ table r.chain = some row.fst ∧ RelayOrderView.isAddress r.recipient = true ∧ r.recipient.val = row.snd) ∧ ∀ (r : RelayOrderView.Refund), r ∈ rs → ∃ row, row ∈ rows ∧ table r.chain = some row.fst ∧ row.snd = r.recipient.val",
+      "typeHash": "8cbf8ece8daeb3a82aadae2fe436f89309df0c5f5462f24d4fb8c77e8943e662",
+      "valueHash": null
+    },
+    {
+      "name": "RelayOrderView.refundWarned",
+      "kind": "definition",
+      "type": "Nat → RelayOrderView.View → List Nat",
+      "typeHash": "afa3eda88743860d129f106c76992715e224ef8f009b893b1c64e0b08d6f70a3",
+      "valueHash": "c5b2b2e81e99de33c7a6ba23bc7790a911a86e9f601aaf690f41d72b97bc4a17"
+    },
+    {
+      "name": "RelayOrderView.refundWarned.eq_1",
+      "kind": "theorem",
+      "type": "∀ (account : Nat) (v : RelayOrderView.View), RelayOrderView.refundWarned account v = List.map Prod.snd (List.filter (fun row => decide (row.snd ≠ account ∧ ¬(row.fst = v.dest ∧ row.snd = v.recipient))) v.refunds)",
+      "typeHash": "ed95ae00d71912db23b7c629d953d898bbf49689970eb0e378049f89b5e6176b",
       "valueHash": null
     },
     {
@@ -939,14 +988,14 @@
       "kind": "definition",
       "type": "RelayOrderView.Table",
       "typeHash": "39a0d63fb842003170578a3dc7a1a063b82d753501986c6709da83df17b579c9",
-      "valueHash": "ace5d6012e178ef8b82d438e205473005afd92daa1e1292ffbbcd740031262f2"
+      "valueHash": "32c6f6fc4fa1028da57dfa13b7155a84b3afcaf93cbed3826d75751b3c5716be"
     },
     {
       "name": "RelayOrderView.termsOf",
       "kind": "definition",
       "type": "RelayOrderView.Table → RelayOrderView.Order → Option RelayOrderView.View",
       "typeHash": "441f4220b1175a441e9dc5bcfa8d1bb4b84311a196d053e413bc8b151806e70a",
-      "valueHash": "594fb513e896b14b527fcea82f5732affc8a57b30a672240c6ac7bffeb934e2c"
+      "valueHash": "10c58e83a558e11bca6b0cfdbc0732eb63c601d2a10242b4891a946ead78396e"
     },
     {
       "name": "RelayOrderView.termsOf.match_1",
@@ -991,17 +1040,24 @@
       "valueHash": "8020b6882a2cea521d55e5fa0aaec5f0bcf2baa9b7e717a732d2523a5a6e93df"
     },
     {
+      "name": "RelayOrderView.upTo3",
+      "kind": "definition",
+      "type": "{α : Type u_1} → List α → List (List α)",
+      "typeHash": "95babc917bd125fd1977c84642dbdb26c1db0a84c40828baeb7b1368e70d49c0",
+      "valueHash": "fb33d8a7afbcc768401f7c30b6f2dcd4e5c7e9ca5ca31d3287c65aff6b2727c8"
+    },
+    {
       "name": "RelayOrderView.warned",
       "kind": "definition",
       "type": "Nat → RelayOrderView.View → List Nat",
       "typeHash": "afa3eda88743860d129f106c76992715e224ef8f009b893b1c64e0b08d6f70a3",
-      "valueHash": "448b70954e55792a8a1aa144466f1901706eaa1164e23ac33d531d5e26a03a8a"
+      "valueHash": "edb975106949cc1210004e4275bddfddb99a8d706cea2798e3465b626f42c080"
     },
     {
       "name": "RelayOrderView.warned.eq_1",
       "kind": "theorem",
-      "type": "∀ (account : Nat) (v : RelayOrderView.View), RelayOrderView.warned account v = (if v.recipient ≠ account then [v.recipient] else []) ++ List.filter (fun a => decide (a ≠ account ∧ a ≠ v.recipient)) (List.map Prod.snd v.refunds)",
-      "typeHash": "0d3fdc426837532bd713d70b705c5a89634842359d1e93c331b0c6f65edc4a78",
+      "type": "∀ (account : Nat) (v : RelayOrderView.View), RelayOrderView.warned account v = (if v.recipient ≠ account then [v.recipient] else []) ++ RelayOrderView.refundWarned account v",
+      "typeHash": "9cf6d979d6c3bf9726aa6cd5d6fc4465fc95f2a03895105a7ff5b51b053db63a",
       "valueHash": null
     }
   ]

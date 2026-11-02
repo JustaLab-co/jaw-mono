@@ -8,20 +8,30 @@ mutation show terms of any order, not only the one that hashes to the deposit id
 
 mutation skip a refund on a chain outside the table instead of refusing the order
 -     | none => none
--     | some c => if isAddress r.recipient
+-     | some c =>
+-       if isAddress r.recipient then
 +     | none => refundRows table rs
-+     | some c => if isAddress r.recipient
++     | some c =>
++       if isAddress r.recipient then
 
 mutation show only the first refund
--     | some c => if isAddress r.recipient then (refundRows table rs).map ((c, r.recipient.val) :: ·) else none
-+     | some c => if isAddress r.recipient then some [(c, r.recipient.val)] else none
+-         | some rows => if rows.any (·.1 == c) then none else some ((c, r.recipient.val) :: rows)
++         | some _ => some [(c, r.recipient.val)]
+
+mutation accept two refunds on one chain
+-         | some rows => if rows.any (·.1 == c) then none else some ((c, r.recipient.val) :: rows)
++         | some rows => some ((c, r.recipient.val) :: rows)
 
 mutation accept a 32-byte payment recipient
 -         if isAddress p.recipient then (refundsOf
 +         if true then (refundsOf
 
+mutation exempt a refund to the recipient on every chain
+-   (v.refunds.filter fun row => decide (row.2 ≠ account ∧ ¬(row.1 = v.dest ∧ row.2 = v.recipient))).map Prod.snd
++   (v.refunds.filter fun row => decide (row.2 ≠ account ∧ ¬(row.2 = v.recipient))).map Prod.snd
+
 mutation drop the notice for a refund to a third address
--   (v.refunds.map Prod.snd).filter fun a => decide (a ≠ account ∧ a ≠ v.recipient)
+-   (v.refunds.filter fun row => decide (row.2 ≠ account ∧ ¬(row.1 = v.dest ∧ row.2 = v.recipient))).map Prod.snd
 +   []
 
 mutation the original bug: show the order only when every refund goes to one address
