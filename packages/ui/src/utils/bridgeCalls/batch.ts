@@ -13,18 +13,16 @@ import { readBridgeApprove, type BridgeApprove } from './approve';
 import { readRelayCall, type RelayDeposit } from './relay';
 import { readRelayOrder } from './relayOrder';
 import type { BridgeContracts } from './table';
-import { PROVIDER_NAME, transferOf, type BridgeTransfer } from './transfer';
-import { pinnedToken, unreadRefs, type BridgeCall, type BridgeProvider, type TokenRef, type Unreadable } from './view';
+import { transferOf, type BridgeTransfer } from './transfer';
+import { pinnedToken, unreadRefs, type BridgeCall, type Inert, type TokenRef, type Unreadable } from './view';
 
 const OTHER_CONTRACT = 'This approval is for a different contract than the deposit.';
 const OTHER_TOKEN = 'This approval is for a different token than the deposit.';
 const UNPAIRED = 'This batch has an approval that the deposit does not use. Check its token, amount and spender.';
 const APPROVE_UNKNOWN = 'This batch approves a token this screen does not know. Check its address before you confirm.';
 
-const manyDeposits = (count: number) => `This batch has ${count} bridge deposits. Check each step before you confirm.`;
 const CHECK = 'Check it before you confirm.';
-
-const STALE_TABLE = 'This screen could not refresh its list of bridge contracts.';
+const CHECK_RAW = 'Check the raw details before you confirm.';
 
 export type BridgeStep = { unreadable: true } | null;
 
@@ -32,25 +30,28 @@ export type BridgeStep = { unreadable: true } | null;
 export type BridgeBatch = { transfer?: BridgeTransfer; steps: BridgeStep[]; alerts: string[]; notices: string[] };
 
 type Deposit = AcrossDeposit | RelayDeposit;
-type Read = Deposit | BridgeApprove | Unreadable | undefined;
+type Read = Deposit | BridgeApprove | Inert | Unreadable | undefined;
 type Pull = { token: Address; amount: bigint; spender: Address };
 
-// A lone call has no step number on screen, so the line only names the provider.
-function cannotRead(provider: BridgeProvider, steps: number[], batchSize: number): string {
-  const name = PROVIDER_NAME[provider];
-  if (batchSize === 1) return `Cannot read this ${name} call. Check its raw details before you confirm.`;
-  if (steps.length === 1)
-    return `Cannot read the ${name} call in step ${steps[0]}. Check its raw details before you confirm.`;
-  const listed = `${steps.slice(0, -1).join(', ')} and ${steps[steps.length - 1]}`;
-  return `Cannot read the ${name} calls in steps ${listed}. Check their raw details before you confirm.`;
+// A lone call has no step number on screen, so the line names no step.
+function cannotRead(what: Unreadable['what'], steps: number[], batchSize: number): string {
+  const many = steps.length > 1;
+  let subject = `this ${what}`;
+  if (batchSize > 1 && many) subject = `the ${what}s in steps ${steps.slice(0, -1).join(', ')} and ${steps.at(-1)}`;
+  if (batchSize > 1 && !many) subject = `the ${what} in step ${steps[0]}`;
+  const sentence =
+    what === 'deposit'
+      ? `This screen cannot confirm where ${subject} ${many ? 'send' : 'sends'} the funds.`
+      : `This screen cannot read ${subject}.`;
+  return `${sentence} ${CHECK_RAW}`;
 }
 
 function unreadableAlerts(reads: Read[]): string[] {
-  const stepsBy = new Map<BridgeProvider, number[]>();
+  const stepsBy = new Map<Unreadable['what'], number[]>();
   reads.forEach((read, at) => {
-    if (read?.kind === 'unreadable') stepsBy.set(read.provider, [...(stepsBy.get(read.provider) ?? []), at + 1]);
+    if (read?.kind === 'unreadable') stepsBy.set(read.what, [...(stepsBy.get(read.what) ?? []), at + 1]);
   });
-  return [...stepsBy].map(([provider, steps]) => cannotRead(provider, steps, reads.length));
+  return [...stepsBy].map(([what, steps]) => cannotRead(what, steps, reads.length));
 }
 
 export function readBridgeBatch(
@@ -84,16 +85,8 @@ export function readBridgeBatchWithUnread(
   const approves = reads.flatMap((read, at) =>
     read?.kind === 'approve' ? [{ chainId: calls[at].chainId, read }] : []
   );
-  const unknownApprove = approves.some(({ read }) => !read.token.known);
-  if (unknownApprove) notices.push(APPROVE_UNKNOWN);
-  const outsideTable =
-    unknownApprove ||
-    transfers.some((read) => read.outsideTable) ||
-    reads.some((read) => read?.kind === 'unreadable' && read.outsideTable);
-  if (outsideTable && contracts.source === 'snapshot') notices.push(STALE_TABLE);
-
-  if (deposits.length === 1) notices.push(...approveNotices(calls, reads, deposits[0]));
-  if (deposits.length > 1) notices.push(manyDeposits(deposits.length));
+  if (approves.some(({ read }) => !read.token.known)) notices.push(APPROVE_UNKNOWN);
+  if (deposits.length > 0) notices.push(...approveNotices(calls, reads));
   calls.forEach((call, i) => reads[i] === undefined && notices.push(outsideNotice(contracts, call, i + 1)));
   return {
     batch: {
@@ -137,14 +130,19 @@ function erc20Call(data: string | undefined) {
   }
 }
 
-function approveNotices(calls: BridgeCall[], reads: Read[], deposit: Deposit): string[] {
-  const at = reads.indexOf(deposit);
-  const pull = pullOf(deposit, calls[at]);
-  const before = reads[at - 1];
-  const paired = pull && before?.kind === 'approve' && calls[at - 1].chainId === calls[at].chainId ? before : undefined;
+// Each deposit that pulls a token pairs with the approve right before it on the same chain.
+function approveNotices(calls: BridgeCall[], reads: Read[]): string[] {
   const notices: string[] = [];
-  if (paired && pull) notices.push(...pairingNotices(paired, pull));
-  if (reads.some((read) => read?.kind === 'approve' && read !== paired)) notices.push(UNPAIRED);
+  const paired = new Set<Read>();
+  reads.forEach((read, at) => {
+    const before = reads[at - 1];
+    if (read?.kind !== 'deposit' || before?.kind !== 'approve' || calls[at - 1].chainId !== calls[at].chainId) return;
+    const pull = pullOf(read, calls[at]);
+    if (!pull) return;
+    paired.add(before);
+    notices.push(...pairingNotices(before, pull));
+  });
+  if (reads.some((read) => read?.kind === 'approve' && !paired.has(read))) notices.push(UNPAIRED);
   return notices;
 }
 

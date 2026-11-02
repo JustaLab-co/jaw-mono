@@ -450,7 +450,6 @@ describe('given no usable capability', () => {
 });
 
 describe('given a Relay order through a router the compiled table does not list', () => {
-  const STALE = 'This screen could not refresh its list of bridge contracts.';
   const viaNewRouter = edit((o) => {
     o.output.extraData = NOT_ROUTER;
     for (const refund of o.inputs[0].refunds) refund.extraData = NOT_ROUTER;
@@ -472,9 +471,9 @@ describe('given a Relay order through a router the compiled table does not list'
     expect(read(contracts)?.notices).toEqual([UNKNOWN_ROUTE, RELAY_HIDDEN]);
   });
 
-  it('when the table in use is the snapshot and the route is unknown, then the notice adds the refresh line', () => {
+  it('when the table in use is the snapshot and the route is unknown, then no refresh line shows, since the owner cannot act on it', () => {
     const snapshot = new BridgeContracts({ version: 1, chains: BRIDGE_CHAINS }, 'snapshot');
-    expect(read(snapshot)?.notices).toEqual([UNKNOWN_ROUTE, RELAY_HIDDEN, STALE]);
+    expect(read(snapshot)?.notices).toEqual([UNKNOWN_ROUTE, RELAY_HIDDEN]);
   });
 
   it('when the table in use is the snapshot and the route is known, then no refresh line shows', () => {
@@ -506,9 +505,10 @@ describe('given a Relay order the snapshot cannot place', () => {
   it.each([
     ['a payout token outside the table', edit((o) => (o.output.payments[0].currency = OTHER))],
     ['a destination outside the table', edit((o) => (o.output.chainId = 'solana'))],
-  ])('when the order has %s, then the snapshot adds the refresh line and a live table does not', (_, order) => {
-    expect(usdcBatchOn(snapshot, order, { rehash: true })?.notices).toContain(STALE);
-    expect(usdcBatchOn(live, order, { rehash: true })?.notices).not.toContain(STALE);
+  ])('when the order has %s, then the snapshot shows what a live table shows, with no refresh line', (_, order) => {
+    const notices = usdcBatchOn(snapshot, order, { rehash: true })?.notices;
+    expect(notices).not.toContain(STALE);
+    expect(notices).toEqual(usdcBatchOn(live, order, { rehash: true })?.notices);
   });
 
   it('when the order is mismatched, then the snapshot adds no refresh line', () => {
