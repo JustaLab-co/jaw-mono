@@ -5,6 +5,10 @@ import {
   ACROSS_CALLS,
   RELAY_NATIVE_DEPOSIT,
   RELAY_NATIVE_ORDER,
+  RELAY_OTHER_RECIPIENT_APPROVE,
+  RELAY_OTHER_RECIPIENT_DEPOSIT,
+  RELAY_OTHER_RECIPIENT_DEPOSITOR,
+  RELAY_OTHER_RECIPIENT_ORDER,
   RELAY_USDC_APPROVE,
   RELAY_USDC_DEPOSIT,
   RELAY_USDC_ORDER,
@@ -284,7 +288,6 @@ describe('given the relay-usdc batch and the order the MCP sends with it', () =>
     ['version v2', edit((o) => (o.version = 'v2'))],
     ['two inputs', edit((o) => o.inputs.push(o.inputs[0]))],
     ['no refunds', edit((o) => (o.inputs[0].refunds = []))],
-    ['refunds to two addresses', edit((o) => (o.inputs[0].refunds[1].recipient = OTHER))],
     [
       'a 32-byte refund recipient',
       edit((o) => o.inputs[0].refunds.forEach((r) => (r.recipient = `0x${'ab'.repeat(32)}`))),
@@ -313,6 +316,50 @@ describe('given the relay-usdc batch and the order the MCP sends with it', () =>
     const batch = usdcBatch(order, { rehash: true });
     expect(batch?.transfer?.details[1]).toEqual({ label: 'Refund to', value: OTHER_CHECKSUM, copy: OTHER_CHECKSUM });
     expect(batch?.notices).toEqual([notThisAccount('The refund address')]);
+  });
+});
+
+describe('given a live Relay quote that pays another address on Arbitrum', () => {
+  const RECIPIENT = '0x93AdDED9e7F06380A007D91830C59a45309c7806';
+  const DEPOSITOR = getAddress(RELAY_OTHER_RECIPIENT_DEPOSITOR);
+  const read = (order: unknown) =>
+    readBridgeBatch(
+      contracts,
+      [RELAY_OTHER_RECIPIENT_APPROVE, RELAY_OTHER_RECIPIENT_DEPOSIT],
+      DEPOSITOR,
+      capability(order)
+    );
+
+  it('when the order refunds each chain to its own side, then the transfer shows destination, recipient, minimum and both refunds', () => {
+    const batch = read(RELAY_OTHER_RECIPIENT_ORDER);
+    expect(batch?.transfer).toMatchObject({
+      title: 'Bridge to Arbitrum',
+      destination: { name: 'Arbitrum', nativeSymbol: 'ETH' },
+      receive: { kind: 'minimum', amount: { chainId: 42161, amount: 1_910_824n, token: { symbol: 'USDC' } } },
+      otherRecipient: RECIPIENT,
+    });
+    expect(batch?.transfer?.details.slice(0, 3)).toEqual([
+      { label: 'Recipient', value: RECIPIENT, copy: RECIPIENT },
+      { label: 'Refund on Base', value: 'This account', copy: DEPOSITOR },
+      { label: 'Refund on Arbitrum', value: RECIPIENT, copy: RECIPIENT },
+    ]);
+    expect(batch?.notices).toEqual([`The recipient is not this account: ${RECIPIENT}.`]);
+  });
+
+  it('when a refund goes to a third address, then that refund prints in full with the refund warning', () => {
+    const order = structuredClone(RELAY_OTHER_RECIPIENT_ORDER);
+    order.inputs[0].refunds[1].recipient = OTHER;
+    const deposit = withId(RELAY_OTHER_RECIPIENT_DEPOSIT, idOf(order as unknown as Order));
+    const batch = readBridgeBatch(contracts, [RELAY_OTHER_RECIPIENT_APPROVE, deposit], DEPOSITOR, capability(order));
+    expect(batch?.transfer?.details[2]).toEqual({
+      label: 'Refund on Arbitrum',
+      value: OTHER_CHECKSUM,
+      copy: OTHER_CHECKSUM,
+    });
+    expect(batch?.notices).toEqual([
+      `The recipient is not this account: ${RECIPIENT}.`,
+      notThisAccount('The refund address'),
+    ]);
   });
 });
 

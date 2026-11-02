@@ -9,6 +9,10 @@ import { identityKey } from '../../utils';
 import {
   ACROSS_CALLS,
   PROD_RELAY_DEPOSIT,
+  RELAY_OTHER_RECIPIENT_APPROVE,
+  RELAY_OTHER_RECIPIENT_DEPOSIT,
+  RELAY_OTHER_RECIPIENT_DEPOSITOR,
+  RELAY_OTHER_RECIPIENT_ORDER,
   RELAY_USDC_APPROVE,
   RELAY_USDC_DEPOSIT,
   RELAY_USDC_ORDER,
@@ -325,6 +329,19 @@ describe('TransactionDialog with a bridge deposit', () => {
     expect(column(root, 'You get via Relay')).toContain('≥ 9.7764');
     expect(column(root, 'You get via Relay')).toContain('on Arbitrum');
     expect(yellow(root)).toEqual([]);
+    expect(red(root)).toEqual([]);
+  });
+
+  it('shows a Relay order to another address with its chain, recipient and minimum', () => {
+    const recipient = '0x93AdDED9e7F06380A007D91830C59a45309c7806';
+    const root = render([RELAY_OTHER_RECIPIENT_APPROVE, RELAY_OTHER_RECIPIENT_DEPOSIT], {
+      walletAddress: RELAY_OTHER_RECIPIENT_DEPOSITOR,
+      capabilities: { jawRelayOrder: { optional: true, orderData: RELAY_OTHER_RECIPIENT_ORDER } },
+    });
+    expect(title(root)).toBe('Bridge to Arbitrum');
+    expect(column(root, 'They get via Relay')).toContain('≥ 1.9108');
+    expect(column(root, 'They get via Relay')).toContain('on Arbitrum');
+    expect(yellow(root)).toEqual([`The recipient is not this account: ${recipient}.`]);
     expect(red(root)).toEqual([]);
   });
 

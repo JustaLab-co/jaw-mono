@@ -116,8 +116,9 @@ export type RelayOrder = {
   destinationChainId: number;
   recipient: Address;
   minimumReceived: TokenAmount;
-  refundTo: Address;
+  refunds: Refund[];
 };
+export type Refund = { chainId: number; to: Address };
 /** `token` is the one whose symbol and decimals would let the terms show. */
 export type OrderUnshown = { kind: 'unshown'; reason: string; outsideTable?: true; token?: TokenRef };
 
@@ -194,7 +195,6 @@ function termsOf(contracts: BridgeContracts, order: Order): RelayOrder | OrderUn
   if (output.payments.length !== 1) return includes('more than one payment');
   const [{ recipient, currency: paid, minimumAmount }] = output.payments;
   const currency = paid.toLowerCase() as Hex;
-  const refundTo = order.inputs[0].refunds.map((refund) => refund.recipient.toLowerCase() as Hex);
   const destination = contracts.relayByProtocolChain(output.chainId)?.chainId;
   if (destination === undefined || !isAddress(recipient)) return undefined;
   if (!isAddress(currency)) return includes('an unrecognized token', true);
@@ -202,14 +202,26 @@ function termsOf(contracts: BridgeContracts, order: Order): RelayOrder | OrderUn
   if (currency !== zeroAddress && !token.known && !token.unverified) {
     return includes('an unrecognized token', true, { chainId: destination, address: currency });
   }
-  if (new Set(refundTo).size !== 1 || !isAddress(refundTo[0])) return undefined;
+  const refunds = refundsOf(contracts, order);
+  if (!refunds) return undefined;
   return {
     kind: 'order',
     destinationChainId: destination,
     recipient,
     minimumReceived: tokenAmount(contracts, destination, currency, minimumAmount),
-    refundTo: refundTo[0],
+    refunds,
   };
+}
+
+function refundsOf(contracts: BridgeContracts, order: Order): Refund[] | undefined {
+  const refunds: Refund[] = [];
+  for (const refund of order.inputs[0].refunds) {
+    const chainId = contracts.relayByProtocolChain(refund.chainId)?.chainId;
+    const to = refund.recipient.toLowerCase() as Hex;
+    if (chainId === undefined || !isAddress(to)) return undefined;
+    refunds.push({ chainId, to });
+  }
+  return refunds.length > 0 ? refunds : undefined;
 }
 
 function tooLarge(data: unknown): boolean {
