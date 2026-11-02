@@ -16,7 +16,10 @@ function formatParamValue(value: unknown): string {
  */
 export function decodeWithAbi(abi: Abi, data: Hex): DecodedCalldata | null {
   const selector = data.slice(0, 10).toLowerCase();
-  const item = abi.find((entry) => entry.type === 'function' && toFunctionSelector(entry) === selector);
+  // whatsabi leaves selectors it cannot resolve without a name or inputs, which cannot be hashed.
+  const item = abi.find(
+    (entry) => entry.type === 'function' && entry.name && entry.inputs && toFunctionSelector(entry) === selector
+  );
   if (item?.type !== 'function') return null;
 
   try {

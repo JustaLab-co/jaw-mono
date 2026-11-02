@@ -141,7 +141,10 @@ describe('allowance flag on a collapsed call', () => {
   });
 });
 
-describe('unlimited approval with a calldata suffix', () => {
+describe.each([
+  ['a calldata suffix', '8021802180218021', false],
+  ['an unresolved selector ahead of it in the ABI', '', true],
+])('unlimited approval with %s', (_, suffix, unresolvedFirst) => {
   it('still shows the decoded call and the Unlimited flag on the signing screen', async () => {
     const { encodeFunctionData, maxUint256, parseAbi } = await import('viem');
     const { decodeWithAbi } = await import('../../utils/decodeWithAbi');
@@ -152,8 +155,9 @@ describe('unlimited approval with a calldata suffix', () => {
       functionName: 'approve',
       args: ['0x1111111111111111111111111111111111111111', maxUint256],
     });
-    const data = `${approve}8021802180218021` as `0x${string}`;
-    const decoded = decodeWithAbi(abi, data);
+    const data = `${approve}${suffix}` as `0x${string}`;
+    const unresolved = { type: 'function', selector: '0x12345678', stateMutability: 'view' };
+    const decoded = decodeWithAbi((unresolvedFirst ? [unresolved, ...abi] : abi) as typeof abi, data);
     lookup = { clearSigned: null, isLoading: false, decoded };
     const flag = allowanceFlag({ to: TOKEN, data });
 

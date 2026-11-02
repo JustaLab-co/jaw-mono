@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { encodeFunctionData, parseAbi, toFunctionSelector, type Hex } from 'viem';
+import { encodeFunctionData, parseAbi, toFunctionSelector, type Abi, type Hex } from 'viem';
 import { decodeWithAbi } from './decodeWithAbi';
 
 const abi4 = parseAbi(['function depositErc20(address depositor, address token, uint256 amount, bytes32 id)']);
@@ -114,5 +114,14 @@ describe('decodeWithAbi', () => {
     const noArgs = parseAbi(['function pause()']);
     const calldata = encodeFunctionData({ abi: noArgs, functionName: 'pause' });
     expect(decodeWithAbi(noArgs, calldata)).toMatchObject({ signature: 'pause()', params: [] });
+  });
+
+  it.each([
+    ['no name or inputs', { type: 'function', selector: '0x12345678', stateMutability: 'view' }],
+    ['a name and no inputs', { type: 'function', name: 'mystery', selector: '0x12345678', stateMutability: 'view' }],
+  ])('skips an unresolved whatsabi entry with %s, before or after the called one', (_, unresolved) => {
+    const entry = unresolved as unknown as Abi[number];
+    expect(decodeWithAbi([entry, ...abi4], data)?.signature).toBe('depositErc20(address, address, uint256, bytes32)');
+    expect(decodeWithAbi([...abi4, entry], data)?.signature).toBe('depositErc20(address, address, uint256, bytes32)');
   });
 });
