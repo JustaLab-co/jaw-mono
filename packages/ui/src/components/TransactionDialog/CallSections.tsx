@@ -76,9 +76,11 @@ export function SingleCallData({
           </span>
           <span className="flex min-w-0 flex-col items-start">
             <Eyebrow>Calldata</Eyebrow>
-            <span className="text-foreground text-value mt-1 truncate">{callLabel(decode, 'Contract call')}</span>
+            <span className="mt-1 flex min-w-0 items-center gap-1.5">
+              <span className="text-foreground text-value truncate">{callLabel(decode, 'Contract call')}</span>
+              <UnreadableMark show={!!unreadable} />
+            </span>
           </span>
-          <UnreadableMark show={!!unreadable} />
         </span>
         <HeaderFlag flag={flag} />
       </AccordionTrigger>
@@ -240,7 +242,7 @@ export function BridgeAlerts({ messages }: { messages: readonly string[] }) {
             aria-label={messages.join(' ')}
             className="text-destructive -m-1 flex-none cursor-pointer border-0 bg-transparent p-1"
           >
-            <TriangleAlert className="size-4" strokeWidth={2} />
+            <TriangleAlert className="size-5 -translate-y-px" strokeWidth={2} />
           </button>
         </PopoverTrigger>
         <PopoverContent side="bottom" align="start" className="text-body-sm w-64 p-3">
