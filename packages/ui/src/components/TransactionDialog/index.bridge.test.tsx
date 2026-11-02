@@ -472,7 +472,7 @@ describe('TransactionDialog notices around a bridge deposit', () => {
   it('shows an unpaired approve notice in view', () => {
     const root = render([ACROSS_CALLS.prod, approve(SPOKE_POOL)]);
     expect(yellow(root)).toEqual([
-      'This batch has an approval that the deposit does not use. Check its token, amount and spender.',
+      'This batch has an approval that no deposit uses. Check its token, amount and spender.',
     ]);
   });
 

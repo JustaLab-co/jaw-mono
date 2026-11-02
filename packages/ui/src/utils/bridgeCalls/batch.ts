@@ -18,7 +18,7 @@ import { pinnedToken, unreadRefs, type BridgeCall, type Inert, type TokenRef, ty
 
 const OTHER_CONTRACT = 'This approval is for a different contract than the deposit.';
 const OTHER_TOKEN = 'This approval is for a different token than the deposit.';
-const UNPAIRED = 'This batch has an approval that the deposit does not use. Check its token, amount and spender.';
+const UNPAIRED = 'This batch has an approval that no deposit uses. Check its token, amount and spender.';
 const APPROVE_UNKNOWN = 'This batch approves a token this screen does not know. Check its address before you confirm.';
 
 const CHECK = 'Check it before you confirm.';

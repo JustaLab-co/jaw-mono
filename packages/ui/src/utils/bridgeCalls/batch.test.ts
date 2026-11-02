@@ -38,7 +38,7 @@ const OTHER_TOKEN = 'This approval is for a different token than the deposit.';
 const notThisAccount = (who: string, address: string) => `${who} is not this account: ${address}.`;
 const NOT_SIGNER = notThisAccount('The recipient', OTHER);
 const REFUND_NOT_SIGNER = notThisAccount('The refund address', OTHER);
-const UNPAIRED = 'This batch has an approval that the deposit does not use. Check its token, amount and spender.';
+const UNPAIRED = 'This batch has an approval that no deposit uses. Check its token, amount and spender.';
 const APPROVE_UNKNOWN = 'This batch approves a token this screen does not know. Check its address before you confirm.';
 const RAW = 'Check the raw details before you confirm.';
 const APPROVAL_1 = `This screen cannot read the approval in step 1. ${RAW}`;
@@ -579,6 +579,12 @@ describe('given a bridge deposit and calls outside the bridge', () => {
       SIGNER
     );
     expect(batch?.notices).toEqual([]);
+  });
+
+  it('when the second deposit follows an approve for another token, then the other-token warning shows', () => {
+    const wrongToken = { ...SPOKE_APPROVE, to: BASE_WETH };
+    const batch = readBridgeBatch(contracts, [SPOKE_APPROVE, ACROSS_CALLS.prod, wrongToken, ACROSS_CALLS.prod], SIGNER);
+    expect(batch?.notices).toEqual([OTHER_TOKEN]);
   });
 
   it('when two deposits come with an approve neither uses, then the unpaired warning shows', () => {
