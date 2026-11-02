@@ -217,7 +217,7 @@ function refundsOf(contracts: BridgeContracts, order: Order): Refund[] | undefin
   const refunds: Refund[] = [];
   for (const refund of order.inputs[0].refunds) {
     const chainId = contracts.relayByProtocolChain(refund.chainId)?.chainId;
-    const to = refund.recipient.toLowerCase() as Hex;
+    const to = refund.recipient;
     if (chainId === undefined || !isAddress(to)) return undefined;
     refunds.push({ chainId, to });
   }
