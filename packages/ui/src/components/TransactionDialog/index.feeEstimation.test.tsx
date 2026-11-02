@@ -83,8 +83,8 @@ describe('TransactionDialog fee estimation failure', () => {
 
   it('holds Retry while the fee-token costs are being estimated', () => {
     const failed = [eth(0n), usdc({ gasCostFormatted: 'Estimation failed', estimationFailure: 'reverted' })];
-    expect(render(failed, () => undefined, true)).toMatch(/<button[^>]*disabled[^>]*>Retry<\/button>/);
-    expect(render(failed, () => undefined)).not.toMatch(/<button[^>]*disabled[^>]*>Retry<\/button>/);
+    expect(render(failed, () => undefined, true)).toMatch(/<button[^>]* disabled=""[^>]*>Retrying…<\/button>/);
+    expect(render(failed, () => undefined)).not.toMatch(/<button[^>]* disabled=""[^>]*>Retry<\/button>/);
   });
 
   it('still says insufficient funds when ETH and USDC are both empty', () => {

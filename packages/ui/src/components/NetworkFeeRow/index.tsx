@@ -107,6 +107,7 @@ export function NetworkFeeRow({
     }
 
     if (blockReason === 'estimation-failed') {
+      const retrying = gasFeeLoading || estimatingTokenCosts;
       return (
         <div className="flex flex-col items-start gap-1">
           <InlineWarning
@@ -117,10 +118,10 @@ export function NetworkFeeRow({
             <button
               type="button"
               onClick={onRetryEstimation}
-              disabled={disabled || gasFeeLoading || estimatingTokenCosts}
-              className="text-muted-foreground text-body-xs font-mono underline"
+              disabled={disabled || retrying}
+              className="text-muted-foreground text-body-xs font-mono underline disabled:cursor-not-allowed disabled:opacity-50"
             >
-              Retry
+              {retrying ? 'Retrying…' : 'Retry'}
             </button>
           )}
         </div>

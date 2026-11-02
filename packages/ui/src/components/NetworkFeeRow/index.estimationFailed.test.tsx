@@ -62,7 +62,7 @@ describe('NetworkFeeRow estimation-failed', () => {
   ])('holds Retry while %s', (_label, over) => {
     const onRetryEstimation = vi.fn();
     const el = mount({ onRetryEstimation, ...over });
-    const retry = [...el.querySelectorAll('button')].find((b) => b.textContent === 'Retry')!;
+    const retry = [...el.querySelectorAll('button')].find((b) => b.textContent === 'Retrying…')!;
     expect(retry.disabled).toBe(true);
     act(() => retry.click());
     expect(onRetryEstimation).not.toHaveBeenCalled();
