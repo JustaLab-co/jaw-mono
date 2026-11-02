@@ -19,7 +19,7 @@ export interface AddressIdentity {
   ensName: string | null;
   /** The same name without the suffix. For anything acted on: copying, resolving. */
   ensPlainName: string | null;
-  /** ENS avatar, served through the ENS metadata proxy. */
+  /** ENS avatar, served through the ENS metadata proxy. Only asked for with the `ensAvatar` source. */
   ensAvatar: string | null;
   tokenName: string | null;
   tokenSymbol: string | null;
@@ -37,16 +37,17 @@ export interface AddressIdentity {
 export interface UseAddressIdentityOptions {
   mainnetRpcUrl: string;
   apiKey?: string;
-  /** The sources to ask. Defaults to all three; a screen that shows only names can skip the rest. */
+  /** The sources to ask. Defaults to all of them; a screen that shows only names can skip the rest. */
   include?: readonly IdentitySource[];
 }
 
-const ALL_SOURCES: readonly IdentitySource[] = ['ens', 'token', 'clearSigning'];
+const ALL_SOURCES: readonly IdentitySource[] = ['ens', 'ensAvatar', 'token', 'clearSigning'];
 
 function buildIdentity(input: ReverseInput, include: readonly IdentitySource[]): AddressIdentity {
   const answer = <S extends IdentitySource>(source: S) =>
     include.includes(source) ? peekIdentity(source, input) : { value: null, loading: false };
   const ens = answer('ens');
+  const ensAvatar = answer('ensAvatar');
   const token = answer('token');
   const clearSigning = answer('clearSigning');
 
@@ -55,7 +56,7 @@ function buildIdentity(input: ReverseInput, include: readonly IdentitySource[]):
     chainId: input.chainId,
     ensName: ens.value?.name ?? null,
     ensPlainName: ens.value?.plainName ?? null,
-    ensAvatar: ens.value?.avatar ?? null,
+    ensAvatar: ensAvatar.value?.avatar ?? null,
     tokenName: token.value?.name ?? null,
     tokenSymbol: token.value?.symbol ?? null,
     tokenIcon: token.value?.icon ?? null,
@@ -64,7 +65,12 @@ function buildIdentity(input: ReverseInput, include: readonly IdentitySource[]):
     // contracts, so there is no source to point at yet.
     clearSigningIcon: null,
     label: ens.value?.name ?? clearSigning.value?.name ?? token.value?.symbol ?? formatAddress(input.address),
-    loading: { ens: ens.loading, token: token.loading, clearSigning: clearSigning.loading },
+    loading: {
+      ens: ens.loading,
+      ensAvatar: ensAvatar.loading,
+      token: token.loading,
+      clearSigning: clearSigning.loading,
+    },
   };
 }
 
@@ -74,7 +80,8 @@ function buildIdentity(input: ReverseInput, include: readonly IdentitySource[]):
  *
  * Fields fill in as each source answers, so callers render `label` straight away and
  * it upgrades in place. Every address asked for in the same render, across every
- * component using this hook, goes out in one ENS request; answers are remembered for
+ * component using this hook, goes out in one ENS name request, and those that include
+ * `ensAvatar` in one avatar request that never holds the names back; answers are remembered for
  * the session, and a remembered one is there on the first render.
  */
 export function useAddressIdentities(

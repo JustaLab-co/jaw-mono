@@ -6,7 +6,7 @@ import { Spinner } from '../ui/spinner';
 import { TriangleAlert } from 'lucide-react';
 import { useAddressIdentities } from '../../hooks/useAddressIdentities';
 import { formatAddress, identityKey } from '../../utils';
-import { ENS_ONLY } from '../../utils/addressIdentity';
+import { ENS_WITH_AVATAR } from '../../utils/addressIdentity';
 import { isUnlimitedAmount } from '../../utils/displayFormat';
 import { computeCalldataDigest } from '../../utils/erc8213';
 import { IdentityAvatar } from '../IdentityAvatar';
@@ -135,7 +135,7 @@ export const DecodedCalldataView = ({
   const paramAddresses = (decoded?.params ?? [])
     .filter((p) => p.type === 'address' && p.rawValue && p.rawValue.toLowerCase() !== ZERO_ADDRESS)
     .map((p) => ({ address: p.rawValue as string, chainId }));
-  const identities = useAddressIdentities(paramAddresses, { mainnetRpcUrl, include: ENS_ONLY });
+  const identities = useAddressIdentities(paramAddresses, { mainnetRpcUrl, include: ENS_WITH_AVATAR });
 
   // Clear-signing hit: render the formatted view, with raw whatsabi details collapsed underneath.
   if (clearSigned && clearSigned.rows.length > 0) {

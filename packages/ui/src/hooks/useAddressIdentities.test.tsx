@@ -7,7 +7,7 @@ import { createElement, act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { encodeFunctionResult, erc20Abi, toCoinType, toFunctionSelector, type Hex } from 'viem';
 
-import { clearAddressIdentityCache } from '../utils/addressIdentity';
+import { clearAddressIdentityCache, ENS_ONLY, ENS_WITH_AVATAR } from '../utils/addressIdentity';
 import { tokenIconUrl } from '../utils/tokenIcon';
 import { useAddressIdentities, useAddressIdentity, type UseAddressIdentityOptions } from './useAddressIdentities';
 
@@ -37,6 +37,8 @@ const SELECTOR = {
 interface Network {
   ens?: Record<string, { name: string; avatar?: boolean }>;
   ensDown?: boolean;
+  /** A `records=true` reverse request never answers, as when the records lookup stalls upstream. */
+  recordsHang?: boolean;
   tokens?: Record<
     string,
     { name?: string; nameBehindGateway?: boolean; nameRpcError?: boolean; symbol: string; decimals: number }
@@ -91,6 +93,8 @@ function stubNetwork(network: Network): Calls {
       if (url.pathname.startsWith('/ens/v2/reverse')) {
         calls.ens.push(url);
         if (network.ensDown) return new Response('down', { status: 503 });
+        if (network.recordsHang && url.searchParams.get('records') === 'true')
+          return new Promise<Response>(() => undefined);
         const data = url.searchParams.getAll('address').map((param) => {
           const [address, chain] = param.split('@eip155:');
           const hit = ens.get(address.toLowerCase());
@@ -309,11 +313,60 @@ describe('request cost', () => {
     await render(createElement(Probe, { id: 'a', address: ALICE }), createElement(Probe, { id: 'b', address: BOB }));
     await settle();
 
-    expect(calls.ens).toHaveLength(1);
-    expect(calls.ens[0].searchParams.getAll('address')).toEqual([`${ALICE}@eip155:${CHAIN}`, `${BOB}@eip155:${CHAIN}`]);
-    expect(calls.ens[0].searchParams.get('records')).toBe('true');
+    const names = calls.ens.filter((url) => url.searchParams.get('records') !== 'true');
+    const avatars = calls.ens.filter((url) => url.searchParams.get('records') === 'true');
+    expect(names).toHaveLength(1);
+    expect(names[0].searchParams.getAll('address')).toEqual([`${ALICE}@eip155:${CHAIN}`, `${BOB}@eip155:${CHAIN}`]);
+    expect(avatars).toHaveLength(1);
+    expect(avatars[0].searchParams.getAll('address')).toEqual([`${ALICE}@eip155:${CHAIN}`, `${BOB}@eip155:${CHAIN}`]);
     expect(seen.get('a')?.ensName).toBe('alice.eth');
     expect(seen.get('b')?.ensName).toBe('bob.eth');
+  });
+
+  // The records lookup behind an avatar can take tens of seconds upstream; a name never waits on it.
+  it('shows the ENS name while the avatar is still on the way', async () => {
+    stubNetwork({ ens: { [ALICE]: { name: 'alice.eth', avatar: true } }, recordsHang: true });
+
+    await render(createElement(Probe, { id: 'a', address: ALICE, options: { ...OPTIONS, include: ENS_WITH_AVATAR } }));
+    await settle();
+
+    expect(seen.get('a')).toMatchObject({
+      ensName: 'alice.eth',
+      ensAvatar: null,
+      loading: { ens: false, ensAvatar: true },
+    });
+  });
+
+  it('fills in the avatar once its request answers', async () => {
+    stubNetwork({ ens: { [ALICE]: { name: 'alice.eth', avatar: true } } });
+
+    await render(createElement(Probe, { id: 'a', address: ALICE, options: { ...OPTIONS, include: ENS_WITH_AVATAR } }));
+    await settle();
+
+    expect(seen.get('a')).toMatchObject({
+      ensName: 'alice.eth',
+      ensAvatar: 'https://metadata.ens.domains/mainnet/avatar/alice.eth',
+      loading: { ens: false, ensAvatar: false },
+    });
+  });
+
+  it('asks for avatars only for the addresses that want one', async () => {
+    const calls = stubNetwork({ ens: { [ALICE]: { name: 'alice.eth' }, [BOB]: { name: 'bob.eth', avatar: true } } });
+
+    await render(
+      createElement(Probe, { id: 'a', address: ALICE, options: { ...OPTIONS, include: ENS_ONLY } }),
+      createElement(Probe, { id: 'b', address: BOB, options: { ...OPTIONS, include: ENS_WITH_AVATAR } })
+    );
+    await settle();
+
+    const avatars = calls.ens.filter((url) => url.searchParams.get('records') === 'true');
+    expect(avatars).toHaveLength(1);
+    expect(avatars[0].searchParams.getAll('address')).toEqual([`${BOB}@eip155:${CHAIN}`]);
+    expect(seen.get('a')).toMatchObject({ ensName: 'alice.eth', ensAvatar: null });
+    expect(seen.get('b')).toMatchObject({
+      ensName: 'bob.eth',
+      ensAvatar: 'https://metadata.ens.domains/mainnet/avatar/bob.eth',
+    });
   });
 
   it('downloads the clear-signing index once for every address on the screen', async () => {
@@ -331,8 +384,10 @@ describe('request cost', () => {
     await render(createElement(Probe, { id: 'a', address: TOKEN }), createElement(Probe, { id: 'b', address: TOKEN }));
     await settle();
 
-    expect(calls.ens).toHaveLength(1);
-    expect(calls.ens[0].searchParams.getAll('address')).toHaveLength(1);
+    // One name request and one avatar request, each carrying the address once.
+    expect(calls.ens).toHaveLength(2);
+    expect(calls.ens.map((url) => url.searchParams.get('records') === 'true').sort()).toEqual([false, true]);
+    for (const url of calls.ens) expect(url.searchParams.getAll('address')).toHaveLength(1);
     expect(calls.rpc.filter((c) => c.data?.startsWith(SELECTOR.name))).toHaveLength(1);
   });
 

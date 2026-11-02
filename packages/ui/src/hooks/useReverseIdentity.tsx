@@ -1,4 +1,4 @@
-import { ENS_ONLY } from '../utils/addressIdentity';
+import { ENS_WITH_AVATAR } from '../utils/addressIdentity';
 import { useAddressIdentity } from './useAddressIdentities';
 
 export interface ReverseIdentity {
@@ -29,7 +29,7 @@ export function useReverseIdentity(
   chainId: number | undefined,
   mainnetRpcUrl: string
 ): ReverseIdentity {
-  const identity = useAddressIdentity(address, chainId, { mainnetRpcUrl, include: ENS_ONLY });
+  const identity = useAddressIdentity(address, chainId, { mainnetRpcUrl, include: ENS_WITH_AVATAR });
   return {
     name: identity?.ensName ?? null,
     plainName: identity?.ensPlainName ?? null,

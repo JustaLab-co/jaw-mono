@@ -31,6 +31,12 @@ const display: ClearSigningDisplay = {
 
 let container: HTMLDivElement;
 let root: Root;
+/** Names and avatars go out as separate requests; each kind is batched on its own. */
+const byKind = (requests: URL[]) => ({
+  names: requests.filter((url) => url.searchParams.get('records') !== 'true'),
+  avatars: requests.filter((url) => url.searchParams.get('records') === 'true'),
+});
+
 let ensRequests: URL[];
 
 beforeEach(() => {
@@ -75,7 +81,10 @@ describe('ClearSignedView address rows', () => {
     await settle();
 
     expect(container.textContent).toContain('spender.eth@base');
-    expect(ensRequests).toHaveLength(1);
-    expect(ensRequests[0].searchParams.getAll('address')).toEqual([`${SPENDER}@eip155:${BASE}`]);
+    const { names, avatars } = byKind(ensRequests);
+    expect(names).toHaveLength(1);
+    expect(names[0].searchParams.getAll('address')).toEqual([`${SPENDER}@eip155:${BASE}`]);
+    expect(avatars).toHaveLength(1);
+    expect(avatars[0].searchParams.getAll('address')).toEqual([`${SPENDER}@eip155:${BASE}`]);
   });
 });

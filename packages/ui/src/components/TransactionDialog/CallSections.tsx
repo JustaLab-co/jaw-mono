@@ -21,8 +21,8 @@ export function stepFallbackLabel(index: number, hasData: boolean, value: string
   return !hasData && value ? 'Transfer' : `Call ${index + 1}`;
 }
 
-/** Who a call goes to reads by name only: ENS, else the clear-signing name. Token reads would show nothing here. */
-export const NAME_SOURCES: readonly IdentitySource[] = ['ens', 'clearSigning'];
+/** Who a call goes to reads by name only: ENS (with its avatar), else the clear-signing name. Token reads would show nothing here. */
+export const NAME_SOURCES: readonly IdentitySource[] = ['ens', 'ensAvatar', 'clearSigning'];
 
 interface DecodeContext {
   chainId: number;

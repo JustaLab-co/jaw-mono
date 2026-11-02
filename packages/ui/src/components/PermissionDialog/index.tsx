@@ -13,7 +13,7 @@ import { CopyButton } from '../CopyButton';
 import { useChainIconURI, useFeeTokenPrice } from '../../hooks';
 import { useAddressIdentities } from '../../hooks/useAddressIdentities';
 import { identityKey } from '../../utils/reverseResolve';
-import { CLEAR_SIGNING_ONLY, ENS_ONLY } from '../../utils/addressIdentity';
+import { CLEAR_SIGNING_ONLY, ENS_WITH_AVATAR } from '../../utils/addressIdentity';
 import { getDisplayAddress } from '../../utils';
 import { resolveBlockReason } from '../../utils/transactionFailure';
 import { isBlockingRevocationProblem, REVOCATION_PROBLEM_TEXT } from '../../utils/permissionExecution';
@@ -76,7 +76,7 @@ export const PermissionDialog = ({
         .filter((address): address is string => !!address && !isWildcard(address))
         .map((address) => ({ address, chainId }))
     : [];
-  const identities = useAddressIdentities(identityInputs, { mainnetRpcUrl, include: ENS_ONLY });
+  const identities = useAddressIdentities(identityInputs, { mainnetRpcUrl, include: ENS_WITH_AVATAR });
   const identityOf = (address: string | undefined) =>
     address && chainId ? identities[identityKey(address, chainId)] : undefined;
   const checkerInputs = chainId ? calls.filter(hasChecker).map((call) => ({ address: call.checker, chainId })) : [];

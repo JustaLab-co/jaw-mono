@@ -91,6 +91,12 @@ const props = {
 let container: HTMLDivElement;
 let root: Root;
 
+/** Names and avatars go out as separate requests; each kind is batched on its own. */
+const byKind = (requests: URL[]) => ({
+  names: requests.filter((url) => url.searchParams.get('records') !== 'true'),
+  avatars: requests.filter((url) => url.searchParams.get('records') === 'true'),
+});
+
 let ensRequests: URL[];
 
 beforeEach(() => {
@@ -133,8 +139,12 @@ describe('TransactionDialog files names by address and chain', () => {
     });
     await settle();
 
-    expect(ensRequests).toHaveLength(1);
-    const asked = ensRequests[0].searchParams.getAll('address');
-    expect(asked.filter((a) => a.startsWith(TO))).toEqual([`${TO}@eip155:${MAINNET}`, `${TO}@eip155:${BASE}`]);
+    const { names, avatars } = byKind(ensRequests);
+    expect(names).toHaveLength(1);
+    expect(avatars).toHaveLength(1);
+    for (const request of [names[0], avatars[0]]) {
+      const asked = request.searchParams.getAll('address');
+      expect(asked.filter((a) => a.startsWith(TO))).toEqual([`${TO}@eip155:${MAINNET}`, `${TO}@eip155:${BASE}`]);
+    }
   });
 });
