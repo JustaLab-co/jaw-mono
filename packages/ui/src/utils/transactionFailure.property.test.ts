@@ -55,6 +55,16 @@ const scenarios: Array<[string, Partial<BlockReasonInput>, BlockReason]> = [
     'funds',
   ],
   [
+    'ETH is empty and USDC failed to estimate because the call reverts',
+    {
+      hasSelectablePaymentOption: false,
+      gasEstimationError: 'Failed to estimate gas',
+      feeEstimationFailure: 'reverted',
+      revertCause: 'other',
+    },
+    'will-fail',
+  ],
+  [
     'the call reverts for another reason',
     { gasEstimationError: 'Failed to estimate gas', revertCause: 'other' },
     'will-fail',
@@ -95,9 +105,13 @@ describe('resolveBlockReason properties', () => {
     );
   });
 
-  it('never says estimation-failed on a balance revert', () => {
+  it('never says estimation-failed when the simulation saw the calls revert', () => {
     fc.assert(
-      fc.property(arbInput, (i) => resolveBlockReason({ ...i, revertCause: 'balance' }) !== 'estimation-failed')
+      fc.property(
+        arbInput,
+        fc.constantFrom<RevertCause>('balance', 'other'),
+        (i, revertCause) => resolveBlockReason({ ...i, revertCause }) !== 'estimation-failed'
+      )
     );
   });
 

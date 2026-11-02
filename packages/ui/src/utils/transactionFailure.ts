@@ -72,7 +72,7 @@ export interface BlockReasonInput {
 /**
  * Funding outranks a revert: "add funds" is actionable, and a shortfall usually caused the revert.
  * A funded token that failed to estimate outranks a shortfall that only the fee shows, because
- * that token might pay once the estimation works.
+ * that token might pay once the estimation works, unless the calls themselves revert.
  */
 export function resolveBlockReason({
   hasSelectablePaymentOption,
@@ -89,7 +89,8 @@ export function resolveBlockReason({
 
   // No option can pay, or the ETH leg fell short of the prefund (dust ETH stays selectable).
   const feeShort = !hasSelectablePaymentOption || gasEstimationError === INSUFFICIENT_FUNDS_ERROR;
-  if (feeShort && feeEstimationFailure) return 'estimation-failed';
+  // A call the simulation already saw revert fails the fee estimation the same way, so a retry can't help.
+  if (feeShort && feeEstimationFailure) return revertCause === 'other' ? 'will-fail' : 'estimation-failed';
   return feeShort ? 'funds' : 'will-fail';
 }
 

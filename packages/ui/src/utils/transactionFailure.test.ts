@@ -140,6 +140,19 @@ describe('resolveBlockReason', () => {
     ).toBe('estimation-failed');
   });
 
+  it('reports will-fail when the calls revert for another reason and the fee estimation failed with them', () => {
+    expect(
+      resolveBlockReason(
+        input({
+          hasSelectablePaymentOption: false,
+          gasEstimationError: 'Failed to estimate gas',
+          feeEstimationFailure: 'execution reverted',
+          revertCause: 'other',
+        })
+      )
+    ).toBe('will-fail');
+  });
+
   it('keeps funds when the asset itself is short, whatever the estimation said', () => {
     expect(
       resolveBlockReason(
