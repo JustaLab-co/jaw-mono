@@ -5,7 +5,13 @@ import { caip10, getDefaultDescriptorSource } from './clearSigning/source';
 import type { CalldataIndex } from './clearSigning/types';
 import { getJawPublicClient } from './publicClient';
 import { getChainLabel } from './resolveChainLabel';
-import { identityKey, reverseResolveIdentities, type ReverseInput, type ReverseResolution } from './reverseResolve';
+import {
+  ensMetadataAvatarUrl,
+  identityKey,
+  reverseResolveIdentities,
+  type ReverseInput,
+  type ReverseResolution,
+} from './reverseResolve';
 import { tokenIconUrl } from './tokenIcon';
 
 // ============================================================================
@@ -32,7 +38,11 @@ export interface EnsIdentity {
   name: string;
   /** The same name without the suffix. For anything acted on. */
   plainName: string;
-  avatar: string | null;
+  /**
+   * The name's avatar through the ENS metadata proxy, built from the name alone: whether the
+   * name has one is not asked, so it can 404, and every avatar renderer falls back on error.
+   */
+  avatar: string;
 }
 
 export interface TokenIdentity {
@@ -177,6 +187,10 @@ function remember<T>(key: string, load: () => Promise<Answer<T>>): void {
 // ---- ENS -------------------------------------------------------------------
 // Every address asked for before the current task ends rides one request: a screen's
 // components run their effects in the same commit, so they land in the same batch.
+//
+// The request asks for names only. An avatar URL depends on the name alone, so it is built
+// here instead of read from the name's records, a lookup that can take tens of seconds
+// upstream while the names come back in about a second.
 
 interface EnsBatch {
   inputs: ReverseInput[];
@@ -215,7 +229,7 @@ async function readEns(input: ReverseInput, { mainnetRpcUrl }: IdentityContext):
     value: {
       name: label ? `${identity.name}@${label}` : identity.name,
       plainName: identity.name,
-      avatar: identity.avatar ?? null,
+      avatar: ensMetadataAvatarUrl(identity.name),
     },
     keep: true,
   };

@@ -311,9 +311,31 @@ describe('request cost', () => {
 
     expect(calls.ens).toHaveLength(1);
     expect(calls.ens[0].searchParams.getAll('address')).toEqual([`${ALICE}@eip155:${CHAIN}`, `${BOB}@eip155:${CHAIN}`]);
-    expect(calls.ens[0].searchParams.get('records')).toBe('true');
+    // Names only: the records lookup can take tens of seconds upstream.
+    expect(calls.ens[0].searchParams.get('records')).toBeNull();
     expect(seen.get('a')?.ensName).toBe('alice.eth');
     expect(seen.get('b')?.ensName).toBe('bob.eth');
+  });
+
+  // The proxy URL depends on the name alone. A name without an avatar gets a URL that 404s,
+  // and every avatar renderer falls back on the image error.
+  it('builds the avatar from the name, with or without an avatar record', async () => {
+    stubNetwork({ ens: { [ALICE]: { name: 'alice.eth' }, [BOB]: { name: 'bob.eth', avatar: true } } });
+
+    await render(createElement(Probe, { id: 'a', address: ALICE }), createElement(Probe, { id: 'b', address: BOB }));
+    await settle();
+
+    expect(seen.get('a')?.ensAvatar).toBe('https://metadata.ens.domains/mainnet/avatar/alice.eth');
+    expect(seen.get('b')?.ensAvatar).toBe('https://metadata.ens.domains/mainnet/avatar/bob.eth');
+  });
+
+  it('gives an address with no name no avatar', async () => {
+    stubNetwork({});
+
+    await render(createElement(Probe, { id: 'a', address: ALICE }));
+    await settle();
+
+    expect(seen.get('a')).toMatchObject({ ensName: null, ensAvatar: null });
   });
 
   it('downloads the clear-signing index once for every address on the screen', async () => {
