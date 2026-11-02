@@ -134,6 +134,7 @@ describe('given the relay-usdc batch and the order the MCP sends with it', () =>
   it.each([
     ['listed for Base', edit((o) => (o.solver = '0x56c262027e0de4aea31d2489529cb25d23e58a8b'))],
     ['the shared solver listed for Arbitrum, the destination', edit((o) => (o.solverChainId = 'arbitrum'))],
+    ['on a solver chain that is neither side, listed there too', edit((o) => (o.solverChainId = 'optimism'))],
     [
       'with router extraData in upper case',
       edit((o) => (o.output.extraData = o.output.extraData.toUpperCase().replace('0X', '0x'))),
@@ -240,7 +241,8 @@ describe('given the relay-usdc batch and the order the MCP sends with it', () =>
       UNKNOWN_ROUTE,
       edit((o) => ((o.solverChainId = 'polygon'), (o.solver = POLYGON_SOLVER))),
     ],
-    ['a solver chain that is neither side', UNKNOWN_ROUTE, edit((o) => (o.solverChainId = 'optimism'))],
+    ['a solver chain outside the table', UNKNOWN_ROUTE, edit((o) => (o.solverChainId = 'solana'))],
+    ['a solver chain whose list does not have the solver', UNKNOWN_ROUTE, edit((o) => (o.solverChainId = 'sepolia'))],
     ['output extraData of another address', UNKNOWN_ROUTE, edit((o) => (o.output.extraData = NOT_ROUTER))],
     ['empty output extraData on a mainnet', UNKNOWN_ROUTE, edit((o) => (o.output.extraData = '0x'))],
     ['output extraData one byte longer', UNKNOWN_ROUTE, edit((o) => (o.output.extraData = `${o.output.extraData}00`))],
