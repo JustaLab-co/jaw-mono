@@ -59,6 +59,7 @@ describe('NetworkFeeRow estimation-failed', () => {
   it.each([
     ['the fee-token costs are being estimated', { estimatingTokenCosts: true }],
     ['the fee is being estimated', { gasFeeLoading: true, isPayingWithErc20: true }],
+    ['the fee is being estimated in ETH', { gasFeeLoading: true, isPayingWithErc20: false }],
   ])('holds Retry while %s', (_label, over) => {
     const onRetryEstimation = vi.fn();
     const el = mount({ onRetryEstimation, ...over });
@@ -66,5 +67,6 @@ describe('NetworkFeeRow estimation-failed', () => {
     expect(retry.disabled).toBe(true);
     act(() => retry.click());
     expect(onRetryEstimation).not.toHaveBeenCalled();
+    expect(el.textContent).toContain('Fee estimation failed');
   });
 });

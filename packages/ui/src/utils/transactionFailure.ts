@@ -45,12 +45,19 @@ export function classifyRevert(error: unknown): RevertCause {
   return BALANCE_REVERT_PATTERNS.some((p) => haystack.includes(p)) ? 'balance' : 'other';
 }
 
+/** viem's names for a call revert, from an RPC node or a bundler's estimation. */
+const CALL_REVERT_ERRORS = ['ExecutionRevertedError', 'ContractFunctionRevertedError'];
+
 /**
- * True when the error says the calls reverted. viem and the bundler both name the revert ahead of
- * the contract's reason, so a contract can't word its reason to avoid this.
+ * True when the error says the calls reverted. Read from viem's typed errors along the cause
+ * chain, so a revert in the fee path (paymaster or account validation, the token quote) stays
+ * retryable, and a contract can't word its reason to land on either side.
  */
 export function isRevert(error: unknown): boolean {
-  return messageOf(error).toLowerCase().includes('revert');
+  for (let e = error; e instanceof Error; e = e.cause) {
+    if (CALL_REVERT_ERRORS.includes(e.name)) return true;
+  }
+  return false;
 }
 
 /**
@@ -116,15 +123,19 @@ interface FeeTokenFacts {
  */
 export function resolveFeeBlock({
   feeTokens,
+  callsSimulated = false,
   ...input
 }: Omit<BlockReasonInput, 'hasSelectablePaymentOption' | 'feeEstimationFailure'> & {
   feeTokens?: FeeTokenFacts[];
+  /** The asset simulation answered, so its `revertCause` is the verdict on the calls. */
+  callsSimulated?: boolean;
 }) {
   const hasSelectablePaymentOption = !feeTokens?.length || feeTokens.some((t) => t.isSelectable);
   const failed = feeTokens?.find((t) => t.estimationFailure);
   const feeEstimationFailure = failed?.estimationFailure;
-  // A reverting fee estimation proves the calls revert even where no asset simulation ran.
-  const revertCause = input.revertCause ?? (failed?.estimationReverted ? 'other' : undefined);
+  // Where no asset simulation answered, a reverting fee estimation is the only sign the calls revert.
+  const estimationRevert = !callsSimulated && failed?.estimationReverted ? 'other' : undefined;
+  const revertCause = input.revertCause ?? estimationRevert;
   const blockReason = resolveBlockReason({ ...input, revertCause, hasSelectablePaymentOption, feeEstimationFailure });
   return { blockReason, hasSelectablePaymentOption, feeEstimationFailure };
 }

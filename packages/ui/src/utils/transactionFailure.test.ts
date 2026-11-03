@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { ExecutionRevertedError, RpcRequestError } from 'viem';
+import { getUserOperationError } from 'viem/account-abstraction';
 import {
   INSUFFICIENT_FUNDS_ERROR,
   classifyRevert,
@@ -7,6 +9,13 @@ import {
   resolveFeeBlock,
   type BlockReasonInput,
 } from './transactionFailure';
+
+/** A bundler JSON-RPC error as viem's `prepareUserOperation` throws it. */
+const bundlerError = (code: number, message: string) =>
+  getUserOperationError(new RpcRequestError({ body: {}, error: { code, message }, url: 'https://bundler.test' }), {
+    callData: '0x',
+    sender: '0x71f2F1c2dc94cDaBFE29Cb355119f8683AE0969b',
+  } as Parameters<typeof getUserOperationError>[1]);
 
 describe('classifyRevert', () => {
   it('recognises the real message viem produces for a token shortfall', () => {
@@ -264,13 +273,32 @@ describe('resolveFeeBlock', () => {
     expect(resolveFeeBlock({ ...base, feeTokens }).blockReason).toBe('will-fail');
     expect(resolveFeeBlock({ ...base, feeTokens, revertCause: 'balance' }).blockReason).toBe('funds');
   });
+
+  it('keeps a reverted fee estimation retryable when the simulation saw the calls succeed', () => {
+    const feeTokens = [{ isSelectable: false, estimationFailure: 'reverted', estimationReverted: true }];
+    expect(resolveFeeBlock({ ...base, feeTokens, callsSimulated: true }).blockReason).toBe('estimation-failed');
+    expect(resolveFeeBlock({ ...base, feeTokens, callsSimulated: true, revertCause: 'other' }).blockReason).toBe(
+      'will-fail'
+    );
+  });
 });
 
 describe('isRevert', () => {
-  it('recognises reverts from viem, an RPC node and the bundler', () => {
-    expect(isRevert(new Error('Execution reverted with reason: paused.'))).toBe(true);
-    expect(isRevert({ code: 3, message: 'execution reverted' })).toBe(true);
-    expect(isRevert('UserOperation reverted during simulation with reason: AA23 reverted')).toBe(true);
+  it('recognises a call revert the bundler reports during estimation', () => {
+    expect(isRevert(bundlerError(-32521, 'execution reverted: paused'))).toBe(true);
+  });
+
+  it('recognises a call revert from an RPC node', () => {
+    expect(isRevert(new ExecutionRevertedError({ message: 'execution reverted: paused' }))).toBe(true);
+  });
+
+  // These fail in the fee path, so the calls may be fine and a retry can still succeed.
+  it.each([
+    ['the paymaster validation reverting (AA33)', bundlerError(-32500, 'AA33 reverted 0x')],
+    ['the account validation reverting (AA23)', bundlerError(-32500, 'AA23 reverted (or OOG)')],
+    ['the token quote failing', new Error('pimlico_getTokenQuotes error: execution reverted')],
+  ])('leaves %s retryable', (_label, error) => {
+    expect(isRevert(error)).toBe(false);
   });
 
   it('leaves transport and service errors retryable', () => {

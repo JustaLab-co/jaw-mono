@@ -133,6 +133,9 @@ function unpriced(token: FeeTokenOption): FeeTokenOption {
   };
 }
 
+/** Shown for a call revert in place of its reason, which the reverting contract wrote. */
+const REVERTED_FAILURE = 'Simulating the calls reverted.';
+
 /**
  * Every funded ERC-20 marked as failed to estimate. The reason is recorded unless the error is a
  * balance revert, which is a real shortfall and keeps reading as one, along with whether the calls
@@ -140,8 +143,9 @@ function unpriced(token: FeeTokenOption): FeeTokenOption {
  */
 function markEstimationFailed(tokens: FeeTokenOption[], error: unknown): FeeTokenOption[] {
   const balance = classifyRevert(error) === 'balance';
-  const estimationFailure = balance ? undefined : describeFailure(error);
   const estimationReverted = !balance && isRevert(error);
+  let estimationFailure: string | undefined;
+  if (!balance) estimationFailure = estimationReverted ? REVERTED_FAILURE : describeFailure(error);
   return tokens.map((token) => {
     if (token.isNative) return token;
     if (token.balance === 0n) return unpriced(token);

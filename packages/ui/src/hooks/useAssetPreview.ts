@@ -16,6 +16,8 @@ export interface UseAssetPreviewResult {
   assetsOut: AssetDelta[];
   assetsIn: AssetDelta[];
   error: boolean;
+  /** The simulation answered for the current calls, so `willRevert` is its verdict. */
+  simulated: boolean;
   /** True when the simulation ran and a call in the batch reverted — the batch would fail on-chain. */
   willRevert: boolean;
   /** Set only when `willRevert` — why it reverted, so a balance shortfall can read as "insufficient funds". */
@@ -36,6 +38,7 @@ export function useAssetPreview({
   const [assetsOut, setAssetsOut] = useState<AssetDelta[]>([]);
   const [assetsIn, setAssetsIn] = useState<AssetDelta[]>([]);
   const [error, setError] = useState<boolean>(false);
+  const [simulated, setSimulated] = useState(false);
   const [willRevert, setWillRevert] = useState<boolean>(false);
   const [revertCause, setRevertCause] = useState<RevertCause | undefined>(undefined);
 
@@ -47,6 +50,7 @@ export function useAssetPreview({
       setAssetsOut([]);
       setAssetsIn([]);
       setError(false);
+      setSimulated(false);
       setWillRevert(false);
       setRevertCause(undefined);
       return;
@@ -54,12 +58,14 @@ export function useAssetPreview({
 
     let cancelled = false;
     setError(false);
+    setSimulated(false);
     setWillRevert(false);
     setRevertCause(undefined);
 
     simulateAssetChanges({ chainId, apiKey, account, calls })
       .then(({ deltas, willRevert, revertCause }) => {
         if (cancelled) return;
+        setSimulated(true);
         setWillRevert(willRevert);
         setRevertCause(revertCause);
         setAssetsOut(deltas.filter((d) => d.direction === 'out'));
@@ -79,5 +85,5 @@ export function useAssetPreview({
     };
   }, [enabled, account, chainId, apiKey, callsKey]);
 
-  return { assetsOut, assetsIn, error, willRevert, revertCause };
+  return { assetsOut, assetsIn, error, simulated, willRevert, revertCause };
 }

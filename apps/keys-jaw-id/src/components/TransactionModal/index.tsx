@@ -229,6 +229,7 @@ export const TransactionModal = ({
     assetsOut,
     assetsIn,
     error: assetPreviewError,
+    simulated: assetPreviewSimulated,
     willRevert: assetPreviewWillRevert,
     revertCause: assetPreviewRevertCause,
   } = useAssetPreview({
@@ -504,6 +505,7 @@ export const TransactionModal = ({
       assetsOut={assetsOut}
       assetsIn={assetsIn}
       assetPreviewError={assetPreviewError}
+      assetPreviewSimulated={assetPreviewSimulated}
       assetPreviewWillRevert={assetPreviewWillRevert}
       assetPreviewRevertCause={assetPreviewRevertCause}
       onBehalfOf={onBehalfOf}

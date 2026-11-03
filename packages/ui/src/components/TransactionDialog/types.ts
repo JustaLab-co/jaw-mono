@@ -40,6 +40,8 @@ export interface TransactionDialogProps {
   assetsOut?: AssetDelta[];
   assetsIn?: AssetDelta[];
   assetPreviewError?: boolean;
+  /** The asset simulation answered, so `assetPreviewWillRevert` and its cause are its verdict. */
+  assetPreviewSimulated?: boolean;
   assetPreviewWillRevert?: boolean;
   /** Why the simulation reverted, when known — lets a balance shortfall read as insufficient funds. */
   assetPreviewRevertCause?: RevertCause;

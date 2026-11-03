@@ -86,26 +86,7 @@ export function NetworkFeeRow({
   const showSelector = showFeeTokenSelector && !sponsored && !(blockReason && !hasSelectablePaymentOption);
 
   const feeValue = (() => {
-    if (gasFeeLoading && !isPayingWithErc20) {
-      return <p className="text-muted-foreground text-body-sm font-mono">Estimating...</p>;
-    }
-
-    // Blocked: one short red string in the slot the fee would occupy, detail in the tooltip.
-    if (blockReason === 'funds') {
-      return (
-        <InlineWarning
-          text="Insufficient funds"
-          detail={
-            fundsShortfallDetail ??
-            `This account can't cover the network fee in ${nativeSymbol} or any supported token.`
-          }
-        />
-      );
-    }
-    if (blockReason === 'will-fail') {
-      return <InlineWarning text="Transaction will fail" detail={willFailDetail} />;
-    }
-
+    // A retry keeps the warning on screen and only the button changes.
     if (blockReason === 'estimation-failed') {
       const retrying = gasFeeLoading || estimatingTokenCosts;
       return (
@@ -126,6 +107,26 @@ export function NetworkFeeRow({
           )}
         </div>
       );
+    }
+
+    if (gasFeeLoading && !isPayingWithErc20) {
+      return <p className="text-muted-foreground text-body-sm font-mono">Estimating...</p>;
+    }
+
+    // Blocked: one short red string in the slot the fee would occupy, detail in the tooltip.
+    if (blockReason === 'funds') {
+      return (
+        <InlineWarning
+          text="Insufficient funds"
+          detail={
+            fundsShortfallDetail ??
+            `This account can't cover the network fee in ${nativeSymbol} or any supported token.`
+          }
+        />
+      );
+    }
+    if (blockReason === 'will-fail') {
+      return <InlineWarning text="Transaction will fail" detail={willFailDetail} />;
     }
 
     if (sponsored) {

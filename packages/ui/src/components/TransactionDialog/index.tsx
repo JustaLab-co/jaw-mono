@@ -45,6 +45,7 @@ export const TransactionDialog = ({
   assetsOut,
   assetsIn,
   assetPreviewError,
+  assetPreviewSimulated,
   assetPreviewWillRevert,
   assetPreviewRevertCause,
   onBehalfOf,
@@ -111,6 +112,7 @@ export const TransactionDialog = ({
     sponsored,
     isPayingWithErc20: !!isPayingWithErc20,
     revertCause: assetPreviewRevertCause,
+    callsSimulated: assetPreviewSimulated,
   });
 
   // A permissioned execution is still "permissioned" while the granter is in flight, and after a
