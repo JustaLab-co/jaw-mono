@@ -36,8 +36,13 @@ type ChainBadge = { name: string; icon?: string };
 /** Rows shown before the "+N" overflow toggle kicks in. */
 const COLLAPSED_ROWS = 2;
 
+// A token with no readable symbol is labelled by its short address, as the bridge rows do.
 function symbolFor(delta: AssetDelta, nativeSymbol: string): string {
-  return delta.isNative ? nativeSymbol : (delta.symbol ?? '');
+  return delta.isNative ? nativeSymbol : (delta.symbol ?? formatAddress(delta.address));
+}
+
+function RowNote({ children }: { children: ReactNode }) {
+  return <span className="text-muted-foreground text-body-xs">{children}</span>;
 }
 
 function formatUsd(value: number): string {
@@ -98,14 +103,16 @@ function AssetRow({
   const sign = prefix ?? (out ? '−' : '+');
   const colorClass = out ? 'text-negative' : 'text-positive';
   const symbol = symbolFor(delta, nativeSymbol);
-  const rounded = formatAssetAmount(delta.amountFormatted);
+  const rounded = delta.baseUnits ? delta.amountFormatted : formatAssetAmount(delta.amountFormatted);
   const hasMore = rounded !== delta.amountFormatted;
-  const usd = price && price > 0 ? Number(delta.amountFormatted) * price : 0;
+  // A base units amount is not a token amount, so no price applies to it.
+  const usd = delta.baseUnits ? 0 : price && price > 0 ? Number(delta.amountFormatted) * price : 0;
 
   const amount = (
     <span className={`text-value break-all text-right font-mono ${colorClass}`}>
       {sign}
       <SubText>{rounded}</SubText>
+      {delta.baseUnits && ' base units'}
     </span>
   );
 
@@ -125,7 +132,7 @@ function AssetRow({
           {!delta.isNative && <TokenAddress address={delta.address} />}
         </div>
       </div>
-      <div className="ml-auto flex flex-none flex-col items-end">
+      <div className={`ml-auto flex flex-col items-end ${delta.baseUnits ? 'min-w-0 text-right' : 'flex-none'}`}>
         {hasMore ? (
           <TooltipProvider delayDuration={0}>
             <Tooltip>
@@ -140,6 +147,7 @@ function AssetRow({
           amount
         )}
         {usd > 0 && <span className="text-muted-foreground text-body-xs">{formatUsd(usd)}</span>}
+        {delta.baseUnits && <RowNote>Could not read the decimals.</RowNote>}
       </div>
     </div>
   );
@@ -249,6 +257,23 @@ const sentDeltas = ({ amount, token }: TokenAmount): AssetDelta[] =>
       ]
     : [];
 
+// The simulation reads the token on its own and can miss what the bridge's read got, as with a
+// bytes32 symbol. The bridge's read then names and scales the simulated amount.
+function withBridgeRead(delta: AssetDelta, { token }: TokenAmount): AssetDelta {
+  if (delta.symbol && !delta.baseUnits) return delta;
+  if (!token.known && !token.unverified) return delta;
+  if (delta.address.toLowerCase() !== token.address.toLowerCase()) return delta;
+  const magnitude = delta.diff < 0n ? -delta.diff : delta.diff;
+  return {
+    ...delta,
+    symbol: token.symbol,
+    decimals: token.decimals,
+    amountFormatted: formatUnits(magnitude, token.decimals),
+    unverified: token.known ? undefined : true,
+    baseUnits: undefined,
+  };
+}
+
 // Cut, not rounded: a minimum must never read higher than it is. Four decimals, or four
 // significant digits when the amount is smaller than that.
 function floorAmount(exact: string): string {
@@ -325,6 +350,7 @@ function BridgeColumns({
         {out.length === 0 && (
           <PlainRow chainId={send.chainId} token={send.token} chain={origin}>
             <span className="text-value text-negative break-all font-mono">−{send.amount.toString()} base units</span>
+            <RowNote>Could not read this token.</RowNote>
           </PlainRow>
         )}
       </DeltaColumn>
@@ -345,6 +371,7 @@ function BridgeColumns({
               <span className="text-value text-positive break-all font-mono">
                 ≥ <SubText>{`${receive.amount.amount} base units`}</SubText>
               </span>
+              <RowNote>Could not read this token.</RowNote>
             </PlainRow>
           )}
         </DeltaColumn>
@@ -367,11 +394,14 @@ export const AssetPreview = ({
 
   // The simulation cannot see the other chain, so a bridge view takes its receive side from the
   // decoded deposit alone. Simulated incoming tokens are a different thing and stay out of it.
-  const bridgeOut = bridge && (!error && assetsOut.length > 0 ? assetsOut : sentDeltas(bridge.send));
+  const bridgeOut =
+    bridge &&
+    (!error && assetsOut.length > 0 ? assetsOut.map((d) => withBridgeRead(d, bridge.send)) : sentDeltas(bridge.send));
   const bridgeIn = bridge?.receive ? receivedDeltas(bridge.receive) : [];
   const shown = bridgeOut ? bridgeOut : [...assetsOut, ...assetsIn];
-  // An unverified symbol is the token's own word, so it never keys a price.
-  const trusted = (list: AssetDelta[]) => list.filter((d) => !d.unverified);
+  // An unverified symbol is the token's own word, and a base units row has no price to scale, so
+  // neither keys a price. A token with no symbol has nothing to key on.
+  const trusted = (list: AssetDelta[]) => list.filter((d) => !d.unverified && !d.baseUnits && (d.isNative || d.symbol));
   const symbols = [
     ...trusted(shown).map((d) => symbolFor(d, nativeSymbol)),
     ...trusted(bridgeIn).map((d) => d.symbol ?? ''),
