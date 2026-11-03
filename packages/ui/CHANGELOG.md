@@ -1,3 +1,13 @@
+## 1.11.5 (2026-11-03)
+
+### 🩹 Fixes
+
+- **ui:** show relay orders that refund another recipient ([#623](https://github.com/JustaLab-co/jaw-mono/pull/623))
+
+### ❤️ Thank You
+
+- Mariano Aguero @mariano-aguero
+
 ## 1.11.4 (2026-11-02)
 
 ### 🩹 Fixes
