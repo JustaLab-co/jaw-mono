@@ -1,3 +1,29 @@
+## 1.11.6 (2026-11-03)
+
+### 🩹 Fixes
+
+- **ui:** read a reverting fee estimation as will-fail ([fa2b5331](https://github.com/JustaLab-co/jaw-mono/commit/fa2b5331))
+- **ui:** show retry in flight on the fee row ([4196aa5f](https://github.com/JustaLab-co/jaw-mono/commit/4196aa5f))
+- **ui:** report will-fail when the calls revert for another reason ([dd46637b](https://github.com/JustaLab-co/jaw-mono/commit/dd46637b))
+- **ui:** name bridge rows by the bridge's own token read ([53570cc0](https://github.com/JustaLab-co/jaw-mono/commit/53570cc0))
+- **ui:** hold fee retry while an estimation runs ([36f4331d](https://github.com/JustaLab-co/jaw-mono/commit/36f4331d))
+- **ui:** strip every control and format character from fee failures ([9f496a33](https://github.com/JustaLab-co/jaw-mono/commit/9f496a33))
+- **ui:** let a fee estimation failure outrank dust eth ([d0fa5ee5](https://github.com/JustaLab-co/jaw-mono/commit/d0fa5ee5))
+- **ui:** keep symbolless token rows and shorten base units notes ([a8f84e65](https://github.com/JustaLab-co/jaw-mono/commit/a8f84e65))
+- **ui:** fall back to bytes32 symbol only on decode errors ([97b1e3f6](https://github.com/JustaLab-co/jaw-mono/commit/97b1e3f6))
+- **ui:** replace stale fee failures when a round throws ([2b65e3fe](https://github.com/JustaLab-co/jaw-mono/commit/2b65e3fe))
+- **ui:** treat fee tokens missing from a quote as unproven ([e4c7402d](https://github.com/JustaLab-co/jaw-mono/commit/e4c7402d))
+- **ui:** read every fee rejection message the same way ([ebf55040](https://github.com/JustaLab-co/jaw-mono/commit/ebf55040))
+- **ui:** show unreadable token decimals in base units ([4274495a](https://github.com/JustaLab-co/jaw-mono/commit/4274495a))
+- **ui:** read bytes32 token symbols ([73d564af](https://github.com/JustaLab-co/jaw-mono/commit/73d564af))
+- **ui:** clear stale estimation failure on unquoted fee tokens ([65b0fbfb](https://github.com/JustaLab-co/jaw-mono/commit/65b0fbfb))
+- **ui:** bound and sanitize fee estimation failure text ([dacd63fa](https://github.com/JustaLab-co/jaw-mono/commit/dacd63fa))
+- **ui:** tell estimation failures apart from insufficient funds ([2d7626bf](https://github.com/JustaLab-co/jaw-mono/commit/2d7626bf))
+
+### ❤️ Thank You
+
+- Mariano Aguero @mariano-aguero
+
 ## 1.11.5 (2026-11-03)
 
 ### 🩹 Fixes
