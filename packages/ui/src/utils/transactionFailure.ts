@@ -127,7 +127,10 @@ export function resolveFeeBlock({
   ...input
 }: Omit<BlockReasonInput, 'hasSelectablePaymentOption' | 'feeEstimationFailure'> & {
   feeTokens?: FeeTokenFacts[];
-  /** The asset simulation answered, so its `revertCause` is the verdict on the calls. */
+  /**
+   * The asset simulation answered on the same path the fee estimation runs, so its `revertCause`
+   * is the verdict on the calls.
+   */
   callsSimulated?: boolean;
 }) {
   const hasSelectablePaymentOption = !feeTokens?.length || feeTokens.some((t) => t.isSelectable);

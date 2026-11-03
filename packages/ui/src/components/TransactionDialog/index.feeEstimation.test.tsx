@@ -121,6 +121,22 @@ describe('TransactionDialog fee estimation failure', () => {
     expect(html).not.toContain('Transaction will fail');
   });
 
+  it('says the transaction will fail when a permissioned fee estimation reverted though the simulation passed', () => {
+    // The preview simulates from the granter; the permissions manager can still reject the call.
+    const reverted = usdc({
+      gasCostFormatted: 'Estimation failed',
+      estimationFailure: 'reverted',
+      estimationReverted: true,
+    });
+    const html = render([eth(0n), reverted], () => undefined, false, {
+      assetPreviewSimulated: true,
+      assetPreviewWillRevert: false,
+      onBehalfOf: '0x1111111111111111111111111111111111111111',
+    });
+    expect(html).toContain('Transaction will fail');
+    expect(html).not.toContain('Retry');
+  });
+
   it('says the transaction will fail when the simulation saw the calls revert', () => {
     const reverted = usdc({
       gasCostFormatted: 'Estimation failed',
