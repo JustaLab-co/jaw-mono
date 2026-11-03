@@ -329,6 +329,8 @@ export const PermissionModal = ({
     selectedFeeToken,
     setSelectedFeeToken,
     isPayingWithErc20,
+    refetch: retryEstimation,
+    estimatingTokenCosts,
   } = useGasEstimation({
     account,
     transactionCalls,
@@ -846,6 +848,8 @@ export const PermissionModal = ({
       selectedFeeToken={selectedFeeToken}
       onFeeTokenSelect={setSelectedFeeToken}
       showFeeTokenSelector={!isSponsored && feeTokens.length > 0}
+      onRetryEstimation={retryEstimation}
+      estimatingTokenCosts={estimatingTokenCosts}
       isPayingWithErc20={isPayingWithErc20}
     />
   );
