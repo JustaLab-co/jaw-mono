@@ -6,7 +6,10 @@ export type BridgeProvider = 'across' | 'relay';
 
 export type BridgeCall = { chainId: number; to: string; data?: string; value?: string };
 
-export type Unreadable = { kind: 'unreadable'; provider: BridgeProvider; outsideTable?: true };
+export type Unreadable = { kind: 'unreadable'; what: 'deposit' | 'approval' };
+
+/** A call to a pinned bridge contract that moves nothing: it can only revert, or it deposits zero. */
+export type Inert = { kind: 'inert' };
 
 /**
  * Pinned in the table (`known`), read from the token itself (`unverified`, its own word and not
