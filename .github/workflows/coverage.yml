@@ -50,8 +50,8 @@ jobs:
 
       - run: bun install --frozen-lockfile
 
-      - name: Test the coverage diff script
-        run: node --test tools/coverage-diff/compare.test.js
+      - name: Test the coverage scripts
+        run: node --test tools/coverage-diff/*.test.js
 
       - uses: nrwl/nx-set-shas@v4
 
@@ -135,3 +135,37 @@ jobs:
           fi
           echo "::error::Coverage dropped against main. See the PR comment for the projects."
           exit 1
+
+  # Publishes the line coverage of main as an SVG on the badges branch, which
+  # the README shows. A job of its own, so the write token never runs next to
+  # the code a pull request brings.
+  badge:
+    needs: coverage
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: coverage-baseline
+          path: coverage-baseline
+
+      # The branch holds only the badge, so each run replaces it whole.
+      - name: Push the badge
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node tools/coverage-diff/badge.js coverage-baseline > "$RUNNER_TEMP/coverage.svg"
+          mkdir "$RUNNER_TEMP/badges" && cd "$RUNNER_TEMP/badges"
+          git init -q -b badges
+          mv ../coverage.svg .
+          git add coverage.svg
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit -q -m "chore: update coverage badge for $GITHUB_SHA"
+          git push -q -f "https://x-access-token:$GH_TOKEN@github.com/$GITHUB_REPOSITORY.git" badges
