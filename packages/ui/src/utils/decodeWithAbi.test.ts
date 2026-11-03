@@ -116,6 +116,32 @@ describe('decodeWithAbi', () => {
     expect(decodeWithAbi(noArgs, calldata)).toMatchObject({ signature: 'pause()', params: [] });
   });
 
+  it('decodes a struct argument holding a uint256 instead of dropping it', () => {
+    const router = parseAbi([
+      'struct Params { address tokenIn; address tokenOut; uint24 fee; uint256 amountIn; }',
+      'function exactInputSingle(Params params)',
+    ]);
+    const calldata = encodeFunctionData({
+      abi: router,
+      functionName: 'exactInputSingle',
+      args: [
+        {
+          tokenIn: '0xfAbc9dDe6d43b39E087122A80f05E80615110b65',
+          tokenOut: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+          fee: 3000,
+          amountIn: 2000000n,
+        },
+      ],
+    });
+    const decoded = decodeWithAbi(router, calldata);
+    expect(decoded?.params.map((p) => [p.name, p.value])).toEqual([
+      [
+        'params',
+        '{"tokenIn":"0xfAbc9dDe6d43b39E087122A80f05E80615110b65","tokenOut":"0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913","fee":3000,"amountIn":"2000000"}',
+      ],
+    ]);
+  });
+
   it.each([
     ['no name or inputs', { type: 'function', selector: '0x12345678', stateMutability: 'view' }],
     ['a name and no inputs', { type: 'function', name: 'mystery', selector: '0x12345678', stateMutability: 'view' }],

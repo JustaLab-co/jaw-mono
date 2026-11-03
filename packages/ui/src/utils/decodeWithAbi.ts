@@ -4,7 +4,8 @@ import type { DecodedCalldata } from '../hooks/useDecodedCalldata';
 function formatParamValue(value: unknown): string {
   if (typeof value === 'bigint') return value.toString();
   if (Array.isArray(value)) return `[${value.map(formatParamValue).join(', ')}]`;
-  if (typeof value === 'object' && value !== null) return JSON.stringify(value);
+  if (typeof value === 'object' && value !== null)
+    return JSON.stringify(value, (_, v) => (typeof v === 'bigint' ? v.toString() : v));
   return String(value);
 }
 
