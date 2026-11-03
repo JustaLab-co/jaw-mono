@@ -309,3 +309,69 @@ export const RELAY_NATIVE_ORDER = {
   },
   fees: [],
 };
+
+export const RELAY_OTHER_RECIPIENT_DEPOSITOR = '0xfabc9dde6d43b39e087122a80f05e80615110b65' as const;
+
+export const RELAY_OTHER_RECIPIENT_APPROVE: BridgeCall = {
+  chainId: 8453,
+  to: '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913',
+  data: '0x095ea7b30000000000000000000000004cd00e387622c35bddb9b4c962c136462338bc3100000000000000000000000000000000000000000000000000000000001e8480',
+  value: '0',
+};
+
+export const RELAY_OTHER_RECIPIENT_DEPOSIT: BridgeCall = {
+  chainId: 8453,
+  to: '0x4cd00e387622c35bddb9b4c962c136462338bc31',
+  data: '0xe8017952000000000000000000000000fabc9dde6d43b39e087122a80f05e80615110b65000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda0291300000000000000000000000000000000000000000000000000000000001e848031924e915938c61d076766794e0f45e92189f06325498afbed485b1b89695bb6',
+  value: '0',
+};
+
+export const RELAY_OTHER_RECIPIENT_ORDER = {
+  version: 'v1',
+  solverChainId: 'base',
+  solver: '0xf70da97812cb96acdf810712aa562db8dfa3dbef',
+  salt: '0xce790c92c1f76ce2a9b44ad8f5eb84d3093a1664b9bf2d506f2f9956683acbd9',
+  inputs: [
+    {
+      payment: {
+        chainId: 'base',
+        currency: '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913',
+        amount: '2000000',
+        weight: '1',
+      },
+      refunds: [
+        {
+          chainId: 'base',
+          recipient: '0xfabc9dde6d43b39e087122a80f05e80615110b65',
+          currency: '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913',
+          minimumAmount: '0',
+          deadline: 1794236795,
+          extraData: '0x0000000000000000000000000729e2a4716d9f7dd17858d5d504426d228697f7',
+        },
+        {
+          chainId: 'arbitrum',
+          recipient: '0x93added9e7f06380a007d91830c59a45309c7806',
+          currency: '0xaf88d065e77c8cc2239327c5edb3a432268e5831',
+          minimumAmount: '0',
+          deadline: 1794236795,
+          extraData: '0x0000000000000000000000000729e2a4716d9f7dd17858d5d504426d228697f7',
+        },
+      ],
+    },
+  ],
+  output: {
+    chainId: 'arbitrum',
+    payments: [
+      {
+        recipient: '0x93added9e7f06380a007d91830c59a45309c7806',
+        currency: '0xaf88d065e77c8cc2239327c5edb3a432268e5831',
+        minimumAmount: '1910824',
+        expectedAmount: '1977055',
+      },
+    ],
+    calls: [],
+    deadline: 1794236795,
+    extraData: '0x0000000000000000000000000729e2a4716d9f7dd17858d5d504426d228697f7',
+  },
+  fees: [],
+};
