@@ -753,6 +753,19 @@ describe('useGasEstimation fee-token outcome per ERC-20 result', () => {
     expect(usdcNow().estimationFailure).not.toContain('example.xyz');
   });
 
+  // The row only shows when the asset simulation passed, so the text must not blame the calls.
+  it('records a call revert as a failed bundler estimate', async () => {
+    erc20Mock.mockRejectedValue(bundlerError(-32521, 'execution reverted: Across quote expired'));
+    await mount(
+      makeAccount(async () => {
+        throw new Error("AA21 didn't pay prefund");
+      }),
+      [nativeEth(0n), token({})]
+    );
+
+    expect(usdcNow().estimationFailure).toBe("The bundler's estimate of this transaction reverted.");
+  });
+
   // A USDC-only account whose fee path fails: the calls may be fine, so a retry can help.
   it.each([
     ['the paymaster validation reverts (AA33)', () => bundlerError(-32500, 'AA33 reverted 0x')],

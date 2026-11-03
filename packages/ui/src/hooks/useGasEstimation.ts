@@ -134,7 +134,7 @@ function unpriced(token: FeeTokenOption): FeeTokenOption {
 }
 
 /** Shown for a call revert in place of its reason, which the reverting contract wrote. */
-const REVERTED_FAILURE = 'Simulating the calls reverted.';
+const REVERTED_FAILURE = "The bundler's estimate of this transaction reverted.";
 
 /**
  * Every funded ERC-20 marked as failed to estimate. The reason is recorded unless the error is a
