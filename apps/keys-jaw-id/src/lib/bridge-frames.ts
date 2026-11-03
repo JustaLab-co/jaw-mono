@@ -1,6 +1,10 @@
 /** The relay's own cap on a frame. Nothing a real client sends through it is larger. */
 export const MAX_FRAME_BYTES = 1_048_576;
 
+// A server re-asks within the 30 minute approval window, so the oldest answers
+// can go once a long session of reads would otherwise keep them all.
+export const ANSWERS_KEPT = 500;
+
 export type BridgeInit = {
   chainId: number;
   ens?: string;

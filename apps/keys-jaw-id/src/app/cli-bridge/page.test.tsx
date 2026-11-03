@@ -7,7 +7,13 @@ vi.mock('next/navigation', async () => (await import('./harness-state')).navigat
 vi.mock('@jaw.id/ui', async () => (await import('./harness-state')).uiMock);
 vi.mock('@jaw.id/core', async (original) => (await import('./harness-state')).coreMock(await original<object>()));
 
+vi.mock('../../lib/bridge-frames', async (original) => ({
+  ...(await original<object>()),
+  ANSWERS_KEPT: 5,
+}));
+
 import { createHmac } from 'node:crypto';
+import { ANSWERS_KEPT } from '../../lib/bridge-frames';
 import CLIBridgePage from './page';
 import {
   FakeSocket,
@@ -299,21 +305,22 @@ describe('cli-bridge page answers a repeated request', () => {
     expect(asked).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps the last 500 answers of a session', async () => {
+  it('keeps the last answers of a session, up to the cap', async () => {
     const asked = vi.fn(async () => '0x14a34');
     created.request = asked;
     const ws = await start();
     await init(ws, { appName: 'Claude' });
     const read = (id: string) => ({ type: 'rpc_request', id, method: 'eth_chainId', params: [] });
-    for (let i = 0; i <= 500; i++) await deliver(ws, read(`q${i}`));
-    await vi.waitFor(async () => expect(await answers(ws, 'q500')).toHaveLength(1));
+    const last = ANSWERS_KEPT;
+    for (let i = 0; i <= last; i++) await deliver(ws, read(`q${i}`));
+    await vi.waitFor(async () => expect(await answers(ws, `q${last}`)).toHaveLength(1));
 
     await deliver(ws, read('q1'));
     await vi.waitFor(async () => expect(await answers(ws, 'q1')).toHaveLength(2));
-    expect(asked).toHaveBeenCalledTimes(501);
+    expect(asked).toHaveBeenCalledTimes(last + 1);
     await deliver(ws, read('q0'));
     await vi.waitFor(async () => expect(await answers(ws, 'q0')).toHaveLength(2));
-    expect(asked).toHaveBeenCalledTimes(502);
+    expect(asked).toHaveBeenCalledTimes(last + 2);
   });
 
   it('distinct ids each reach the wallet', async () => {

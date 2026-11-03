@@ -4,7 +4,7 @@ import { useSearchParams } from 'next/navigation';
 import { useEffect, useState, Suspense, useRef, useCallback } from 'react';
 import { JAW, Mode, getSupportedChains } from '@jaw.id/core';
 import { ReactUIHandler } from '@jaw.id/ui';
-import { MAX_FRAME_BYTES, parseInit, parseRequest } from '../../lib/bridge-frames';
+import { ANSWERS_KEPT, MAX_FRAME_BYTES, parseInit, parseRequest } from '../../lib/bridge-frames';
 import { keyProof, readLink, type BridgeLink } from '../../lib/bridge-proof';
 import { resolveBridgeApiKey } from '../../lib/cli-api-key';
 import { DEFAULT_BRIDGE_APP_NAME, resolveBridgeAppName } from '../../lib/bridge-app-name';
@@ -481,10 +481,6 @@ const REPLACED_URL = '/cli-bridge?replaced=1';
 
 // A live server sends init as soon as the key exchange reaches it.
 const SERVER_WAIT_MS = 20_000;
-
-// A server re-asks within the 30 minute approval window, so the oldest answers
-// can go once a long session of reads would otherwise keep them all.
-const ANSWERS_KEPT = 500;
 
 /** JSON with object keys sorted, so a request rebuilt from storage in another key order is still the same request. */
 function canonical(value: unknown): string {
