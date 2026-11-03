@@ -2,8 +2,8 @@
 // Why a transaction can't go through, and which of the two causes to report.
 // ----------------------------------------------------------------------------
 // Two detectors feed one conclusion: the asset simulation's revert reason, and the gas
-// estimator's error. Both are read as strings because that is all viem and the bundler
-// expose without an extra RPC round trip.
+// estimator's error. classifyRevert reads the message string, and isRevert reads viem's typed
+// error names along the cause chain.
 // ============================================================================
 
 /**
@@ -51,7 +51,7 @@ const CALL_REVERT_ERRORS = ['ExecutionRevertedError', 'ContractFunctionRevertedE
 /**
  * True when the error says the calls reverted. Read from viem's typed errors along the cause
  * chain, so a revert in the fee path (paymaster or account validation, the token quote) stays
- * retryable, and a contract can't word its reason to land on either side.
+ * retryable.
  */
 export function isRevert(error: unknown): boolean {
   for (let e = error; e instanceof Error; e = e.cause) {
