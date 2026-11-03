@@ -320,8 +320,12 @@ describe('AssetPreview bridge send side when the simulation could not read the t
     isNative: false,
   };
 
-  it('names a row the simulation left without a symbol by the symbol the bridge read', () => {
-    const out = html({ assetsOut: [simulated], bridge });
+  it.each([
+    ['no symbol', undefined],
+    ['an empty symbol', ''],
+    ['a blank symbol', '   '],
+  ])('names a row the simulation left with %s by the symbol the bridge read', (_, symbol) => {
+    const out = html({ assetsOut: [{ ...simulated, symbol }], bridge });
     expect(out).toContain('MKR');
   });
 
@@ -356,12 +360,16 @@ describe('AssetPreview simulated rows with unusable decimals', () => {
     expect(prices.fetch).not.toHaveBeenCalled();
   });
 
-  it('labels a token with no symbol by its short address and asks for no price', async () => {
+  it.each([
+    ['no symbol', undefined],
+    ['an empty symbol', ''],
+    ['a blank symbol', '   '],
+  ])('labels a token with %s by its short address and asks for no price', async (_, symbol) => {
     prices.fetch.mockResolvedValue(1);
-    await mount({ assetsOut: [{ ...usdcOut, symbol: undefined }] });
+    await mount({ assetsOut: [{ ...usdcOut, symbol }] });
     await settle();
     expect(host.textContent).toContain('You send');
-    expect(host.textContent).toContain('0x036c...cf7e');
+    expect(host.querySelector('.text-symbol')?.textContent).toBe('0x036c...cf7e');
     expect(prices.fetch).not.toHaveBeenCalled();
   });
 

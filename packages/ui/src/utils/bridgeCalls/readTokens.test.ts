@@ -30,11 +30,11 @@ describe('given tokens outside the pinned table', () => {
     expect(asked.filter((q) => q.endsWith(SYMBOL))).toHaveLength(1);
   });
 
-  it('when the string decode fails, then the bytes32 form is asked', async () => {
+  it('when the symbol is a bytes32 word, then symbol() is asked once', async () => {
     const asked: string[] = [];
     const node = nodeFor(answers({ symbol: 'MKR', decimals: 18n, bytes32: true }), asked);
     await readTokens([{ chainId: 4663, address: AAPL }], node);
-    expect(asked.filter((q) => q.endsWith(SYMBOL))).toHaveLength(2);
+    expect(asked.filter((q) => q.endsWith(SYMBOL))).toHaveLength(1);
   });
 
   it('when the symbol is a bytes32 word, then it is decoded without its null bytes', async () => {
