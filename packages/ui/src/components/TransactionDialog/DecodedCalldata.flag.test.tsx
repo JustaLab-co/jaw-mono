@@ -347,3 +347,18 @@ describe('DecodedCalldataView suffix', () => {
     expect(text()).not.toContain('not decoded');
   });
 });
+
+describe('DecodedCalldataView non-canonical encoding', () => {
+  it('keeps the decoded call and the Unlimited flag, and warns about the encoding', () => {
+    const decoded = { ...approveDecode.decoded!, nonCanonical: true };
+    show({ ...approveDecode, decoded }, { label: 'Unlimited', argIndex: 1, amount: maxUint256 });
+    expect(text()).toContain('approve(address, uint256)');
+    expect(text()).toContain('Unlimited');
+    expect(text()).toContain('Not in canonical ABI encoding');
+  });
+
+  it('shows no encoding warning for canonical calldata', () => {
+    show(approveDecode, null);
+    expect(text()).not.toContain('canonical');
+  });
+});

@@ -64,13 +64,27 @@ describe('decodeWithAbi', () => {
     expect(decodeWithAbi(abi3, data)).toBeNull();
   });
 
-  it('drops a decode whose address word has dirty high bytes, which re-encodes differently', () => {
-    const body = data.slice(10);
-    const dirty = `0x${data.slice(2, 10)}ff${body.slice(2)}` as Hex;
-    expect(decodeWithAbi(abi4, dirty)).toBeNull();
+  it('keeps a decode whose address word has dirty high bytes and marks it non-canonical', () => {
+    const dirty = `${data.slice(0, 10)}ff${data.slice(12)}` as Hex;
+    const decoded = decodeWithAbi(abi4, dirty);
+    expect(decoded?.signature).toBe('depositErc20(address, address, uint256, bytes32)');
+    expect(decoded?.params[0].value).toBe('0xfAbc9dDe6d43b39E087122A80f05E80615110b65');
+    expect(decoded?.nonCanonical).toBe(true);
   });
 
-  it('never shows a signature that fails to re-encode to the calldata, over random and truncated bodies', () => {
+  it('reports no tail on a non-canonical decode, since the end of the arguments is unknown', () => {
+    const dirty = `${data.slice(0, 10)}ff${data.slice(12)}8021802180218021` as Hex;
+    const decoded = decodeWithAbi(abi4, dirty);
+    expect(decoded?.nonCanonical).toBe(true);
+    expect(decoded?.trailing).toBeUndefined();
+  });
+
+  it('does not mark canonical calldata as non-canonical', () => {
+    expect(decodeWithAbi(abi4, data)?.nonCanonical).toBeUndefined();
+    expect(decodeWithAbi(abi4, `${data}8021` as Hex)?.nonCanonical).toBeUndefined();
+  });
+
+  it('marks every decode that does not re-encode to the calldata, over random bodies', () => {
     const selector = toFunctionSelector(abi4[0]);
     let seed = 1;
     const next = () => (seed = (seed * 1103515245 + 12345) % 2 ** 31);
@@ -88,7 +102,12 @@ describe('decodeWithAbi', () => {
         functionName: 'depositErc20',
         args: decoded.params.map((p, j) => (j === 2 ? BigInt(p.value) : p.value)) as never,
       });
-      expect(again.toLowerCase()).toBe(input.toLowerCase());
+      if (decoded.nonCanonical) {
+        expect(input.toLowerCase().startsWith(again.toLowerCase())).toBe(false);
+        expect(decoded.trailing).toBeUndefined();
+      } else {
+        expect(`${again}${decoded.trailing?.slice(2) ?? ''}`.toLowerCase()).toBe(input.toLowerCase());
+      }
     }
   });
 

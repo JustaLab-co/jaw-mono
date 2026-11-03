@@ -26,6 +26,8 @@ export interface DecodedCalldata {
   params: DecodedParam[];
   /** Bytes after the last argument (a builder-code or referral suffix), when the call has any. */
   trailing?: Hex;
+  /** The ABI decodes the calldata but does not re-encode to it, so the suffix cannot be told apart. */
+  nonCanonical?: boolean;
 }
 
 /**

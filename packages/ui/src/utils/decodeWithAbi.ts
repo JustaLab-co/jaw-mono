@@ -10,10 +10,11 @@ function formatParamValue(value: unknown): string {
 }
 
 /**
- * Decodes calldata with the ABI entry whose selector it starts with, and shows it only when the
- * entry re-encodes to the calldata, or to its start with a suffix after it. This is a consistency
- * check: the signature fits the bytes and hashes to the selector. It does not prove the signature
- * is the contract's real one, since the ABI comes from an open lookup.
+ * Decodes calldata with the ABI entry whose selector it starts with. When the entry re-encodes to
+ * the start of the calldata, the bytes after it are the suffix. When it does not (dirty address
+ * bits, nonzero padding), the decode is kept and marked non-canonical, since the contract may still
+ * run it. The signature fits the bytes and hashes to the selector, which does not prove it is the
+ * contract's real one: the ABI comes from an open lookup.
  */
 export function decodeWithAbi(abi: Abi, data: Hex): DecodedCalldata | null {
   const selector = data.slice(0, 10).toLowerCase();
@@ -26,9 +27,8 @@ export function decodeWithAbi(abi: Abi, data: Hex): DecodedCalldata | null {
   try {
     const { args } = decodeFunctionData({ abi: [item], data });
     const canonical = encodeFunctionData({ abi: [item], functionName: item.name, args });
-    if (!data.toLowerCase().startsWith(canonical.toLowerCase())) return null;
-
-    const tail = data.slice(canonical.length);
+    const isCanonical = data.toLowerCase().startsWith(canonical.toLowerCase());
+    const tail = isCanonical ? data.slice(canonical.length) : '';
     const { inputs } = item;
     return {
       functionName: item.name,
@@ -40,6 +40,7 @@ export function decodeWithAbi(abi: Abi, data: Hex): DecodedCalldata | null {
         ...(inputs[i].type === 'address' && typeof arg === 'string' ? { rawValue: arg } : {}),
       })),
       ...(tail ? { trailing: `0x${tail}` as Hex } : {}),
+      ...(isCanonical ? {} : { nonCanonical: true }),
     };
   } catch (err) {
     console.debug('[useDecodedCalldata] raw decode failed:', err);
