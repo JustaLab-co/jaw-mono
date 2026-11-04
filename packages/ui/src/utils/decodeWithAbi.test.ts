@@ -79,6 +79,16 @@ describe('decodeWithAbi', () => {
     expect(decoded?.trailing).toBeUndefined();
   });
 
+  it('returns null for calldata with an odd number of hex digits', () => {
+    const erc20 = parseAbi(['function approve(address spender, uint256 amount)']);
+    const calldata = encodeFunctionData({
+      abi: erc20,
+      functionName: 'approve',
+      args: ['0x1111111111111111111111111111111111111111', 5n],
+    });
+    expect(decodeWithAbi(erc20, `${calldata.slice(0, 40)}1${calldata.slice(40)}` as Hex)).toBeNull();
+  });
+
   it('does not mark canonical calldata as non-canonical', () => {
     expect(decodeWithAbi(abi4, data)?.nonCanonical).toBeUndefined();
     expect(decodeWithAbi(abi4, `${data}8021` as Hex)?.nonCanonical).toBeUndefined();

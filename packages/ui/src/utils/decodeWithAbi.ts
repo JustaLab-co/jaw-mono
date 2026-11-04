@@ -17,6 +17,8 @@ function formatParamValue(value: unknown): string {
  * contract's real one: the ABI comes from an open lookup.
  */
 export function decodeWithAbi(abi: Abi, data: Hex): DecodedCalldata | null {
+  // viem pads an odd number of hex digits with a nibble, which shifts every word it decodes.
+  if (data.length % 2 !== 0) return null;
   const selector = data.slice(0, 10).toLowerCase();
   // whatsabi leaves selectors it cannot resolve without a name or inputs, which cannot be hashed.
   const item = abi.find(
