@@ -26,6 +26,8 @@ import { handleGetCallsStatusRequest } from '../rpc/wallet_getCallStatus.js';
 import { handleGetAssetsRequest } from '../rpc/wallet_getAssets.js';
 import {
     handleGetPermissionsRequest,
+    handleGetRecoveryRequest,
+    handleGetRecoveryStatusRequest,
     handleGetCapabilitiesRequest,
     handleGetCallsHistoryRequest,
 } from '../rpc/index.js';
@@ -206,22 +208,35 @@ export class JAWProvider extends ProviderEventEmitter implements ProviderInterfa
                     // addFunds joins this group because the receive screen has
                     // nothing to show without an account, so it resolves one the
                     // same way the signing methods do rather than rendering an
-                    // empty state.
+                    // empty state. The recovery methods join it like the
+                    // permission methods: the throwaway signer resolves the
+                    // account the editor is for, or the guardian approving.
+                    // wallet_startRecovery is the one with no account to
+                    // resolve: the user recovering has none on this device.
                     case 'wallet_sendCalls':
                     case 'wallet_sign':
                     case 'wallet_grantPermissions':
                     case 'wallet_revokePermissions':
+                    case 'wallet_setupRecovery':
+                    case 'wallet_cancelRecovery':
+                    case 'wallet_startRecovery':
+                    case 'wallet_approveRecovery':
                     case 'wallet_addFunds': {
                         const ephemeralSigner = this.initSigner(signerType);
                         // AppSpecific authenticates silently so the signing UI is the
                         // only dialog. CrossPlatform exchanges Diffie-Hellman session keys.
+                        // A recovery start goes straight to the UI handler in AppSpecific,
+                        // with no account to authenticate; CrossPlatform still needs the
+                        // session keys to encrypt it.
                         const handshake =
-                            signerType === 'appSpecific'
-                                ? { method: 'wallet_connect', params: [{ silent: true }] }
-                                : { method: 'handshake' };
+                            signerType === 'crossPlatform'
+                                ? { method: 'handshake' }
+                                : args.method === 'wallet_startRecovery'
+                                  ? null
+                                  : { method: 'wallet_connect', params: [{ silent: true }] };
 
                         try {
-                            await ephemeralSigner.handshake(handshake);
+                            if (handshake) await ephemeralSigner.handshake(handshake);
                             return (await ephemeralSigner.request(args)) as T;
                         } finally {
                             // Also on rejection: the handshake left session keys
@@ -255,6 +270,18 @@ export class JAWProvider extends ProviderEventEmitter implements ProviderInterfa
                     case 'wallet_getPermissions': {
                         // wallet_getPermissions requires an explicit address when not authenticated
                         const result = await handleGetPermissionsRequest(args, this.apiKey);
+
+                        return result as T;
+                    }
+                    case 'wallet_getRecovery': {
+                        // Like wallet_getPermissions: an explicit address is required when not authenticated
+                        const result = await handleGetRecoveryRequest(args, this.apiKey);
+
+                        return result as T;
+                    }
+                    case 'wallet_getRecoveryStatus': {
+                        // The request id names the ceremony, so no address is needed either
+                        const result = await handleGetRecoveryStatusRequest(args, this.apiKey);
 
                         return result as T;
                     }

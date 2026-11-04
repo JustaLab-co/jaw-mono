@@ -5,6 +5,7 @@ export type {
     AuthCheckResult,
     AuthState,
     PasskeyRegistrationRequest,
+    AddAccountPasskeyRequest,
     PasskeyLookupResponse,
     BackendResponse,
     PasskeysByCredIdsResponse,
@@ -12,6 +13,7 @@ export type {
 } from './types.js';
 export {
     registerPasskeyInBackend,
+    addPasskeyToAccountInBackend,
     lookupPasskeyFromBackend,
     PasskeyRegistrationError,
     PasskeyLookupError,
@@ -33,4 +35,5 @@ export {
     wrapNativeCreateFn,
     resolvePasskeyOptions,
     resolveRpId,
+    createPasskeyUtils,
 } from './utils.js';

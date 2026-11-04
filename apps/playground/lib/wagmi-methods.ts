@@ -7,7 +7,12 @@ import { SUPPORTED_CHAINS } from '@jaw.id/core';
 // The example list and its parser live in rpc-methods so both registries offer
 // the same demo — the two registries duplicate their chain OPTIONS because the
 // sentinels differ, but this pair has no such split.
-import { DEPOSIT_CHAINS_EXAMPLE, parseDepositChains } from './rpc-methods';
+import {
+  DEPOSIT_CHAINS_EXAMPLE,
+  RECOVERY_SETUP_PARAMETERS,
+  parseDepositChains,
+  recoverySetupParams,
+} from './rpc-methods';
 
 /**
  * Chains for a parameter that names ONE chain, where omitting it falls back to
@@ -51,6 +56,7 @@ export type MethodCategory =
   | 'wallet'
   | 'capability'
   | 'permission'
+  | 'recovery'
   | 'asset'
   | 'utility';
 
@@ -62,6 +68,7 @@ export const CATEGORIES: MethodCategory[] = [
   'wallet',
   'capability',
   'permission',
+  'recovery',
   'asset',
   'utility',
 ];
@@ -74,6 +81,7 @@ export const CATEGORY_LABELS: Record<MethodCategory, string> = {
   wallet: 'Wallet',
   capability: 'Capability',
   permission: 'Permission',
+  recovery: 'Recovery',
   asset: 'Asset',
   utility: 'Utility',
 };
@@ -86,6 +94,7 @@ export const CATEGORY_COLORS: Record<MethodCategory, string> = {
   wallet: 'bg-pink-100 text-pink-800 dark:bg-pink-900 dark:text-pink-200',
   capability: 'bg-cyan-100 text-cyan-800 dark:bg-cyan-900 dark:text-cyan-200',
   permission: 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200',
+  recovery: 'bg-sky-100 text-sky-800 dark:bg-sky-900 dark:text-sky-200',
   asset: 'bg-teal-100 text-teal-800 dark:bg-teal-900 dark:text-teal-200',
   utility: 'bg-rose-100 text-rose-800 dark:bg-rose-900 dark:text-rose-200',
 };
@@ -118,6 +127,8 @@ export type WagmiHookType =
   | 'useGrantPermissions'
   | 'useRevokePermissions'
   | 'usePermissions'
+  | 'useSetupRecovery'
+  | 'useRecovery'
   | 'useGetAssets'
   | 'useCapabilities'
   | 'useGetCallsHistory'
@@ -1023,6 +1034,57 @@ const { data: permissions, isLoading, refetch } = usePermissions(${
     });
 
 console.log('Permissions:', permissions);`,
+    buildParams: (params) => ({
+      address: params.address || undefined,
+    }),
+  },
+  // ===== Recovery Methods =====
+  {
+    id: 'wallet_setupRecovery',
+    name: 'useSetupRecovery',
+    method: 'wallet_setupRecovery',
+    hookType: 'useSetupRecovery',
+    category: 'recovery',
+    description: 'Ask the wallet to approve a recovery config: the guardians, their waits and the threshold',
+    requiresConnection: true,
+    parameters: RECOVERY_SETUP_PARAMETERS,
+    getCodeSnippet: (params) => `import { useSetupRecovery } from '@jaw.id/wagmi';
+
+const { mutate: setupRecovery } = useSetupRecovery();
+
+setupRecovery(${JSON.stringify(recoverySetupParams(params), null, 2)});`,
+    buildParams: (params) => recoverySetupParams(params),
+  },
+  {
+    id: 'wallet_getRecovery',
+    name: 'useRecovery',
+    method: 'wallet_getRecovery',
+    hookType: 'useRecovery',
+    category: 'recovery',
+    description: 'Recovery config on every supported chain, and the ceremonies not executed anywhere',
+    requiresConnection: false,
+    parameters: [
+      {
+        name: 'address',
+        type: 'address',
+        label: 'ENS or Address',
+        description: 'Account address (optional if connected)',
+        required: false,
+        autoFill: 'address',
+      },
+    ],
+    getCodeSnippet: (params) => `import { useRecovery } from '@jaw.id/wagmi';
+
+// Works without wallet connection when address is provided
+const { data: recovery, isLoading, refetch } = useRecovery(${
+      params.address
+        ? `{
+  address: '${params.address}',
+}`
+        : ''
+    });
+
+console.log('Recovery:', recovery);`,
     buildParams: (params) => ({
       address: params.address || undefined,
     }),

@@ -26,6 +26,7 @@ export type MethodCategory =
   | 'wallet'
   | 'capability'
   | 'permission'
+  | 'recovery'
   | 'asset'
   | 'utility';
 
@@ -49,6 +50,7 @@ export const CATEGORY_COLORS: Record<MethodCategory, string> = {
   wallet: 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200',
   capability: 'bg-cyan-100 text-cyan-800 dark:bg-cyan-900 dark:text-cyan-200',
   permission: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200',
+  recovery: 'bg-teal-100 text-teal-800 dark:bg-teal-900 dark:text-teal-200',
   asset: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200',
   utility: 'bg-rose-100 text-rose-800 dark:bg-rose-900 dark:text-rose-200',
 };
@@ -61,6 +63,7 @@ export const CATEGORY_LABELS: Record<MethodCategory, string> = {
   wallet: 'Wallet',
   capability: 'Capability',
   permission: 'Permission',
+  recovery: 'Recovery',
   asset: 'Asset',
   utility: 'Utility',
 };
@@ -142,6 +145,73 @@ export const ASSET_TYPE_FILTER_OPTIONS = [
   { label: 'Native', value: 'native' },
   { label: 'ERC-20', value: 'erc20' },
 ];
+
+// ===== Recovery setup presets =====
+// The recovery demo's guardian EOAs (keys in jaw-mono/.claude/scratch/headless-recovery-state.json),
+// so the same guardians can approve a real ceremony later.
+const ALICE = '0xc26C6b8C5732DFEe34819b636292Cd12f2529d51';
+const BOB = '0xfD3b04671d74f3FAF68fA3F8cf3e04ace827964e';
+const CAROL = '0xB90456De316ed6F08783A9060CA0c6447dBbA04F';
+const FORTY_EIGHT_HOURS = 172_800;
+
+export const RECOVERY_SETUP_PRESETS: Record<string, Record<string, unknown>> = {
+  two: {
+    recoveries: [
+      { commitment: ALICE, delay: FORTY_EIGHT_HOURS },
+      { commitment: BOB, delay: FORTY_EIGHT_HOURS },
+    ],
+    threshold: 2,
+  },
+  one: {
+    recoveries: [{ commitment: CAROL, delay: FORTY_EIGHT_HOURS }],
+    threshold: 1,
+  },
+};
+
+export const RECOVERY_SETUP_PARAMETERS: ParameterDefinition[] = [
+  {
+    name: 'config',
+    type: 'select',
+    label: 'Config',
+    description:
+      'The end state the app sends; the wallet shows the current guardians and the changes, and the user approves. A guardian left out is removed.',
+    required: true,
+    defaultValue: 'two',
+    options: [
+      { label: 'Alice + Bob, 48h, both approve', value: 'two' },
+      { label: 'Carol alone, 48h', value: 'one' },
+      { label: 'Custom', value: 'custom' },
+    ],
+  },
+  {
+    name: 'recoveries',
+    type: 'json',
+    label: 'Guardians (JSON)',
+    description:
+      'e.g. [{ "commitment": "0x…address", "delay": 172800 }]: an address or a 64-byte passkey key, delay in seconds',
+    required: false,
+    defaultValue: '',
+    showWhen: { param: 'config', value: 'custom' },
+  },
+  {
+    name: 'threshold',
+    type: 'number',
+    label: 'Threshold',
+    description: 'Approvals a recovery needs, between 1 and the number of guardians',
+    required: false,
+    showWhen: { param: 'config', value: 'custom' },
+  },
+];
+
+/** The wallet_setupRecovery envelope for the chosen config, or the custom fields. */
+export function recoverySetupParams(params: Record<string, string>): Record<string, unknown> {
+  const choice = params.config || 'two';
+  if (choice !== 'custom') return RECOVERY_SETUP_PRESETS[choice] ?? {};
+  const result: Record<string, unknown> = {};
+  if (params.recoveries?.trim()) result.recoveries = JSON.parse(params.recoveries);
+  if (params.threshold?.trim()) result.threshold = Number(params.threshold);
+  return result;
+}
 
 export const RPC_METHODS: RpcMethod[] = [
   // ===== Account Methods =====
@@ -1049,6 +1119,55 @@ console.log('Permissions:', permissions);`,
     ],
   },
 
+  // ===== Recovery Methods =====
+  {
+    id: 'wallet_setupRecovery',
+    name: 'wallet_setupRecovery',
+    method: 'wallet_setupRecovery',
+    category: 'recovery',
+    description: 'Ask the wallet to approve a recovery config: the guardians, their waits and the threshold',
+    requiresConnection: false,
+    parameters: RECOVERY_SETUP_PARAMETERS,
+    getCodeSnippet: (params) => `const result = await jaw.provider.request({
+  method: 'wallet_setupRecovery',
+  params: [${JSON.stringify(recoverySetupParams(params), null, 2).replace(/\n/g, '\n  ')}],
+});
+
+console.log('Recovery setup:', result);`,
+    buildParams: (params) => [recoverySetupParams(params)],
+  },
+  {
+    id: 'wallet_getRecovery',
+    name: 'wallet_getRecovery',
+    method: 'wallet_getRecovery',
+    category: 'recovery',
+    description: 'Recovery config on every supported chain, and the ceremonies not executed anywhere',
+    requiresConnection: false,
+    parameters: [
+      {
+        name: 'address',
+        type: 'address',
+        label: 'ENS or Address',
+        description: 'Account address (optional if connected)',
+        required: false,
+        autoFill: 'address',
+      },
+    ],
+    getCodeSnippet: (params) => `const recovery = await jaw.provider.request({
+  method: 'wallet_getRecovery',
+  params: [{
+    address: '${params.address || 'account'}',
+  }],
+});
+
+console.log('Recovery:', recovery);`,
+    buildParams: (params, context) => [
+      {
+        address: params.address || context.address,
+      },
+    ],
+  },
+
   // ===== Asset Methods =====
   {
     id: 'wallet_getAssets',
@@ -1169,6 +1288,7 @@ export const CATEGORIES: MethodCategory[] = [
   'wallet',
   'capability',
   'permission',
+  'recovery',
   'asset',
   'utility',
 ];

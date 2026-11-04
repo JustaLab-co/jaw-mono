@@ -7,6 +7,7 @@ import type { AccountRecord } from '../account/accountRecord.js';
 
 // Mock the backend utility functions
 vi.spyOn(utils, 'registerPasskeyInBackend').mockResolvedValue(undefined);
+const addPasskeyToAccountInBackend = vi.spyOn(utils, 'addPasskeyToAccountInBackend').mockResolvedValue(undefined);
 vi.spyOn(utils, 'lookupPasskeyFromBackend').mockResolvedValue({
     credentialId: 'MMYq3VdLd4sfsf3hHWKYAjOuc70',
     publicKey: '0x04a1b2c3d4e5f6071829384756',
@@ -540,6 +541,38 @@ describe('PasskeyManager', () => {
             expect(creationDate).toBeDefined();
             expect(creationDate >= beforeTime).toBe(true);
             expect(creationDate <= afterTime).toBe(true);
+        });
+    });
+
+    describe('addPasskeyToAccount', () => {
+        beforeEach(() => addPasskeyToAccountInBackend.mockClear());
+
+        it('links the passkey to the account on the backend, with the name trimmed', async () => {
+            await manager.addPasskeyToAccount(mockAddress, mockCredentialId, mockPublicKey, '  alice  ');
+
+            expect(addPasskeyToAccountInBackend).toHaveBeenCalledWith(
+                mockAddress,
+                { credentialId: mockCredentialId, publicKey: mockPublicKey, displayName: 'alice' },
+                undefined,
+                false,
+                undefined
+            );
+        });
+
+        it('leaves the stored accounts and the auth state as they are', async () => {
+            await manager.addPasskeyToAccount(mockAddress, mockCredentialId, mockPublicKey, mockUsername);
+
+            expect(manager.fetchAccounts()).toEqual([]);
+            expect(manager.checkAuth().isAuthenticated).toBe(false);
+        });
+
+        it.each([
+            ['an empty name', mockCredentialId, '   '],
+            ['a malformed credential id', 'not a credential id!', mockUsername],
+        ])('refuses %s before calling the backend', async (_, credentialId, name) => {
+            await expect(manager.addPasskeyToAccount(mockAddress, credentialId, mockPublicKey, name)).rejects.toThrow();
+
+            expect(addPasskeyToAccountInBackend).not.toHaveBeenCalled();
         });
     });
 

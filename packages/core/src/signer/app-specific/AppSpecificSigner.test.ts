@@ -606,6 +606,130 @@ describe('AppSpecificSigner', () => {
             );
         });
 
+        it('should handle wallet_setupRecovery request', async () => {
+            // Arrange - a proposal, as a dApp naming itself as a guardian sends it
+            const guardian = '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd' as const;
+            const capabilities = { paymasterService: { url: 'https://paymaster.test.com' } };
+            const request: RequestArguments = {
+                method: 'wallet_setupRecovery',
+                params: [{ recoveries: [{ commitment: guardian, delay: 172_800 }], threshold: 1, capabilities }],
+            };
+
+            const outcome = { door: 'account', chains: [{ chainId: 1, status: 'COMPLETED', txHash: '0xtx' }] };
+            (mockUIHandler.request as Mock).mockResolvedValue({
+                id: 'test-response-id',
+                approved: true,
+                data: outcome,
+            });
+
+            // Act
+            const result = await signer.request(request);
+
+            // Assert - the editor gets the validated proposal, the address
+            // commitment in the 32-byte form the provider compares, on the
+            // connected chain, where the account door lands on a first setup
+            expect(result).toEqual(outcome);
+            expect(mockUIHandler.request).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    type: 'wallet_setupRecovery',
+                    data: {
+                        address: '0x1234567890123456789012345678901234567890',
+                        chainId: 1,
+                        recoveries: [{ commitment: `0x${'00'.repeat(12)}${guardian.slice(2)}`, delay: 172_800 }],
+                        threshold: 1,
+                        capabilities,
+                    },
+                })
+            );
+        });
+
+        // Changed on purpose (R16): no params used to open an editor on the
+        // current config. The screen only displays and approves now, so a
+        // request without the end state has nothing to show.
+        it('should refuse wallet_setupRecovery without a config, before any screen opens', async () => {
+            await expect(signer.request({ method: 'wallet_setupRecovery' })).rejects.toMatchObject({ code: -32602 });
+            expect(mockUIHandler.request).not.toHaveBeenCalled();
+        });
+
+        it('should handle wallet_cancelRecovery request', async () => {
+            // Arrange - the veto names the ceremony, nothing else
+            const requestId = '0xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd' as const;
+            const request: RequestArguments = {
+                method: 'wallet_cancelRecovery',
+                params: [{ requestId }],
+            };
+
+            const outcome = {
+                door: 'relay',
+                batchId: '0xabababababababababababababababababababababababababababababababab',
+                chains: [{ chainId: 84532, status: 'PENDING', txHash: null }],
+            };
+            (mockUIHandler.request as Mock).mockResolvedValue({
+                id: 'test-response-id',
+                approved: true,
+                data: outcome,
+            });
+
+            // Act
+            const result = await signer.request(request);
+
+            // Assert
+            expect(result).toEqual(outcome);
+            expect(mockUIHandler.request).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    type: 'wallet_cancelRecovery',
+                    data: {
+                        address: '0x1234567890123456789012345678901234567890',
+                        chainId: 1,
+                        requestId,
+                        capabilities: undefined,
+                    },
+                })
+            );
+        });
+
+        it('should handle wallet_approveRecovery request as the signed-in guardian', async () => {
+            // Arrange - the approval names the ceremony, from the shared link
+            const requestId = '0xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd' as const;
+            const approval = { collected: 1, threshold: 2, queued: false };
+            (mockUIHandler.request as Mock).mockResolvedValue({
+                id: 'test-response-id',
+                approved: true,
+                data: approval,
+            });
+
+            // Act
+            const result = await signer.request({ method: 'wallet_approveRecovery', params: [{ requestId }] });
+
+            // Assert
+            expect(result).toEqual(approval);
+            expect(mockUIHandler.request).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    type: 'wallet_approveRecovery',
+                    data: {
+                        address: '0x1234567890123456789012345678901234567890',
+                        chainId: 1,
+                        requestId,
+                    },
+                })
+            );
+        });
+
+        // The account being recovered is the one the app names, not the one
+        // signed in on this device: a session does not stand in for it.
+        it('should not name the connected account in wallet_startRecovery', async () => {
+            (mockUIHandler.request as Mock).mockResolvedValue({ id: 'r', approved: true, data: {} });
+
+            await signer.request({ method: 'wallet_startRecovery', params: [{}] });
+
+            expect(mockUIHandler.request).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    type: 'wallet_startRecovery',
+                    data: { account: undefined, chainId: 1, approveUrl: 'https://keys.jaw.id/recover/approve' },
+                })
+            );
+        });
+
         describe('wallet_addFunds', () => {
             const ACCOUNT = '0x1234567890123456789012345678901234567890';
 
@@ -997,6 +1121,56 @@ describe('AppSpecificSigner', () => {
             expect(result).toBeNull();
         });
 
+        // The user recovering has no account on this device, so the screen opens
+        // with no session behind it and nothing taken from one.
+        it('should open wallet_startRecovery with no account on the device', async () => {
+            const created = {
+                requestId: `0x${'ab'.repeat(32)}`,
+                account: '0xABcdEFABcdEFabcdEfAbCdefabcdeFABcDEFabCD',
+                subject: `0x${'44'.repeat(64)}`,
+                salt: `0x${'01'.repeat(32)}`,
+                expiry: '2030-01-01T00:00:00.000Z',
+            };
+            (mockUIHandler.request as Mock).mockResolvedValue({ id: 'r', approved: true, data: created });
+
+            const result = await signer.request({
+                method: 'wallet_startRecovery',
+                params: [{ account: '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd' }],
+            });
+
+            expect(result).toEqual(created);
+            expect(mockUIHandler.request).toHaveBeenCalledTimes(1);
+            expect(mockUIHandler.request).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    type: 'wallet_startRecovery',
+                    data: {
+                        account: '0xABcdEFABcdEFabcdEfAbCdefabcdeFABcDEFabCD',
+                        chainId: 1,
+                        approveUrl: 'https://keys.jaw.id/recover/approve',
+                    },
+                })
+            );
+        });
+
+        it("should give wallet_startRecovery the app's recoveryApproveUrl", async () => {
+            vi.spyOn(store.config, 'get').mockReturnValue({
+                metadata: mockMetadata,
+                version: '1.0.0',
+                apiKey: 'test-api-key',
+                preference: { recoveryApproveUrl: 'https://wallet.example/recover' },
+            });
+            (mockUIHandler.request as Mock).mockResolvedValue({ id: 'r', approved: true, data: {} });
+
+            await signer.request({ method: 'wallet_startRecovery' });
+
+            expect(mockUIHandler.request).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    type: 'wallet_startRecovery',
+                    data: { account: undefined, chainId: 1, approveUrl: 'https://wallet.example/recover' },
+                })
+            );
+        });
+
         it('should throw unauthorized error for unknown methods when unauthenticated', async () => {
             // Arrange
             const request: RequestArguments = {
@@ -1330,6 +1504,66 @@ describe('AppSpecificSigner', () => {
             expect(mockUIHandler.request).not.toHaveBeenCalled();
             // And the relay is never consulted for an id that can't be one.
             expect(getPermissionFromRelay).not.toHaveBeenCalled();
+        });
+
+        // The veto is about one ceremony, so a request that names no usable
+        // request id cannot succeed. Refused at the same boundary as a revoke id.
+        it.each([
+            ['missing', undefined],
+            ['an empty string', ''],
+            ['a bare 0x', '0x'],
+            ['too short', '0xdeadbeef'],
+            ['not hex', `0x${'zz'.repeat(32)}`],
+        ])('rejects a recovery request id that is %s with -32602 and opens no dialog', async (_label, requestId) => {
+            await expect(
+                signer.request({ method: 'wallet_cancelRecovery', params: [{ requestId }] } as never)
+            ).rejects.toMatchObject({ code: -32602 });
+
+            // The load-bearing assertion: no dialog for a request that cannot succeed.
+            expect(mockUIHandler.request).not.toHaveBeenCalled();
+        });
+
+        // A guardian's approval is about one ceremony too.
+        it.each([
+            ['missing', undefined],
+            ['an empty string', ''],
+            ['too short', '0xdeadbeef'],
+        ])('rejects an approval whose request id is %s with -32602 and opens no dialog', async (_label, requestId) => {
+            await expect(
+                signer.request({ method: 'wallet_approveRecovery', params: [{ requestId }] } as never)
+            ).rejects.toMatchObject({ code: -32602 });
+
+            expect(mockUIHandler.request).not.toHaveBeenCalled();
+        });
+
+        it.each([
+            ['truncated', '0xabc'],
+            ['not a string', 42],
+        ])('rejects a recovery start whose account is %s with -32602 and opens no dialog', async (_label, account) => {
+            await expect(
+                signer.request({ method: 'wallet_startRecovery', params: [{ account }] } as never)
+            ).rejects.toMatchObject({ code: -32602 });
+
+            expect(mockUIHandler.request).not.toHaveBeenCalled();
+        });
+
+        // A proposal the editor could never show as valid is refused the same way.
+        it.each([
+            ['an empty method list', { recoveries: [] }],
+            [
+                'a commitment that is neither a key nor an address',
+                { recoveries: [{ commitment: '0xdeadbeef', delay: 60 }] },
+            ],
+            [
+                'a threshold above the methods proposed',
+                { recoveries: [{ commitment: '0x1234567890123456789012345678901234567890', delay: 60 }], threshold: 2 },
+            ],
+        ])('rejects a recovery proposal with %s with -32602 and opens no dialog', async (_label, proposal) => {
+            await expect(signer.request({ method: 'wallet_setupRecovery', params: [proposal] })).rejects.toMatchObject({
+                code: -32602,
+            });
+
+            expect(mockUIHandler.request).not.toHaveBeenCalled();
         });
 
         // A checker is part of the permission the user signs. A malformed one used to reach the

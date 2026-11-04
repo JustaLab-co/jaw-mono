@@ -9,6 +9,7 @@ import { SiweModal } from '../SiweModal';
 import { isSiweMessage, getSiweOriginWarningFromMessage } from '@jaw.id/ui';
 import { Eip712Modal } from '../Eip712Modal';
 import { PermissionModal, type PermissionRequestData } from '../PermissionModal';
+import { RecoveryModal } from '../RecoveryModal';
 import { AddFundsModal } from '../AddFundsModal';
 import type { WalletSendCallsReturn, EthSendTransactionReturn } from '../../lib/tx-handler';
 import { SDKRequestType } from '../../lib/sdk-types';
@@ -386,6 +387,46 @@ export function RequestModals({
       />
     );
   }
+
+  if (pendingRequest.type === SDKRequestType.SETUP_RECOVERY) {
+    return (
+      // Keyed by request: see TransactionModal above.
+      <RecoveryModal
+        key={pendingRequest.requestId}
+        params={pendingRequest.params}
+        chain={pendingRequest.chain as chain}
+        apiKey={apiKey || ''}
+        origin={pendingRequest.origin}
+        appName={pendingRequest.metadata?.appName}
+        appLogoUrl={pendingRequest.metadata?.appLogoUrl}
+        // Called on Done, after the outcome per network has been shown, not on signing.
+        onSuccess={async (result) => {
+          setPhase('working');
+          try {
+            await pendingRequest.onApprove(result);
+            debugLog('✅ Recovery set up successfully');
+            setPhase('done');
+            scheduleClose(closeDelayMs);
+          } catch (err) {
+            console.error('❌ Failed to set up recovery:', err);
+            setError(err instanceof Error ? err.message : 'Failed to set up recovery');
+            setPhase('failed');
+          }
+        }}
+        onError={async (error, errorCode) => {
+          try {
+            // Forward error and code directly from modal
+            await pendingRequest.onReject(error.message, errorCode ?? standardErrorCodes.provider.userRejectedRequest);
+            communicator.requestClose();
+          } catch (err) {
+            console.error('❌ Failed to reject:', err);
+            communicator.requestClose();
+          }
+        }}
+      />
+    );
+  }
+
   if (pendingRequest.type === SDKRequestType.ADD_FUNDS) {
     return (
       // Keyed by request — see TransactionModal above.

@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { accountsEndpoint, fetchAccountRecordFromBackend } from './utils.js';
+import {
+    PasskeyRegistrationError,
+    accountsEndpoint,
+    addPasskeyToAccountInBackend,
+    fetchAccountRecordFromBackend,
+} from './utils.js';
 import type { AccountRecord } from '../account/accountRecord.js';
 
 const request = vi.fn();
@@ -72,6 +77,55 @@ describe('fetchAccountRecordFromBackend with a custom passkey server', () => {
         expect(backendInstance).toHaveBeenCalledWith(false, 'https://passkeys.example.com');
         expect(request).toHaveBeenCalledWith(
             expect.objectContaining({ url: '/accounts', method: 'GET', params: { credentialId: 'cred-1' } })
+        );
+    });
+});
+
+describe('addPasskeyToAccountInBackend', () => {
+    const PASSKEY = { credentialId: 'cred-2', publicKey: '0xabc', displayName: 'alice' } as const;
+
+    afterEach(() => {
+        request.mockReset();
+        backendInstance.mockClear();
+    });
+
+    it('posts the passkey to the account it is linked to, with the api key', async () => {
+        request.mockResolvedValue({ data: { statusCode: 201, result: { data: {}, error: null } } });
+
+        await addPasskeyToAccountInBackend(RECORD.address, PASSKEY, 'k1');
+
+        expect(request).toHaveBeenCalledWith(
+            expect.objectContaining({
+                url: `/wallet/v2/accounts/${RECORD.address}/passkeys`,
+                method: 'POST',
+                data: PASSKEY,
+                headers: { 'x-api-key': 'k1' },
+            })
+        );
+    });
+
+    it('posts to the accounts endpoint next to a configured passkeys url', async () => {
+        request.mockResolvedValue({ data: { statusCode: 201, result: { data: {}, error: null } } });
+
+        await addPasskeyToAccountInBackend(
+            RECORD.address,
+            PASSKEY,
+            'k1',
+            false,
+            'https://passkeys.example.com/passkeys'
+        );
+
+        expect(backendInstance).toHaveBeenCalledWith(false, 'https://passkeys.example.com');
+        expect(request).toHaveBeenCalledWith(
+            expect.objectContaining({ url: `/accounts/${RECORD.address}/passkeys`, method: 'POST', data: PASSKEY })
+        );
+    });
+
+    it('fails with a registration error when the backend refuses, as it does for an address it has no account at', async () => {
+        request.mockRejectedValue(new Error('404'));
+
+        await expect(addPasskeyToAccountInBackend(RECORD.address, PASSKEY)).rejects.toBeInstanceOf(
+            PasskeyRegistrationError
         );
     });
 });

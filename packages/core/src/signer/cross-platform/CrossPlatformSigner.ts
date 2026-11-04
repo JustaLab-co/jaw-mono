@@ -112,9 +112,15 @@ export class CrossPlatformSigner extends JAWSigner {
         // Forward the validated envelope, not the dapp's raw one: a chainId sent
         // as a number is hex by now, so the chain resolved below is the one the
         // dapp asked for instead of whichever chain we happen to be on. Keys
-        // then reads the same quantities validation approved.
+        // then reads the same quantities validation approved. A recovery start
+        // also carries the page guardians open, which keys builds the shared
+        // link from.
         if (normalized) {
-            processedRequest = { ...processedRequest, params: [normalized.params] };
+            const params =
+                normalized.method === 'wallet_startRecovery'
+                    ? { ...normalized.params, approveUrl: this.recoveryApproveUrl() }
+                    : normalized.params;
+            processedRequest = { ...processedRequest, params: [params] };
         }
 
         // wallet_revokePermissions needs chainId from relay (not in request params)

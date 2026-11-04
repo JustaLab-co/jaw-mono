@@ -4,6 +4,7 @@ import { PasskeyAccount, AuthCheckResult, AuthState } from './types.js';
 import type { JawProviderPreference } from '../provider/index.js';
 import {
     registerPasskeyInBackend,
+    addPasskeyToAccountInBackend,
     lookupPasskeyFromBackend,
     fetchAccountRecordFromBackend,
     WebAuthnAuthenticationResult,
@@ -297,6 +298,7 @@ export class PasskeyManager {
                 credentialId,
                 publicKey,
                 displayName: name.trim(),
+                ...(account ? { accountVersion: account.version } : {}),
             },
             this.apiKey,
             dev,
@@ -319,6 +321,34 @@ export class PasskeyManager {
 
         // Add to accounts list
         this.addAccountToList(newAccount);
+    }
+
+    /**
+     * Link a passkey to an account that already exists, such as the one a
+     * recovery adds it to as an owner. Registers the link with the backend
+     * only: the stored accounts and the auth state are left as they are.
+     * @param address - The account the passkey is linked to
+     * @param credentialId - The passkey credential ID
+     * @param publicKey - The public key associated with the passkey
+     * @param name - Username or display name
+     * @throws {PasskeyRegistrationError} If the backend refuses the link
+     */
+    async addPasskeyToAccount(
+        address: Address,
+        credentialId: string,
+        publicKey: `0x${string}`,
+        name: string
+    ): Promise<void> {
+        this.validateDisplayName(name);
+        this.validateCredentialId(credentialId);
+
+        await addPasskeyToAccountInBackend(
+            address,
+            { credentialId, publicKey, displayName: name.trim() },
+            this.apiKey,
+            false,
+            this.preference.serverUrl
+        );
     }
 
     /**

@@ -33,6 +33,8 @@ import { handleGetCallsStatusRequest } from '../rpc/wallet_getCallStatus.js';
 import { handleGetAssetsRequest } from '../rpc/wallet_getAssets.js';
 import {
     handleGetPermissionsRequest,
+    handleGetRecoveryRequest,
+    handleGetRecoveryStatusRequest,
     handleGetCapabilitiesRequest,
     handleGetCallsHistoryRequest,
 } from '../rpc/index.js';
@@ -53,6 +55,8 @@ vi.mock('../rpc/wallet_getAssets.js', () => ({ handleGetAssetsRequest: vi.fn() }
 vi.mock('../rpc/index.js', async (importOriginal) => ({
     ...(await importOriginal<typeof import('../rpc/index.js')>()),
     handleGetPermissionsRequest: vi.fn(),
+    handleGetRecoveryRequest: vi.fn(),
+    handleGetRecoveryStatusRequest: vi.fn(),
     handleGetCapabilitiesRequest: vi.fn(),
     handleGetCallsHistoryRequest: vi.fn(),
 }));
@@ -66,13 +70,21 @@ function options(mode: ModeType): ConstructorOptions {
 }
 
 // The provider branches on mode in the no-session paths: which signer type it
-// persists and restores, and how the throwaway signer authenticates.
+// persists and restores, and how the throwaway signer authenticates. A method
+// with no account behind it authenticates nothing: CrossPlatform still
+// exchanges session keys, AppSpecific runs no handshake at all.
 const MODES = [
-    { mode: Mode.CrossPlatform, signerType: 'crossPlatform', ephemeralHandshake: { method: 'handshake' } },
+    {
+        mode: Mode.CrossPlatform,
+        signerType: 'crossPlatform',
+        ephemeralHandshake: { method: 'handshake' },
+        accountlessHandshake: { method: 'handshake' },
+    },
     {
         mode: Mode.AppSpecific,
         signerType: 'appSpecific',
         ephemeralHandshake: { method: 'wallet_connect', params: [{ silent: true }] },
+        accountlessHandshake: null,
     },
 ] as const;
 
@@ -81,7 +93,7 @@ type NoSessionOutcome =
     | { kind: 'rejects'; code: number }
     | { kind: 'answers'; expect: (result: unknown) => void }
     | { kind: 'connects' }
-    | { kind: 'ephemeral' }
+    | { kind: 'ephemeral'; withoutAccount?: true }
     | { kind: 'delegates'; handler: () => Mock };
 
 const WITHOUT_SESSION: Record<string, NoSessionOutcome> = {
@@ -105,6 +117,8 @@ const WITHOUT_SESSION: Record<string, NoSessionOutcome> = {
     wallet_getCallsStatus: { kind: 'delegates', handler: () => handleGetCallsStatusRequest as Mock },
     wallet_getCallsHistory: { kind: 'delegates', handler: () => handleGetCallsHistoryRequest as Mock },
     wallet_getPermissions: { kind: 'delegates', handler: () => handleGetPermissionsRequest as Mock },
+    wallet_getRecovery: { kind: 'delegates', handler: () => handleGetRecoveryRequest as Mock },
+    wallet_getRecoveryStatus: { kind: 'delegates', handler: () => handleGetRecoveryStatusRequest as Mock },
     wallet_getCapabilities: { kind: 'delegates', handler: () => handleGetCapabilitiesRequest as Mock },
 
     // Establish the session.
@@ -116,6 +130,14 @@ const WITHOUT_SESSION: Record<string, NoSessionOutcome> = {
     wallet_sign: { kind: 'ephemeral' },
     wallet_grantPermissions: { kind: 'ephemeral' },
     wallet_revokePermissions: { kind: 'ephemeral' },
+    wallet_setupRecovery: { kind: 'ephemeral' },
+    wallet_cancelRecovery: { kind: 'ephemeral' },
+    // A guardian approves as an account, so it signs in first like the rest.
+    wallet_approveRecovery: { kind: 'ephemeral' },
+    // The user recovering has no account on this device, so nothing signs in
+    // first: the request goes to keys over fresh session keys, or straight to
+    // the UI handler.
+    wallet_startRecovery: { kind: 'ephemeral', withoutAccount: true },
     // Signs nothing, but the receive screen has no address to show without an
     // account, so it resolves one through the same throwaway signer.
     wallet_addFunds: { kind: 'ephemeral' },
@@ -180,7 +202,7 @@ describe('EIP-1193 conformance', () => {
         });
     });
 
-    describe.each(MODES)('in $mode mode', ({ mode, signerType, ephemeralHandshake }) => {
+    describe.each(MODES)('in $mode mode', ({ mode, signerType, ephemeralHandshake, accountlessHandshake }) => {
         describe('without a session', () => {
             it.each(casesOf('rejects'))('%s rejects with its documented code', async (method, outcome) => {
                 await expect(newProvider(mode).request({ method })).rejects.toMatchObject({ code: outcome.code });
@@ -222,12 +244,16 @@ describe('EIP-1193 conformance', () => {
                 await expect(provider.request({ method: 'eth_accounts' })).resolves.toEqual(['0xabc']);
             });
 
-            it.each(casesOf('ephemeral'))('%s signs through a throwaway signer', async (method) => {
+            it.each(casesOf('ephemeral'))('%s signs through a throwaway signer', async (method, outcome) => {
                 (signer.request as Mock).mockResolvedValue('signed');
                 const provider = newProvider(mode);
 
                 await expect(provider.request({ method })).resolves.toBe('signed');
-                expect(signer.handshake).toHaveBeenCalledWith(ephemeralHandshake);
+                // Exactly this handshake and no other: a method with no account
+                // behind it must not run the AppSpecific silent connect, which
+                // would show onboarding to a user who has nothing to sign in to.
+                const handshake = outcome.withoutAccount ? accountlessHandshake : ephemeralHandshake;
+                expect((signer.handshake as Mock).mock.calls).toEqual(handshake ? [[handshake]] : []);
                 expect(signer.cleanup).toHaveBeenCalled();
 
                 // Throwaway means throwaway: signing this way must not leave the

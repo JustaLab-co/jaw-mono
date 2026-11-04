@@ -1888,6 +1888,176 @@ describe('CrossPlatformSigner', () => {
             );
         });
 
+        // Cross-Platform takes the same contract as App-Specific, as permissions
+        // do: the validated end state travels to keys, where the screen shows it
+        // for approval.
+        it('should send keys the validated recovery config on the session chain', async () => {
+            // Arrange - an address commitment: keys must receive it padded to
+            // the 32 bytes the provider compares, as validation produced it. The
+            // envelope names the session chain, because recovery is
+            // account-level and the params carry none to resolve from.
+            const unauthenticatedSigner = new CrossPlatformSigner({
+                metadata: mockMetadata,
+                communicator: mockCommunicator,
+                callback: mockCallback,
+            });
+
+            const mockResponse: RPCResponseMessage = {
+                id: mockMessageId,
+                requestId: mockMessageId,
+                correlationId: mockCorrelationId,
+                sender: 'peer-public-key-hex',
+                content: { encrypted: mockEncryptedData },
+                timestamp: new Date(),
+            };
+
+            mockCommunicator.postRequestAndWaitForResponse.mockResolvedValue(mockResponse);
+            (decryptContent as Mock).mockResolvedValue({
+                result: { value: { door: 'relay', chains: [] } },
+            } as RPCResponse);
+
+            vi.spyOn(store, 'getState').mockReturnValue({
+                account: { accounts: [], chain: undefined, capabilities: undefined },
+                chains: [{ id: 1, rpcUrl: 'https://eth-mainnet.rpc.com' }],
+                config: { metadata: mockMetadata, version: '1.0.0' },
+                keys: {},
+                callStatuses: {},
+            });
+
+            const guardian = '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd';
+            const capabilities = { paymasterService: { url: 'https://pm.example' } };
+            const request: RequestArguments = {
+                method: 'wallet_setupRecovery',
+                params: [{ recoveries: [{ commitment: guardian, delay: 172_800 }], threshold: 1, capabilities }],
+            };
+
+            // Act
+            const result = await unauthenticatedSigner.request(request);
+
+            // Assert
+            expect(result).toEqual({ door: 'relay', chains: [] });
+            expect(encryptContent).toHaveBeenCalledWith(
+                {
+                    action: {
+                        method: 'wallet_setupRecovery',
+                        params: [
+                            {
+                                recoveries: [
+                                    { commitment: `0x${'00'.repeat(12)}${guardian.slice(2)}`, delay: 172_800 },
+                                ],
+                                threshold: 1,
+                                capabilities,
+                            },
+                        ],
+                    },
+                    chain: { id: 1, rpcUrl: 'https://eth-mainnet.rpc.com' },
+                },
+                mockCryptoKey
+            );
+        });
+
+        describe('the recovery ceremony', () => {
+            const CHAIN = { id: 1, rpcUrl: 'https://eth-mainnet.rpc.com' };
+
+            /** A signer with no account, as the provider makes one with no session, answering `value`. */
+            function accountlessSigner(value: unknown): CrossPlatformSigner {
+                vi.spyOn(store, 'getState').mockReturnValue({
+                    account: { accounts: [], chain: undefined, capabilities: undefined },
+                    chains: [CHAIN],
+                    config: { metadata: mockMetadata, version: '1.0.0' },
+                    keys: {},
+                    callStatuses: {},
+                });
+                (decryptContent as Mock).mockResolvedValue({ result: { value } } as RPCResponse);
+                return new CrossPlatformSigner({
+                    metadata: mockMetadata,
+                    communicator: mockCommunicator,
+                    callback: mockCallback,
+                });
+            }
+
+            // keys builds the link the guardians open, so the page travels with
+            // the request: keys' own page unless the app set one.
+            it('sends keys a recovery start with the account checksummed and the default guardian page', async () => {
+                const created = { requestId: `0x${'ab'.repeat(32)}` };
+                const unauthenticatedSigner = accountlessSigner(created);
+
+                const result = await unauthenticatedSigner.request({
+                    method: 'wallet_startRecovery',
+                    params: [{ account: '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd' }],
+                });
+
+                expect(result).toEqual(created);
+                expect(encryptContent).toHaveBeenCalledWith(
+                    {
+                        action: {
+                            method: 'wallet_startRecovery',
+                            params: [
+                                {
+                                    account: '0xABcdEFABcdEFabcdEfAbCdefabcdeFABcDEFabCD',
+                                    approveUrl: 'https://keys.jaw.id/recover/approve',
+                                },
+                            ],
+                        },
+                        chain: CHAIN,
+                    },
+                    mockCryptoKey
+                );
+            });
+
+            it("sends keys the app's recoveryApproveUrl with a recovery start", async () => {
+                vi.spyOn(store.config, 'get').mockReturnValue({
+                    metadata: mockMetadata,
+                    version: '1.0.0',
+                    preference: { recoveryApproveUrl: 'https://wallet.example/recover' },
+                });
+                const unauthenticatedSigner = accountlessSigner({});
+
+                await unauthenticatedSigner.request({ method: 'wallet_startRecovery' });
+
+                expect(encryptContent).toHaveBeenCalledWith(
+                    {
+                        action: {
+                            method: 'wallet_startRecovery',
+                            params: [{ approveUrl: 'https://wallet.example/recover' }],
+                        },
+                        chain: CHAIN,
+                    },
+                    mockCryptoKey
+                );
+            });
+
+            it('sends keys a guardian approval naming the request id alone', async () => {
+                const requestId = `0x${'cd'.repeat(32)}`;
+                const approval = { collected: 1, threshold: 2, queued: false };
+                const unauthenticatedSigner = accountlessSigner(approval);
+
+                const result = await unauthenticatedSigner.request({
+                    method: 'wallet_approveRecovery',
+                    params: [{ requestId, approveUrl: 'https://evil.example' }],
+                });
+
+                expect(result).toEqual(approval);
+                expect(encryptContent).toHaveBeenCalledWith(
+                    { action: { method: 'wallet_approveRecovery', params: [{ requestId }] }, chain: CHAIN },
+                    mockCryptoKey
+                );
+            });
+
+            it('refuses a malformed recovery request before keys is asked', async () => {
+                const unauthenticatedSigner = accountlessSigner({});
+
+                await expect(
+                    unauthenticatedSigner.request({ method: 'wallet_approveRecovery', params: [{ requestId: '0x' }] })
+                ).rejects.toMatchObject({ code: -32602 });
+                await expect(
+                    unauthenticatedSigner.request({ method: 'wallet_startRecovery', params: [{ account: '0xabc' }] })
+                ).rejects.toMatchObject({ code: -32602 });
+
+                expect(mockCommunicator.postRequestAndWaitForResponse).not.toHaveBeenCalled();
+            });
+        });
+
         it('should allow wallet_sign when unauthenticated', async () => {
             // Arrange - Create new signer without handshake
             const unauthenticatedSigner = new CrossPlatformSigner({

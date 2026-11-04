@@ -1,5 +1,6 @@
 import { Address } from '../provider/interface.js';
 import { RequestCapabilities } from '../rpc/permissions.js';
+import type { RecoveryMethodInput } from '../rpc/recovery.js';
 import type { SendCallsVersion } from '../rpc/sendCallsParams.js';
 import type { JawTheme } from './theme.js';
 
@@ -15,6 +16,10 @@ export type UIRequestType =
     | 'eth_sendTransaction'
     | 'wallet_grantPermissions'
     | 'wallet_revokePermissions'
+    | 'wallet_setupRecovery'
+    | 'wallet_cancelRecovery'
+    | 'wallet_startRecovery'
+    | 'wallet_approveRecovery'
     | 'personal_sign'
     | 'eth_signTypedData_v4'
     | 'wallet_sign'
@@ -169,6 +174,81 @@ export interface RevokePermissionUIRequest extends BaseUIRequest {
 }
 
 /**
+ * Recovery setup request (wallet_setupRecovery)
+ *
+ * The wallet shows the account's current config and the changes the dApp asked
+ * for, and the user approves or declines, as for a permission grant. Recovery
+ * is account-level, so `chainId` is the connected chain, resolved from the
+ * session and never from the params: it is where the account door lands when
+ * this is the first setup on it.
+ */
+export interface SetupRecoveryUIRequest extends BaseUIRequest {
+    type: 'wallet_setupRecovery';
+    data: {
+        address: Address;
+        chainId: number;
+        /** Every method the config should hold */
+        recoveries: RecoveryMethodInput[];
+        /** Approvals a recovery needs */
+        threshold: number;
+        /** Optional capabilities including paymaster service for the account-door userOp */
+        capabilities?: RequestCapabilities;
+    };
+}
+
+/**
+ * Recovery veto request (wallet_cancelRecovery)
+ */
+export interface CancelRecoveryUIRequest extends BaseUIRequest {
+    type: 'wallet_cancelRecovery';
+    data: {
+        address: Address;
+        /** The connected chain, where an account that can only use the account door cancels */
+        chainId: number;
+        /** The ceremony's request id, the same on every chain */
+        requestId: `0x${string}`;
+        /** Optional capabilities including paymaster service for the account-door userOp */
+        capabilities?: RequestCapabilities;
+    };
+}
+
+/**
+ * Recovery start request (wallet_startRecovery)
+ *
+ * For a user who lost their passkeys: the wallet creates a new passkey, opens
+ * the request the guardians approve and shows the link to share with them.
+ * There is no session behind it, since the user has no account on this device,
+ * so nothing here comes from one.
+ */
+export interface StartRecoveryUIRequest extends BaseUIRequest {
+    type: 'wallet_startRecovery';
+    data: {
+        /** The account to recover, when the app named it; the screen asks when absent */
+        account?: Address;
+        /** The connected chain, or the app's default one */
+        chainId: number;
+        /** The page guardians open; the request id is appended as a path segment */
+        approveUrl: string;
+    };
+}
+
+/**
+ * Recovery approval request (wallet_approveRecovery)
+ *
+ * A guardian, signed in first when not already, approves one recovery request.
+ */
+export interface ApproveRecoveryUIRequest extends BaseUIRequest {
+    type: 'wallet_approveRecovery';
+    data: {
+        /** The guardian's account */
+        address: Address;
+        chainId: number;
+        /** The ceremony's request id, from the link the recovering user shared */
+        requestId: `0x${string}`;
+    };
+}
+
+/**
  * ERC-7871 PersonalSign request data
  */
 export interface PersonalSignRequestData {
@@ -241,6 +321,10 @@ export type UIRequest =
     | SendTransactionUIRequest
     | PermissionUIRequest
     | RevokePermissionUIRequest
+    | SetupRecoveryUIRequest
+    | CancelRecoveryUIRequest
+    | StartRecoveryUIRequest
+    | ApproveRecoveryUIRequest
     | WalletSignUIRequest
     | AddFundsUIRequest;
 

@@ -15,6 +15,7 @@ const MODAL_REQUESTS = [
   SDKRequestType.SEND_TRANSACTION,
   SDKRequestType.GRANT_PERMISSIONS,
   SDKRequestType.REVOKE_PERMISSIONS,
+  SDKRequestType.SETUP_RECOVERY,
   // Signs nothing, but it puts a screen up and holds it until the user is done,
   // which is the shape this set is about.
   SDKRequestType.ADD_FUNDS,

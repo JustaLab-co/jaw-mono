@@ -1,7 +1,18 @@
-import { type Config, type Connector, getConnectorClient, disconnect as wagmiDisconnect } from '@wagmi/core';
-import type { Address, Hex } from 'viem';
-import { numberToHex } from 'viem';
 import {
+  type Config,
+  type Connector,
+  ConnectorNotConnectedError,
+  getConnectorClient,
+  disconnect as wagmiDisconnect,
+} from '@wagmi/core';
+import type { Address, EIP1193Provider, Hex } from 'viem';
+import { numberToHex } from 'viem';
+import { signTypedData } from 'viem/actions';
+import {
+  approveRecovery as approveRecoveryWithSigner,
+  type Ceremony,
+  type CeremonyApproval,
+  type CreatedCeremony,
   type PermissionsDetail,
   type WalletGrantPermissionsResponse,
   type WalletGetPermissionsResponse,
@@ -13,6 +24,10 @@ import {
   type PersonalSignRequestData,
   type TypedDataRequestData,
   type WalletGetCallsHistoryResponse,
+  type RecoveryMethodInput,
+  type RecoverySetupResult,
+  type RecoveryState,
+  type RequestCapabilities,
 } from '@jaw.id/core';
 import type { AccountWithCapabilities } from '../Connector.js';
 
@@ -267,6 +282,338 @@ export async function revokePermissions<config extends Config>(
   });
 
   return result as revokePermissions.ReturnType;
+}
+
+// ============================================================================
+// setupRecovery
+// ============================================================================
+
+export namespace setupRecovery {
+  export type Parameters<config extends Config = Config> = {
+    address?: Address;
+    connector?: Connector;
+    /** Every recovery method the config should hold; a method left out is removed */
+    recoveries: RecoveryMethodInput[];
+    /** Approvals a recovery needs, between 1 and the number of methods */
+    threshold: number;
+    /** Optional capabilities, such as a paymaster service for the account-door userOp */
+    capabilities?: RequestCapabilities;
+  };
+
+  export type ReturnType = RecoverySetupResult;
+  export type ErrorType = Error;
+}
+
+/**
+ * Sets up or edits recovery for the connected account.
+ * This calls wallet_setupRecovery on the connected wallet, which shows the
+ * account's current config and the changes, as for a permission grant. The
+ * user approves or declines; nothing on the screen is editable, so the app
+ * passes the whole end state (letting its users pick guardians in its own UI
+ * when it wants them to).
+ *
+ * Recovery is account-level: the config is the same on every enrolled chain,
+ * and a first setup lands on the connected chain. There is no chainId here;
+ * switch chains first to set up on another one.
+ *
+ * @example
+ * ```ts
+ * await Actions.setupRecovery(config, {
+ *   recoveries: [
+ *     { commitment: '0x...', delay: 48 * 3600 },
+ *     { commitment: '0x...', delay: 48 * 3600 },
+ *   ],
+ *   threshold: 2,
+ * });
+ * ```
+ */
+export async function setupRecovery<config extends Config>(
+  config: config,
+  parameters: setupRecovery.Parameters<config>
+): Promise<setupRecovery.ReturnType> {
+  const { address, connector, recoveries, threshold, capabilities } = parameters;
+
+  // Account-level: the wallet acts on the connected chain, so the connector is
+  // never switched.
+  const client = await getConnectorClient(config, {
+    account: address,
+    connector,
+    assertChainId: false,
+  });
+
+  const result = await client.request({
+    method: 'wallet_setupRecovery' as never,
+    params: [{ recoveries, threshold, capabilities }] as never,
+  });
+
+  return result as setupRecovery.ReturnType;
+}
+
+// ============================================================================
+// cancelRecovery
+// ============================================================================
+
+export namespace cancelRecovery {
+  export type Parameters<config extends Config = Config> = {
+    address?: Address;
+    connector?: Connector;
+    /** The ceremony's request id, the same on every chain */
+    requestId: Hex;
+    /** Optional capabilities, such as a paymaster service for the account-door userOp */
+    capabilities?: RequestCapabilities;
+  };
+
+  export type ReturnType = RecoverySetupResult;
+  export type ErrorType = Error;
+}
+
+/**
+ * Vetoes a pending recovery request on every chain it reached.
+ * This calls wallet_cancelRecovery on the connected wallet.
+ *
+ * @example
+ * ```ts
+ * await Actions.cancelRecovery(config, { requestId: '0x...' });
+ * ```
+ */
+export async function cancelRecovery<config extends Config>(
+  config: config,
+  parameters: cancelRecovery.Parameters<config>
+): Promise<cancelRecovery.ReturnType> {
+  const { address, connector, requestId, capabilities } = parameters;
+
+  // The veto is one signature relayed to every chain the request is pending
+  // on, so the connector is never switched.
+  const client = await getConnectorClient(config, {
+    account: address,
+    connector,
+    assertChainId: false,
+  });
+
+  const result = await client.request({
+    method: 'wallet_cancelRecovery' as never,
+    params: [{ requestId, capabilities }] as never,
+  });
+
+  return result as cancelRecovery.ReturnType;
+}
+
+// ============================================================================
+// getRecovery
+// ============================================================================
+
+export namespace getRecovery {
+  export type Parameters<config extends Config = Config> = {
+    address?: Address;
+    connector?: Connector;
+  };
+
+  export type ReturnType = RecoveryState;
+  export type ErrorType = Error;
+}
+
+/**
+ * Gets the recovery state of an account: the config on every supported chain
+ * and the ceremonies not executed anywhere.
+ * This calls wallet_getRecovery on the connected wallet.
+ */
+export async function getRecovery<config extends Config>(
+  config: config,
+  parameters: getRecovery.Parameters<config> = {}
+): Promise<getRecovery.ReturnType> {
+  const { address, connector } = parameters;
+
+  // Account-level backend read, so there is no chain to be on.
+  const client = await getConnectorClient(config, {
+    account: address,
+    connector,
+    assertChainId: false,
+  });
+
+  const result = await client.request({
+    method: 'wallet_getRecovery' as never,
+    params: [{ address }] as never,
+  });
+
+  return result as getRecovery.ReturnType;
+}
+
+// ============================================================================
+// Recovery ceremony connectors
+// ============================================================================
+
+function connectedConnector(config: Config): Connector | undefined {
+  return config.state.current ? config.state.connections.get(config.state.current)?.connector : undefined;
+}
+
+/**
+ * The connector a ceremony method goes to: the one given, else the connected
+ * one when it is JAW, else the JAW connector in the config. The recovering user
+ * and most guardians are not connected, so unlike getConnectorClient this needs
+ * no connection.
+ */
+function jawConnector(config: Config, connector?: Connector): Connector {
+  const connected = connectedConnector(config);
+  const resolved = connector ?? (connected?.id === 'jaw' ? connected : config.connectors.find((c) => c.id === 'jaw'));
+  if (!resolved) throw new Error('No JAW connector in the wagmi config');
+  return resolved;
+}
+
+async function jawProvider(config: Config, connector?: Connector): Promise<EIP1193Provider> {
+  return (await jawConnector(config, connector).getProvider()) as EIP1193Provider;
+}
+
+// ============================================================================
+// startRecovery
+// ============================================================================
+
+export namespace startRecovery {
+  export type Parameters<config extends Config = Config> = {
+    /** The account to recover, when the app knows it; absent, the wallet asks */
+    account?: Address;
+    connector?: Connector;
+  };
+
+  export type ReturnType = CreatedCeremony;
+  export type ErrorType = Error;
+}
+
+/**
+ * Opens a recovery request for an account whose passkey is lost.
+ * This calls wallet_startRecovery on the JAW wallet, which creates a new
+ * passkey and the request the guardians approve. Needs no connection: the
+ * recovering user has no account to connect.
+ *
+ * @example
+ * ```ts
+ * const { requestId } = await Actions.startRecovery(config, { account: '0x...' });
+ * ```
+ */
+export async function startRecovery<config extends Config>(
+  config: config,
+  parameters: startRecovery.Parameters<config> = {}
+): Promise<startRecovery.ReturnType> {
+  const { account, connector } = parameters;
+
+  const provider = await jawProvider(config, connector);
+  const result = await provider.request({
+    method: 'wallet_startRecovery' as never,
+    params: [{ account }] as never,
+  });
+
+  return result as startRecovery.ReturnType;
+}
+
+// ============================================================================
+// getRecoveryStatus
+// ============================================================================
+
+export namespace getRecoveryStatus {
+  export type Parameters<config extends Config = Config> = {
+    /** The request id, the same on every chain */
+    requestId: Hex;
+    connector?: Connector;
+  };
+
+  export type ReturnType = Ceremony;
+  export type ErrorType = Error;
+}
+
+/**
+ * Gets the progress of a recovery request: the approvals collected so far and
+ * its state on every chain.
+ * This calls wallet_getRecoveryStatus on the JAW wallet. Needs no connection.
+ *
+ * @example
+ * ```ts
+ * const ceremony = await Actions.getRecoveryStatus(config, { requestId: '0x...' });
+ * ```
+ */
+export async function getRecoveryStatus<config extends Config>(
+  config: config,
+  parameters: getRecoveryStatus.Parameters<config>
+): Promise<getRecoveryStatus.ReturnType> {
+  const { requestId, connector } = parameters;
+
+  const provider = await jawProvider(config, connector);
+  const result = await provider.request({
+    method: 'wallet_getRecoveryStatus' as never,
+    params: [{ requestId }] as never,
+  });
+
+  return result as getRecoveryStatus.ReturnType;
+}
+
+// ============================================================================
+// approveRecovery
+// ============================================================================
+
+export namespace approveRecovery {
+  export type Parameters<config extends Config = Config> = {
+    /** The request id, from the link the recovering user shared */
+    requestId: Hex;
+    connector?: Connector;
+    /**
+     * API key for the recovery backend. Required when the guardian approves
+     * with a wallet other than JAW; the JAW wallet uses its own.
+     */
+    apiKey?: string;
+  };
+
+  export type ReturnType = CeremonyApproval;
+  export type ErrorType = Error;
+}
+
+/**
+ * Approves a recovery request as one of its guardians.
+ *
+ * With the JAW connector (the one given, else the connected one, else the one
+ * in the config), this calls wallet_approveRecovery, which signs the guardian
+ * in when needed and needs no connection. With any other wallet, that wallet
+ * must be connected: it signs the request's typed data and the approval is
+ * posted with `apiKey`.
+ *
+ * @example
+ * ```ts
+ * // A guardian with a JAW passkey
+ * await Actions.approveRecovery(config, { requestId: '0x...' });
+ *
+ * // A guardian with the connected injected wallet
+ * await Actions.approveRecovery(config, { requestId: '0x...', apiKey: 'xxx' });
+ * ```
+ */
+export async function approveRecovery<config extends Config>(
+  config: config,
+  parameters: approveRecovery.Parameters<config>
+): Promise<approveRecovery.ReturnType> {
+  const { requestId, connector, apiKey } = parameters;
+
+  const target = connector ?? connectedConnector(config) ?? jawConnector(config);
+  if (target.id === 'jaw') {
+    const provider = (await target.getProvider()) as EIP1193Provider;
+    const result = await provider.request({
+      method: 'wallet_approveRecovery' as never,
+      params: [{ requestId }] as never,
+    });
+    return result as approveRecovery.ReturnType;
+  }
+
+  // The recovery backend needs a key, and only the JAW wallet carries its own.
+  if (!apiKey) throw new Error('approveRecovery: apiKey is required to approve with a wallet other than JAW');
+
+  // The typed data's domain has no chainId, so the wallet's chain does not matter.
+  const client = await getConnectorClient(config, { connector: target, assertChainId: false });
+  const account = client.account;
+  if (!account) throw new ConnectorNotConnectedError();
+
+  return await approveRecoveryWithSigner({
+    requestId,
+    apiKey,
+    signer: {
+      address: account.address,
+      signTypedData: (typedData) => signTypedData(client, { ...typedData, account }),
+    },
+  });
 }
 
 // ============================================================================

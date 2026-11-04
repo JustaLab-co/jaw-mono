@@ -3,6 +3,7 @@ import { createPublicClient, decodeFunctionData, encodeFunctionData, erc20Abi } 
 import { Account } from './Account.js';
 import { spenderPrefundCall } from './spenderPrefund.js';
 import { ERC20_PAYMASTER_ADDRESS, jawPaymasterUrl } from '../constants.js';
+import { deriveAccountRecordV1 } from './accountRecord.js';
 
 // Mock dependencies
 vi.mock('../passkey-manager/index.js', async (importOriginal) => {
@@ -666,7 +667,9 @@ describe('Account', () => {
                 'test-api-key',
                 undefined,
                 undefined,
-                undefined,
+                // A factory account owned by a local key: its sends add the
+                // recovery manager when it lacks it.
+                { kind: 'localKey' },
                 undefined,
                 // The permission-manager call, built up here so the paymaster
                 // approval is sized over the shape that actually goes out.
@@ -901,7 +904,7 @@ describe('Account', () => {
                 storePasskeyAccount: vi.fn(),
                 storePasskeyAccountForLogin: vi.fn(),
                 setAccountAddresses: vi.fn(),
-                fetchAccountRecord: vi.fn().mockRejectedValue(new Error('no record endpoint in tests')),
+                fetchAccountRecord: vi.fn().mockResolvedValue(deriveAccountRecordV1('0x04imported')),
                 storeAuthState: vi.fn(),
             };
             vi.mocked(PasskeyManager).mockImplementation(() => mockManagerInstance as never);
@@ -927,6 +930,22 @@ describe('Account', () => {
     });
 
     describe('restore', () => {
+        /**
+         * The backend answers with the record of `publicKey`: a credential with
+         * no entry on this device is looked up there.
+         */
+        async function backendHasRecordOf(publicKey: `0x${string}`) {
+            const { PasskeyManager } = await import('../passkey-manager/index.js');
+            const current = vi.mocked(PasskeyManager).getMockImplementation() as (...args: unknown[]) => object;
+            vi.mocked(PasskeyManager).mockImplementation(
+                (...args: unknown[]) =>
+                    ({
+                        ...current(...args),
+                        fetchAccountRecord: vi.fn().mockResolvedValue(deriveAccountRecordV1(publicKey)),
+                    }) as never
+            );
+        }
+
         it('should have restore static method', () => {
             expect(typeof Account.restore).toBe('function');
         });
@@ -944,6 +963,7 @@ describe('Account', () => {
         });
 
         it('should restore account with rpId option', async () => {
+            await backendHasRecordOf('0x04abc123');
             const { toWebAuthnAccount } = await import('viem/account-abstraction');
             const { createSmartAccount } = await import('./smartAccount.js');
             const mockSmartAccount = {
@@ -972,6 +992,7 @@ describe('Account', () => {
         });
 
         it('should restore without rpId (passes undefined through for deferred signing)', async () => {
+            await backendHasRecordOf('0x04abc123');
             const { toWebAuthnAccount } = await import('viem/account-abstraction');
             const { createSmartAccount } = await import('./smartAccount.js');
             const mockSmartAccount = {
@@ -996,6 +1017,7 @@ describe('Account', () => {
         });
 
         it('should forward nativeGetFn (wrapped) and rpId options to toWebAuthnAccount', async () => {
+            await backendHasRecordOf('0x04def789');
             const { toWebAuthnAccount } = await import('viem/account-abstraction');
             const { createSmartAccount } = await import('./smartAccount.js');
             const mockSmartAccount = {
@@ -1030,6 +1052,7 @@ describe('Account', () => {
         });
 
         it('should forward only rpId when nativeGetFn is not provided', async () => {
+            await backendHasRecordOf('0x04jkl345');
             const { toWebAuthnAccount } = await import('viem/account-abstraction');
             const { createSmartAccount } = await import('./smartAccount.js');
             const mockSmartAccount = {

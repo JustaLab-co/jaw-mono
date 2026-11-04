@@ -14,8 +14,10 @@ import {
     createPublicClient,
     LocalAccount,
     encodeFunctionData,
+    decodeFunctionData,
     decodeFunctionResult,
     defineChain,
+    isAddressEqual,
 } from 'viem';
 import { call, getCode, getGasPrice, multicall, readContract } from 'viem/actions';
 import {
@@ -70,7 +72,7 @@ import {
     citrea,
     adi as adiBase,
 } from 'viem/chains';
-import { PERMISSIONS_MANAGER_ADDRESS, FACTORY_ADDRESS, JAW_PROXY_URL } from '../constants.js';
+import { PERMISSIONS_MANAGER_ADDRESS, RECOVERY_MANAGER_ADDRESS, FACTORY_ADDRESS, JAW_PROXY_URL } from '../constants.js';
 import { jawHttp } from '../utils/jawHttp.js';
 import { standardErrors } from '../errors/errors.js';
 import {
@@ -255,6 +257,83 @@ type PreparedCalls = {
 };
 
 /**
+ * The owners a send adds to an account whose starting owners lack them, before
+ * its calls. A passkey account needs none: its record holds every owner.
+ * - `eip7702`: an EOA delegated to the implementation. The delegation is signed
+ *   when missing, and the permissions manager, the recovery manager and the
+ *   account's own address are added. The recovery manager checks an owner proof
+ *   against the registered owners, and the EOA is not one until added.
+ * - `localKey`: a factory account owned by a local key. Its address is computed
+ *   from its starting owners with no stored record, so those can't change
+ *   without moving it; the recovery manager is added instead.
+ */
+export type OwnerSetup = { kind: 'eip7702'; localAccount: LocalAccount } | { kind: 'localKey' };
+
+type StateOverride = NonNullable<Parameters<typeof call>[1]['stateOverride']>;
+
+/** The owners `calls` add to `account` through `addOwnerAddress` self-calls. */
+function ownersAddedBy(calls: PreparedCalls['calls'], account: Address): Set<Address> {
+    const added = new Set<Address>();
+    for (const { to, data } of calls) {
+        if (!isAddressEqual(to, account)) continue;
+        try {
+            const { functionName, args } = decodeFunctionData({ abi, data });
+            if (functionName === 'addOwnerAddress') added.add(getAddress(args[0]));
+        } catch {
+            /* not a call this ABI knows: adds no owner */
+        }
+    }
+    return added;
+}
+
+/**
+ * `addOwnerAddress` self-calls for each of `owners` the account doesn't hold
+ * yet and `calls` don't add themselves (a second add of the same owner reverts
+ * the send), in the order given. The reads run in parallel. An account with no
+ * code holds none, so the send that deploys it adds them all; a failed read
+ * counts as not an owner, as it always has for the permissions manager.
+ */
+async function missingOwnerCalls(
+    chain: Chain,
+    account: Address,
+    owners: Address[],
+    calls: PreparedCalls['calls'],
+    stateOverride?: StateOverride
+): Promise<PreparedCalls['calls']> {
+    const alreadyAdded = ownersAddedBy(calls, account);
+    owners = owners.filter((owner) => !alreadyAdded.has(getAddress(owner)));
+    if (owners.length === 0) return [];
+
+    const publicClient = createPublicClient({
+        chain: SUPPORTED_CHAINS.find((c) => c.id === chain.id),
+        transport: jawHttp(chain.rpcUrl),
+    });
+
+    const owned = await Promise.all(
+        owners.map(async (owner) => {
+            try {
+                const { data } = await call(publicClient, {
+                    to: account,
+                    data: encodeFunctionData({ abi, functionName: 'isOwnerAddress', args: [owner] }),
+                    ...(stateOverride ? { stateOverride } : {}),
+                });
+                return data ? decodeFunctionResult({ abi, functionName: 'isOwnerAddress', data }) : false;
+            } catch {
+                return false;
+            }
+        })
+    );
+
+    return owners
+        .filter((_, i) => !owned[i])
+        .map((owner) => ({
+            to: getAddress(account),
+            value: 0n,
+            data: encodeFunctionData({ abi, functionName: 'addOwnerAddress', args: [owner] }),
+        }));
+}
+
+/**
  * Prepares calls for EIP-7702 execution by checking delegation status
  * and prepending owner setup if needed.
  */
@@ -264,8 +343,8 @@ async function prepareEip7702Calls(
     calls: Array<{ to: Address; value: bigint; data: Hex }>,
     chain: Chain
 ): Promise<PreparedCalls> {
-    // No multicall batching: the three reads below are strictly sequential (each one
-    // gates the next), so there is never more than one eth_call in flight to fold.
+    // No multicall batching: the implementation read gates the delegation check,
+    // which gates how the owners are read.
     const publicClient = createPublicClient({
         chain: SUPPORTED_CHAINS.find((c) => c.id === chain.id),
         transport: jawHttp(chain.rpcUrl),
@@ -284,71 +363,45 @@ async function prepareEip7702Calls(
         ? await (smartAccount as ToJustanAccountReturnType).signAuthorization()
         : undefined;
 
-    let finalCalls = [...calls];
+    // When not delegated, the owners are read against the delegation code through
+    // a state override, so storage is read even if the EOA has no code yet (it
+    // persists across a cleared delegation, so a re-delegated EOA may hold some).
+    const ownerCalls = await missingOwnerCalls(
+        chain,
+        localAccount.address,
+        [PERMISSIONS_MANAGER_ADDRESS, RECOVERY_MANAGER_ADDRESS, localAccount.address],
+        calls,
+        delegated
+            ? undefined
+            : [{ address: localAccount.address, code: `0xef0100${implementationAddress.slice(2)}` as Hex }]
+    );
 
-    // Check if permissions manager is already an owner.
-    // When not delegated, use stateOverride to simulate the delegation code
-    // so we can read storage even if the EOA has no code yet (handles re-delegation
-    // where storage persists after clearing delegation).
-    let isPmOwner = false;
-    try {
-        const callData = encodeFunctionData({
-            abi,
-            functionName: 'isOwnerAddress',
-            args: [PERMISSIONS_MANAGER_ADDRESS],
-        });
-        const { data: resultData } = await call(publicClient, {
-            to: localAccount.address,
-            data: callData,
-            ...(!delegated
-                ? {
-                      stateOverride: [
-                          {
-                              address: localAccount.address,
-                              code: `0xef0100${implementationAddress.slice(2)}` as Hex,
-                          },
-                      ],
-                  }
-                : {}),
-        });
-        if (resultData) {
-            isPmOwner = decodeFunctionResult({
-                abi,
-                functionName: 'isOwnerAddress',
-                data: resultData,
-            });
-        }
-    } catch {
-        isPmOwner = false;
+    return { calls: [...ownerCalls, ...calls], authorization };
+}
+
+/** The calls and authorization a send goes out with, after the owner setup `ownerSetup` asks for. */
+async function prepareOwnerSetup(
+    smartAccount: SmartAccount,
+    calls: Array<{ to: Address; value: bigint; data: Hex }>,
+    chain: Chain,
+    ownerSetup?: OwnerSetup
+): Promise<PreparedCalls> {
+    if (!ownerSetup) return { calls };
+    if (ownerSetup.kind === 'eip7702') {
+        return prepareEip7702Calls(smartAccount, ownerSetup.localAccount, calls, chain);
     }
-
-    if (!isPmOwner) {
-        finalCalls = [
-            {
-                to: getAddress(localAccount.address),
-                value: 0n,
-                data: encodeFunctionData({
-                    abi,
-                    functionName: 'addOwnerAddress',
-                    args: [PERMISSIONS_MANAGER_ADDRESS],
-                }),
-            },
-            ...finalCalls,
-        ];
-    }
-
-    return { calls: finalCalls, authorization };
+    const ownerCalls = await missingOwnerCalls(chain, smartAccount.address, [RECOVERY_MANAGER_ADDRESS], calls);
+    return { calls: [...ownerCalls, ...calls] };
 }
 
 /**
- * Formats raw calls and applies EIP-7702 preparation when a localAccount is present.
- * For non-7702 accounts (no localAccount), just formats the calls.
+ * Formats raw calls and applies the owner setup the account needs, if any.
  */
 export async function prepareCallsForExecution(
     smartAccount: SmartAccount,
     calls: Array<{ to: Address; value?: bigint; data?: Hex }>,
     chain: Chain,
-    localAccount?: LocalAccount
+    ownerSetup?: OwnerSetup
 ): Promise<PreparedCalls> {
     const formatted = calls.map((call) => ({
         to: getAddress(call.to),
@@ -356,11 +409,7 @@ export async function prepareCallsForExecution(
         data: (call.data ?? '0x') as Hex,
     }));
 
-    if (!localAccount) {
-        return { calls: formatted };
-    }
-
-    return prepareEip7702Calls(smartAccount, localAccount, formatted, chain);
+    return prepareOwnerSetup(smartAccount, formatted, chain, ownerSetup);
 }
 
 export async function sendTransaction(
@@ -374,16 +423,11 @@ export async function sendTransaction(
     paymasterUrlOverride?: string,
     paymasterContextOverride?: Record<string, unknown>,
     apiKey?: string,
-    localAccount?: LocalAccount
+    ownerSetup?: OwnerSetup
 ): Promise<Hash> {
     const bundlerClient = getBundlerClient(chain, paymasterUrlOverride, paymasterContextOverride);
 
-    const { calls: finalCalls, authorization } = await prepareCallsForExecution(
-        smartAccount,
-        calls,
-        chain,
-        localAccount
-    );
+    const { calls: finalCalls, authorization } = await prepareCallsForExecution(smartAccount, calls, chain, ownerSetup);
 
     const userOpHash = await bundlerClient.sendUserOperation({
         account: smartAccount,
@@ -451,17 +495,12 @@ export async function sendCalls(
     chain: Chain,
     paymasterUrlOverride?: string,
     paymasterContextOverride?: Record<string, unknown>,
-    localAccount?: LocalAccount,
+    ownerSetup?: OwnerSetup,
     onSigned?: OnUserOpSigned
 ): Promise<BundledTransactionResult> {
     const bundlerClient = getBundlerClient(chain, paymasterUrlOverride, paymasterContextOverride);
 
-    const { calls: finalCalls, authorization } = await prepareCallsForExecution(
-        smartAccount,
-        calls,
-        chain,
-        localAccount
-    );
+    const { calls: finalCalls, authorization } = await prepareCallsForExecution(smartAccount, calls, chain, ownerSetup);
 
     const userOpHash = await submitUserOperation(
         bundlerClient,
@@ -541,7 +580,7 @@ export async function sendCallsWithPermission(
     apiKey: string | undefined,
     paymasterUrlOverride?: string,
     paymasterContextOverride?: Record<string, unknown>,
-    localAccount?: LocalAccount,
+    ownerSetup?: OwnerSetup,
     approvalCall?: { to: Address; value?: bigint; data: Hex },
     permissionCall?: { to: Address; value: bigint; data: Hex },
     onSigned?: OnUserOpSigned
@@ -571,10 +610,8 @@ export async function sendCallsWithPermission(
 
     spenderCalls.push(managerCall);
 
-    // EIP-7702: prepend delegation authorization + owner setup if needed
-    const { calls: finalCalls, authorization } = localAccount
-        ? await prepareEip7702Calls(smartAccount, localAccount, spenderCalls, chain)
-        : { calls: spenderCalls, authorization: undefined };
+    // Owner setup (and the EIP-7702 delegation) goes at the spender level too
+    const { calls: finalCalls, authorization } = await prepareOwnerSetup(smartAccount, spenderCalls, chain, ownerSetup);
 
     const bundlerClient = getBundlerClient(chain, paymasterUrlOverride, paymasterContextOverride);
 

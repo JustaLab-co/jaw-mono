@@ -3,6 +3,8 @@ export {
     Account,
     type AccountConfig,
     type CreateAccountOptions,
+    type StartRecoveryOptions,
+    RecoveryNotFinishedError,
     type TransactionCall,
     type SendCallsOptions,
     type AccountMetadata,

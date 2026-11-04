@@ -1,0 +1,160 @@
+[
+  {
+    "description": "addRecoveryOp: a 32-byte commitment (a padded address) with a two-day delay",
+    "encoder": "addRecoveryOp",
+    "input": {
+      "provider": "0xf67C870EF05A5038a4225456Cb08e238fF3B59b8",
+      "commitment": "0x0000000000000000000000003333333333333333333333333333333333333333",
+      "delay": 172800
+    },
+    "expected": "0x000000000000000000000000f67c870ef05a5038a4225456cb08e238ff3b59b80000000000000000000000000000000000000000000000000000000000000060000000000000000000000000000000000000000000000000000000000002a30000000000000000000000000000000000000000000000000000000000000000200000000000000000000000003333333333333333333333333333333333333333"
+  },
+  {
+    "description": "addRecoveryOp: a 64-byte commitment (a raw passkey public key)",
+    "encoder": "addRecoveryOp",
+    "input": {
+      "provider": "0xf67C870EF05A5038a4225456Cb08e238fF3B59b8",
+      "commitment": "0x44444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444",
+      "delay": 172800
+    },
+    "expected": "0x000000000000000000000000f67c870ef05a5038a4225456cb08e238ff3b59b80000000000000000000000000000000000000000000000000000000000000060000000000000000000000000000000000000000000000000000000000002a300000000000000000000000000000000000000000000000000000000000000004044444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444"
+  },
+  {
+    "description": "removeRecoveryOp: the recovery id alone",
+    "encoder": "removeRecoveryOp",
+    "input": { "recoveryId": "0xefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef" },
+    "expected": "0xefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef"
+  },
+  {
+    "description": "setThresholdOp: a threshold of two",
+    "encoder": "setThresholdOp",
+    "input": { "threshold": 2 },
+    "expected": "0x0000000000000000000000000000000000000000000000000000000000000002"
+  },
+  {
+    "description": "cancelRequestOp: the request id alone",
+    "encoder": "cancelRequestOp",
+    "input": { "requestId": "0xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd" },
+    "expected": "0xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+  },
+  {
+    "description": "buildEnrollRecoveryCall: addOwnerAddress(manager) on the account itself",
+    "encoder": "buildEnrollRecoveryCall",
+    "input": { "account": "0x1111111111111111111111111111111111111111" },
+    "expected": "0x0f0f3f240000000000000000000000009d1df5aebe2cdbe6051687c0ab2c788890907e45"
+  },
+  {
+    "description": "buildAddRecoveryCall: addRecovery with a 32-byte commitment",
+    "encoder": "buildAddRecoveryCall",
+    "input": {
+      "account": "0x1111111111111111111111111111111111111111",
+      "method": {
+        "provider": "0xf67C870EF05A5038a4225456Cb08e238fF3B59b8",
+        "commitment": "0x0000000000000000000000003333333333333333333333333333333333333333",
+        "delay": 172800
+      }
+    },
+    "expected": "0x524e90c50000000000000000000000001111111111111111111111111111111111111111000000000000000000000000f67c870ef05a5038a4225456cb08e238ff3b59b80000000000000000000000000000000000000000000000000000000000000080000000000000000000000000000000000000000000000000000000000002a30000000000000000000000000000000000000000000000000000000000000000200000000000000000000000003333333333333333333333333333333333333333"
+  },
+  {
+    "description": "buildRemoveRecoveryCall: removeRecovery by id",
+    "encoder": "buildRemoveRecoveryCall",
+    "input": {
+      "account": "0x1111111111111111111111111111111111111111",
+      "recoveryId": "0xefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef"
+    },
+    "expected": "0xe38103630000000000000000000000001111111111111111111111111111111111111111efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef"
+  },
+  {
+    "description": "buildSetRecoveryThresholdCall: setRecoveryThreshold to two",
+    "encoder": "buildSetRecoveryThresholdCall",
+    "input": { "account": "0x1111111111111111111111111111111111111111", "threshold": 2 },
+    "expected": "0x7db136f600000000000000000000000011111111111111111111111111111111111111110000000000000000000000000000000000000000000000000000000000000002"
+  },
+  {
+    "description": "buildCancelRecoveryRequestCall: cancelRecoveryRequest by request id",
+    "encoder": "buildCancelRecoveryRequestCall",
+    "input": { "requestId": "0xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd" },
+    "expected": "0x8113fe87cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+  },
+  {
+    "description": "recoveryAdminDigest: an add and a threshold, as the manager hashes them",
+    "encoder": "recoveryAdminDigest",
+    "input": {
+      "account": "0x1111111111111111111111111111111111111111",
+      "ops": [
+        {
+          "opType": 0,
+          "data": "0x000000000000000000000000f67c870ef05a5038a4225456cb08e238ff3b59b80000000000000000000000000000000000000000000000000000000000000060000000000000000000000000000000000000000000000000000000000002a30000000000000000000000000000000000000000000000000000000000000000200000000000000000000000003333333333333333333333333333333333333333"
+        },
+        { "opType": 2, "data": "0x0000000000000000000000000000000000000000000000000000000000000002" }
+      ],
+      "salt": "0xabababababababababababababababababababababababababababababababab",
+      "expiry": 2000000000
+    },
+    "expected": "0xb8d486f8cf259b7fd971104c56a76ac92aedfb37c65b4abd50bbc865bf2700f9"
+  },
+  {
+    "description": "recoveryAdminDigest: no ops at all, where an array-hash mistake would show",
+    "encoder": "recoveryAdminDigest",
+    "input": {
+      "account": "0x1111111111111111111111111111111111111111",
+      "ops": [],
+      "salt": "0xabababababababababababababababababababababababababababababababab",
+      "expiry": 2000000000
+    },
+    "expected": "0x9b7bf69d96d1cd1eb91183d4ed45146dad2e9720503aa1da720e42af5fc86cc9"
+  },
+  {
+    "description": "recoverDigest: a 32-byte subject, as the provider hashes it",
+    "encoder": "recoverDigest",
+    "input": {
+      "account": "0x1111111111111111111111111111111111111111",
+      "subject": "0x0000000000000000000000003333333333333333333333333333333333333333",
+      "salt": "0xabababababababababababababababababababababababababababababababab",
+      "expiry": 2000000000
+    },
+    "expected": "0xe3354687aa643d475b1386181e51c045dea09e01b9aab569b8096302143a6bf9"
+  },
+  {
+    "description": "recoverDigest: a 64-byte subject",
+    "encoder": "recoverDigest",
+    "input": {
+      "account": "0x1111111111111111111111111111111111111111",
+      "subject": "0x44444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444",
+      "salt": "0xabababababababababababababababababababababababababababababababab",
+      "expiry": 2000000000
+    },
+    "expected": "0x33e87e2fbbf8b92afac6392efd6d2516372ff993910c245b26307d865dd9e6ff"
+  },
+  {
+    "description": "computeRecoveryId: a 32-byte commitment, as the manager computes it",
+    "encoder": "computeRecoveryId",
+    "input": {
+      "account": "0x1111111111111111111111111111111111111111",
+      "provider": "0xf67C870EF05A5038a4225456Cb08e238fF3B59b8",
+      "commitment": "0x0000000000000000000000003333333333333333333333333333333333333333"
+    },
+    "expected": "0x2e57c55ef4a5315d201c854584bde6f060a65af9d7628f4895f601f5f2408d67"
+  },
+  {
+    "description": "computeRecoveryId: a 64-byte commitment",
+    "encoder": "computeRecoveryId",
+    "input": {
+      "account": "0x1111111111111111111111111111111111111111",
+      "provider": "0xf67C870EF05A5038a4225456Cb08e238fF3B59b8",
+      "commitment": "0x44444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444"
+    },
+    "expected": "0x79d4c73e617d4c41ddb53ec5fbb543b6a38864dad144ec8b884398fece00b18f"
+  },
+  {
+    "description": "computeRequestId: keccak256(abi.encode(account, subject, salt)) for a 64-byte subject",
+    "encoder": "computeRequestId",
+    "input": {
+      "account": "0x1111111111111111111111111111111111111111",
+      "subject": "0x44444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444",
+      "salt": "0xabababababababababababababababababababababababababababababababab"
+    },
+    "expected": "0x008a0c3ea9b099b7c3838cd3a9d740920cf8458aa9c24cca1b29542b77c3f237"
+  }
+]

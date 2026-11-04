@@ -24,6 +24,7 @@ export enum SDKRequestType {
   IMPORT_SUB_ACCOUNT = 'import_sub_account',
   GRANT_PERMISSIONS = 'grant_permissions',
   REVOKE_PERMISSIONS = 'revoke_permissions',
+  SETUP_RECOVERY = 'setup_recovery',
   ADD_FUNDS = 'add_funds',
   UNSUPPORTED_METHOD = 'unsupported_method',
 }

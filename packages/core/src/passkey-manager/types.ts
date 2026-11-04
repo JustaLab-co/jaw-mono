@@ -37,6 +37,15 @@ export interface PasskeyRegistrationRequest {
     credentialId: string;
     publicKey: string;
     displayName: string;
+    /** Recipe version of the account the passkey creates; the backend derives the record from it. Absent = 1. */
+    accountVersion?: number;
+}
+
+/** A passkey to link to an account that already exists, such as the one a recovery adds as an owner. */
+export interface AddAccountPasskeyRequest {
+    credentialId: string;
+    publicKey: string;
+    displayName: string;
 }
 
 export interface LookupPasskeysRequest {

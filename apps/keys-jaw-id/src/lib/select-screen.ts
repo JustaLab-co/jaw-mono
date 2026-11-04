@@ -68,6 +68,7 @@ const MODAL_REQUESTS: ReadonlySet<SDKRequestType> = new Set([
   SDKRequestType.SEND_TRANSACTION,
   SDKRequestType.GRANT_PERMISSIONS,
   SDKRequestType.REVOKE_PERMISSIONS,
+  SDKRequestType.SETUP_RECOVERY,
   SDKRequestType.ADD_FUNDS,
 ]);
 

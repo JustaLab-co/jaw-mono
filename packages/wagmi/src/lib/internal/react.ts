@@ -11,6 +11,12 @@ import {
   grantPermissions,
   getPermissions,
   revokePermissions,
+  setupRecovery,
+  cancelRecovery,
+  getRecovery,
+  startRecovery,
+  getRecoveryStatus,
+  approveRecovery,
   getAssets,
   getCapabilities,
   sign,
@@ -19,6 +25,8 @@ import {
 } from './core.js';
 import {
   getPermissionsQueryKey,
+  getRecoveryQueryKey,
+  getRecoveryStatusQueryKey,
   getAssetsQueryKey,
   getCapabilitiesQueryKey,
   getCallsHistoryQueryKey,
@@ -323,6 +331,422 @@ export function usePermissions<
     queryKey,
     staleTime: Number.POSITIVE_INFINITY,
   }) as usePermissions.ReturnType<selectData>;
+}
+
+// ============================================================================
+// useSetupRecovery
+// ============================================================================
+
+export namespace useSetupRecovery {
+  export type Parameters<config extends Config = Config, context = unknown> = {
+    config?: config;
+    mutation?:
+      | UseMutationParameters<
+          setupRecovery.ReturnType,
+          setupRecovery.ErrorType,
+          setupRecovery.Parameters<config>,
+          context
+        >
+      | undefined;
+  };
+
+  export type ReturnType<config extends Config = Config, context = unknown> = UseMutationResult<
+    setupRecovery.ReturnType,
+    setupRecovery.ErrorType,
+    setupRecovery.Parameters<config>,
+    context
+  >;
+}
+
+/**
+ * Hook to set up or edit recovery for the connected account. The wallet shows
+ * its recovery editor, prefilled with whatever is proposed; the user confirms.
+ * On success every `useRecovery` query is invalidated, so the new config shows
+ * without the app doing anything.
+ *
+ * @example
+ * ```tsx
+ * const { mutate, data, isPending } = useSetupRecovery();
+ *
+ * // Open the editor on the current config
+ * mutate({});
+ *
+ * // Propose this app as a guardian
+ * mutate({
+ *   recoveries: [{ commitment: '0x...', delay: 48 * 3600 }],
+ *   threshold: 1,
+ * });
+ * ```
+ */
+export function useSetupRecovery<config extends Config = ResolvedRegister['config'], context = unknown>(
+  parameters: useSetupRecovery.Parameters<config, context> = {}
+): useSetupRecovery.ReturnType<config, context> {
+  const { mutation } = parameters;
+  const config = useConfig(parameters as { config?: Config });
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    ...mutation,
+    mutationFn: async (variables) => {
+      return setupRecovery(config, variables);
+    },
+    mutationKey: ['setupRecovery'],
+    // The permissions hooks wait for a `permissionsChanged` event nothing
+    // emits. Invalidating here is what that listener was for.
+    onSuccess: (...args) => {
+      void queryClient.invalidateQueries({ queryKey: ['recovery'] });
+      return mutation?.onSuccess?.(...args);
+    },
+  }) as useSetupRecovery.ReturnType<config, context>;
+}
+
+// ============================================================================
+// useCancelRecovery
+// ============================================================================
+
+export namespace useCancelRecovery {
+  export type Parameters<config extends Config = Config, context = unknown> = {
+    config?: config;
+    mutation?:
+      | UseMutationParameters<
+          cancelRecovery.ReturnType,
+          cancelRecovery.ErrorType,
+          cancelRecovery.Parameters<config>,
+          context
+        >
+      | undefined;
+  };
+
+  export type ReturnType<config extends Config = Config, context = unknown> = UseMutationResult<
+    cancelRecovery.ReturnType,
+    cancelRecovery.ErrorType,
+    cancelRecovery.Parameters<config>,
+    context
+  >;
+}
+
+/**
+ * Hook to veto a pending recovery request on every chain it reached.
+ * On success every `useRecovery` query is invalidated.
+ *
+ * @example
+ * ```tsx
+ * const { mutate, isPending } = useCancelRecovery();
+ *
+ * mutate({ requestId: '0x...' });
+ * ```
+ */
+export function useCancelRecovery<config extends Config = ResolvedRegister['config'], context = unknown>(
+  parameters: useCancelRecovery.Parameters<config, context> = {}
+): useCancelRecovery.ReturnType<config, context> {
+  const { mutation } = parameters;
+  const config = useConfig(parameters as { config?: Config });
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    ...mutation,
+    mutationFn: async (variables) => {
+      return cancelRecovery(config, variables);
+    },
+    mutationKey: ['cancelRecovery'],
+    onSuccess: (...args) => {
+      void queryClient.invalidateQueries({ queryKey: ['recovery'] });
+      return mutation?.onSuccess?.(...args);
+    },
+  }) as useCancelRecovery.ReturnType<config, context>;
+}
+
+// ============================================================================
+// useRecovery
+// ============================================================================
+
+export namespace useRecovery {
+  export type Parameters<
+    config extends Config = Config,
+    selectData = getRecovery.ReturnType,
+  > = getRecovery.Parameters<config> & {
+    config?: config;
+    query?:
+      | Omit<
+          UseQueryParameters<
+            getRecovery.ReturnType,
+            getRecovery.ErrorType,
+            selectData,
+            getRecoveryQueryKey.Value<config>
+          >,
+          'gcTime' | 'staleTime'
+        >
+      | undefined;
+  };
+
+  export type ReturnType<selectData = getRecovery.ReturnType> = UseQueryReturnType<selectData, getRecovery.ErrorType>;
+}
+
+/**
+ * Hook to get the recovery state of an account: the config on every supported
+ * chain and the ceremonies not executed anywhere, which is what a veto banner
+ * needs. Refreshed after `useSetupRecovery` and `useCancelRecovery` succeed,
+ * and kept fresh for 30 seconds otherwise, since a pending ceremony is started
+ * by someone else.
+ *
+ * @example
+ * ```tsx
+ * const { data: recovery, isLoading } = useRecovery();
+ *
+ * // With specific address (works even when not connected)
+ * const { data } = useRecovery({ address: '0x...' });
+ * ```
+ */
+export function useRecovery<config extends Config = ResolvedRegister['config'], selectData = getRecovery.ReturnType>(
+  parameters: useRecovery.Parameters<config, selectData> = {}
+): useRecovery.ReturnType<selectData> {
+  const { query = {}, ...rest } = parameters;
+
+  const config = useConfig(rest as { config?: Config });
+  const { address: connectedAddress, connector, status } = useAccount({ config });
+  const connectors = useConnectors({ config });
+  // Use account connector if connected, otherwise find JAW connector from available connectors
+  const jawConnector = connectors.find((c) => c.id === 'jaw');
+  const activeConnector = parameters.connector ?? connector ?? jawConnector;
+
+  // Use explicit address if provided, otherwise fall back to connected address
+  const targetAddress = parameters.address ?? connectedAddress;
+
+  // Enable query if:
+  // 1. Connected (existing behavior), OR
+  // 2. Explicit address provided AND connector available (disconnected query)
+  const isConnected = status === 'connected' || (status === 'reconnecting' && activeConnector?.getProvider);
+  const canQueryDisconnected = Boolean(targetAddress && activeConnector?.getProvider);
+
+  const enabled = Boolean((isConnected || canQueryDisconnected) && (query.enabled ?? true));
+
+  // No chainId: recovery is account-level, so switching chains does not refetch.
+  const queryKey = useMemo(
+    () => getRecoveryQueryKey({ address: targetAddress, connector: activeConnector }),
+    [targetAddress, activeConnector]
+  );
+
+  return useQuery({
+    ...query,
+    enabled,
+    gcTime: 0,
+    queryFn: activeConnector
+      ? async () => {
+          // When connected, use the standard flow
+          if (isConnected) {
+            return getRecovery(config, {
+              ...rest,
+              address: targetAddress,
+              connector: activeConnector,
+            });
+          }
+          // When disconnected but have address, make direct provider call
+          const provider = (await activeConnector.getProvider?.()) as EIP1193Provider | undefined;
+          if (!provider) throw new Error('Provider not available');
+          if (!targetAddress) throw new Error('Address is required when not connected');
+
+          return provider.request({
+            method: 'wallet_getRecovery' as never,
+            params: [{ address: targetAddress }] as never,
+          }) as Promise<getRecovery.ReturnType>;
+        }
+      : skipToken,
+    queryKey,
+    staleTime: 30_000, // A pending ceremony is started by someone else, so it has to show up without a local mutation
+  }) as useRecovery.ReturnType<selectData>;
+}
+
+// ============================================================================
+// useStartRecovery
+// ============================================================================
+
+export namespace useStartRecovery {
+  export type Parameters<config extends Config = Config, context = unknown> = {
+    config?: config;
+    mutation?:
+      | UseMutationParameters<
+          startRecovery.ReturnType,
+          startRecovery.ErrorType,
+          startRecovery.Parameters<config>,
+          context
+        >
+      | undefined;
+  };
+
+  export type ReturnType<config extends Config = Config, context = unknown> = UseMutationResult<
+    startRecovery.ReturnType,
+    startRecovery.ErrorType,
+    startRecovery.Parameters<config>,
+    context
+  >;
+}
+
+/**
+ * Hook to open a recovery request for an account whose passkey is lost. Needs
+ * no connection. On success every `useRecovery` query is invalidated, so the
+ * new request shows as pending.
+ *
+ * @example
+ * ```tsx
+ * const { mutate, data, isPending } = useStartRecovery();
+ *
+ * // The wallet asks which account
+ * mutate({});
+ *
+ * // The app already knows it
+ * mutate({ account: '0x...' });
+ * ```
+ */
+export function useStartRecovery<config extends Config = ResolvedRegister['config'], context = unknown>(
+  parameters: useStartRecovery.Parameters<config, context> = {}
+): useStartRecovery.ReturnType<config, context> {
+  const { mutation } = parameters;
+  const config = useConfig(parameters as { config?: Config });
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    ...mutation,
+    mutationFn: async (variables) => {
+      return startRecovery(config, variables);
+    },
+    mutationKey: ['startRecovery'],
+    onSuccess: (...args) => {
+      void queryClient.invalidateQueries({ queryKey: ['recovery'] });
+      return mutation?.onSuccess?.(...args);
+    },
+  }) as useStartRecovery.ReturnType<config, context>;
+}
+
+// ============================================================================
+// useRecoveryStatus
+// ============================================================================
+
+export namespace useRecoveryStatus {
+  export type Parameters<config extends Config = Config, selectData = getRecoveryStatus.ReturnType> = Omit<
+    getRecoveryStatus.Parameters<config>,
+    'requestId'
+  > & {
+    /** The request to follow; the query waits until there is one */
+    requestId?: getRecoveryStatus.Parameters<config>['requestId'] | undefined;
+    config?: config;
+    query?:
+      | Omit<
+          UseQueryParameters<
+            getRecoveryStatus.ReturnType,
+            getRecoveryStatus.ErrorType,
+            selectData,
+            getRecoveryStatusQueryKey.Value<config>
+          >,
+          'gcTime' | 'staleTime'
+        >
+      | undefined;
+  };
+
+  export type ReturnType<selectData = getRecoveryStatus.ReturnType> = UseQueryReturnType<
+    selectData,
+    getRecoveryStatus.ErrorType
+  >;
+}
+
+/**
+ * Hook to follow a recovery request: the approvals collected so far and its
+ * state on every chain. Needs no connection. Refreshed after
+ * `useApproveRecovery` succeeds for that request and kept fresh for 30 seconds
+ * otherwise; set `query.refetchInterval` to follow it live.
+ *
+ * @example
+ * ```tsx
+ * const { data: ceremony } = useRecoveryStatus({
+ *   requestId: '0x...',
+ *   query: { refetchInterval: 10_000 },
+ * });
+ * ```
+ */
+export function useRecoveryStatus<
+  config extends Config = ResolvedRegister['config'],
+  selectData = getRecoveryStatus.ReturnType,
+>(parameters: useRecoveryStatus.Parameters<config, selectData> = {}): useRecoveryStatus.ReturnType<selectData> {
+  const { query = {}, requestId, ...rest } = parameters;
+
+  const config = useConfig(rest as { config?: Config });
+
+  const enabled = Boolean(requestId && (query.enabled ?? true));
+
+  const queryKey = useMemo(() => getRecoveryStatusQueryKey({ requestId }), [requestId]);
+
+  return useQuery({
+    ...query,
+    enabled,
+    gcTime: 0,
+    queryFn: requestId ? async () => getRecoveryStatus(config, { ...rest, requestId }) : skipToken,
+    queryKey,
+    staleTime: 30_000, // Approvals come from other guardians, so they have to show up without a local mutation
+  }) as useRecoveryStatus.ReturnType<selectData>;
+}
+
+// ============================================================================
+// useApproveRecovery
+// ============================================================================
+
+export namespace useApproveRecovery {
+  export type Parameters<config extends Config = Config, context = unknown> = {
+    config?: config;
+    mutation?:
+      | UseMutationParameters<
+          approveRecovery.ReturnType,
+          approveRecovery.ErrorType,
+          approveRecovery.Parameters<config>,
+          context
+        >
+      | undefined;
+  };
+
+  export type ReturnType<config extends Config = Config, context = unknown> = UseMutationResult<
+    approveRecovery.ReturnType,
+    approveRecovery.ErrorType,
+    approveRecovery.Parameters<config>,
+    context
+  >;
+}
+
+/**
+ * Hook to approve a recovery request as one of its guardians, with the JAW
+ * wallet or any connected wallet. On success every `useRecovery` query and the
+ * `useRecoveryStatus` query of that request are invalidated.
+ *
+ * @example
+ * ```tsx
+ * const { mutate, data, isPending } = useApproveRecovery();
+ *
+ * // A guardian with a JAW passkey
+ * mutate({ requestId: '0x...' });
+ *
+ * // A guardian with the connected injected wallet
+ * mutate({ requestId: '0x...', apiKey: 'xxx' });
+ * ```
+ */
+export function useApproveRecovery<config extends Config = ResolvedRegister['config'], context = unknown>(
+  parameters: useApproveRecovery.Parameters<config, context> = {}
+): useApproveRecovery.ReturnType<config, context> {
+  const { mutation } = parameters;
+  const config = useConfig(parameters as { config?: Config });
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    ...mutation,
+    mutationFn: async (variables) => {
+      return approveRecovery(config, variables);
+    },
+    mutationKey: ['approveRecovery'],
+    onSuccess: (...args) => {
+      const [, variables] = args;
+      void queryClient.invalidateQueries({ queryKey: ['recovery'] });
+      void queryClient.invalidateQueries({
+        queryKey: getRecoveryStatusQueryKey({ requestId: variables.requestId }),
+      });
+      return mutation?.onSuccess?.(...args);
+    },
+  }) as useApproveRecovery.ReturnType<config, context>;
 }
 
 // ============================================================================
