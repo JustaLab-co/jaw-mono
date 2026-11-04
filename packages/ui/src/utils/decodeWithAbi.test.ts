@@ -72,6 +72,20 @@ describe('decodeWithAbi', () => {
     expect(decoded?.nonCanonical).toBe(true);
   });
 
+  it('keeps a decode whose bytes4 word has nonzero padding and marks it non-canonical', () => {
+    const g = parseAbi(['function g(bytes4 a)']);
+    const calldata = encodeFunctionData({ abi: g, functionName: 'g', args: ['0x12345678'] });
+    const decoded = decodeWithAbi(g, `${calldata.slice(0, -2)}ff` as Hex);
+    expect(decoded?.params[0].value).toBe('0x12345678');
+    expect(decoded?.nonCanonical).toBe(true);
+  });
+
+  it('returns null for a uint8 word with dirty high bits, which viem rejects', () => {
+    const f = parseAbi(['function f(uint8 a)']);
+    const calldata = encodeFunctionData({ abi: f, functionName: 'f', args: [5] });
+    expect(decodeWithAbi(f, `${calldata.slice(0, 10)}ff${calldata.slice(12)}` as Hex)).toBeNull();
+  });
+
   it('reports no tail on a non-canonical decode, since the end of the arguments is unknown', () => {
     const dirty = `${data.slice(0, 10)}ff${data.slice(12)}8021802180218021` as Hex;
     const decoded = decodeWithAbi(abi4, dirty);

@@ -11,10 +11,12 @@ function formatParamValue(value: unknown): string {
 
 /**
  * Decodes calldata with the ABI entry whose selector it starts with. When the entry re-encodes to
- * the start of the calldata, the bytes after it are the suffix. When it does not (dirty address
- * bits, nonzero padding), the decode is kept and marked non-canonical, since the contract may still
- * run it. The signature fits the bytes and hashes to the selector, which does not prove it is the
- * contract's real one: the ABI comes from an open lookup.
+ * the start of the calldata, the bytes after it are the suffix. When it does not, as with dirty high
+ * bytes in an address word or nonzero padding after a bytesN value, the decode is kept and marked
+ * non-canonical, since the contract may still run it. Dirty high bits in an integer word make viem
+ * throw, so that call returns null, as does calldata with an odd number of hex digits. The signature
+ * fits the bytes and hashes to the selector, which does not prove it is the contract's real one: the
+ * ABI comes from an open lookup.
  */
 export function decodeWithAbi(abi: Abi, data: Hex): DecodedCalldata | null {
   // viem pads an odd number of hex digits with a nibble, which shifts every word it decodes.
