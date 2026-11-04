@@ -121,6 +121,35 @@ export function getRecoveryQueryKey<config extends Config>(
 }
 
 // ============================================================================
+// getRecoveryStatusQueryKey
+// ============================================================================
+
+export namespace getRecoveryStatusQueryKey {
+  export type Parameters<config extends Config = Config> = {
+    requestId?: Hex;
+  };
+
+  export type Value<config extends Config = Config> = readonly [
+    'recoveryStatus',
+    {
+      requestId: Hex | undefined;
+    },
+  ];
+}
+
+/**
+ * Creates a query key for getRecoveryStatus.
+ * Used by useRecoveryStatus hook and for cache invalidation. Carries only the
+ * request id: the request is the same whichever connector reads it.
+ */
+export function getRecoveryStatusQueryKey<config extends Config>(
+  parameters: getRecoveryStatusQueryKey.Parameters<config>
+): getRecoveryStatusQueryKey.Value<config> {
+  const { requestId } = parameters;
+  return ['recoveryStatus', { requestId }] as const;
+}
+
+// ============================================================================
 // getAssetsQueryKey
 // ============================================================================
 
