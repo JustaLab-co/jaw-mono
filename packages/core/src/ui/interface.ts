@@ -18,6 +18,8 @@ export type UIRequestType =
     | 'wallet_revokePermissions'
     | 'wallet_setupRecovery'
     | 'wallet_cancelRecovery'
+    | 'wallet_startRecovery'
+    | 'wallet_approveRecovery'
     | 'personal_sign'
     | 'eth_signTypedData_v4'
     | 'wallet_sign'
@@ -211,6 +213,42 @@ export interface CancelRecoveryUIRequest extends BaseUIRequest {
 }
 
 /**
+ * Recovery start request (wallet_startRecovery)
+ *
+ * For a user who lost their passkeys: the wallet creates a new passkey, opens
+ * the request the guardians approve and shows the link to share with them.
+ * There is no session behind it, since the user has no account on this device,
+ * so nothing here comes from one.
+ */
+export interface StartRecoveryUIRequest extends BaseUIRequest {
+    type: 'wallet_startRecovery';
+    data: {
+        /** The account to recover, when the app named it; the screen asks when absent */
+        account?: Address;
+        /** The connected chain, or the app's default one */
+        chainId: number;
+        /** The page guardians open; the request id is appended as a path segment */
+        approveUrl: string;
+    };
+}
+
+/**
+ * Recovery approval request (wallet_approveRecovery)
+ *
+ * A guardian, signed in first when not already, approves one recovery request.
+ */
+export interface ApproveRecoveryUIRequest extends BaseUIRequest {
+    type: 'wallet_approveRecovery';
+    data: {
+        /** The guardian's account */
+        address: Address;
+        chainId: number;
+        /** The ceremony's request id, from the link the recovering user shared */
+        requestId: `0x${string}`;
+    };
+}
+
+/**
  * ERC-7871 PersonalSign request data
  */
 export interface PersonalSignRequestData {
@@ -285,6 +323,8 @@ export type UIRequest =
     | RevokePermissionUIRequest
     | SetupRecoveryUIRequest
     | CancelRecoveryUIRequest
+    | StartRecoveryUIRequest
+    | ApproveRecoveryUIRequest
     | WalletSignUIRequest
     | AddFundsUIRequest;
 

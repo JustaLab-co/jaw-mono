@@ -195,6 +195,18 @@ export type ApproveRecoveryParams = {
 };
 
 // @public
+export interface ApproveRecoveryUIRequest extends BaseUIRequest {
+    // (undocumented)
+    data: {
+        address: Address;
+        chainId: number;
+        requestId: `0x${string}`;
+    };
+    // (undocumented)
+    type: 'wallet_approveRecovery';
+}
+
+// @public
 export type Asset = {
     address: string | null;
     balance: string;
@@ -811,6 +823,9 @@ export function handleGetPermissionsRequest(request: RequestArguments, apiKey: s
 // @public
 export function handleGetRecoveryRequest(request: RequestArguments, apiKey: string | undefined, connectedAddress?: Address_2): Promise<RecoveryState>;
 
+// @public
+export function handleGetRecoveryStatusRequest(request: RequestArguments, apiKey: string | undefined): Promise<Ceremony>;
+
 // Warning: (ae-forgotten-export) The symbol "HexString" needs to be exported by the entry point index.d.ts
 //
 // @public
@@ -935,6 +950,7 @@ export interface JawProviderPreference {
     ens?: string;
     keysUrl?: string;
     mode?: ModeType;
+    recoveryApproveUrl?: string;
     serverUrl?: string;
     showTestnets?: boolean;
     transportMode?: 'popup' | 'iframe' | 'auto';
@@ -1127,6 +1143,12 @@ export interface NormalizedCancelRecoveryParams {
 }
 
 // @public
+export interface NormalizedRecoveryRequestParams {
+    // (undocumented)
+    requestId: Hex;
+}
+
+// @public
 export interface NormalizedSetupRecoveryParams {
     // (undocumented)
     capabilities?: RequestCapabilities;
@@ -1135,7 +1157,19 @@ export interface NormalizedSetupRecoveryParams {
 }
 
 // @public
+export interface NormalizedStartRecoveryParams {
+    // (undocumented)
+    account?: Address_2;
+}
+
+// @public
+export function normalizeRecoveryRequestParams(params: unknown, method: 'wallet_approveRecovery' | 'wallet_getRecoveryStatus'): NormalizedRecoveryRequestParams;
+
+// @public
 export function normalizeSetupRecoveryParams(params: unknown): NormalizedSetupRecoveryParams;
+
+// @public
+export function normalizeStartRecoveryParams(params: unknown): NormalizedStartRecoveryParams;
 
 // @public (undocumented)
 export interface PasskeyAccount {
@@ -2152,6 +2186,18 @@ export interface StartRecoveryOptions {
     username: string;
 }
 
+// @public
+export interface StartRecoveryUIRequest extends BaseUIRequest {
+    // (undocumented)
+    data: {
+        account?: Address;
+        chainId: number;
+        approveUrl: string;
+    };
+    // (undocumented)
+    type: 'wallet_startRecovery';
+}
+
 // Warning: (ae-forgotten-export) The symbol "StorePermissionApiRequest" needs to be exported by the entry point index.d.ts
 //
 // @public
@@ -2373,10 +2419,10 @@ export interface UIHandlerOptions {
 }
 
 // @public
-export type UIRequest = ConnectUIRequest | SignatureUIRequest | TypedDataUIRequest | TransactionUIRequest | SendTransactionUIRequest | PermissionUIRequest | RevokePermissionUIRequest | SetupRecoveryUIRequest | CancelRecoveryUIRequest | WalletSignUIRequest | AddFundsUIRequest;
+export type UIRequest = ConnectUIRequest | SignatureUIRequest | TypedDataUIRequest | TransactionUIRequest | SendTransactionUIRequest | PermissionUIRequest | RevokePermissionUIRequest | SetupRecoveryUIRequest | CancelRecoveryUIRequest | StartRecoveryUIRequest | ApproveRecoveryUIRequest | WalletSignUIRequest | AddFundsUIRequest;
 
 // @public
-export type UIRequestType = 'wallet_connect' | 'wallet_sendCalls' | 'eth_sendTransaction' | 'wallet_grantPermissions' | 'wallet_revokePermissions' | 'wallet_setupRecovery' | 'wallet_cancelRecovery' | 'personal_sign' | 'eth_signTypedData_v4' | 'wallet_sign' | 'wallet_addFunds';
+export type UIRequestType = 'wallet_connect' | 'wallet_sendCalls' | 'eth_sendTransaction' | 'wallet_grantPermissions' | 'wallet_revokePermissions' | 'wallet_setupRecovery' | 'wallet_cancelRecovery' | 'wallet_startRecovery' | 'wallet_approveRecovery' | 'personal_sign' | 'eth_signTypedData_v4' | 'wallet_sign' | 'wallet_addFunds';
 
 // @public
 export interface UIResponse<T = unknown> {
@@ -2420,6 +2466,16 @@ export type ViemRPCParams<M extends string> = ExtractParams<WalletRpcSchema, M>;
 //
 // @public
 export type ViemRPCReturnType<M extends string> = ExtractReturnType<WalletRpcSchema, M>;
+
+// @public
+export type WalletApproveRecoveryRequest = {
+    method: 'wallet_approveRecovery';
+    params: [
+        {
+        requestId: Hex;
+    }
+    ];
+};
 
 // @public
 export type WalletCancelRecoveryRequest = {
@@ -2501,6 +2557,16 @@ export type WalletGetRecoveryRequest = {
 };
 
 // @public
+export type WalletGetRecoveryStatusRequest = {
+    method: 'wallet_getRecoveryStatus';
+    params: [
+        {
+        requestId: Hex;
+    }
+    ];
+};
+
+// @public
 export type WalletGrantPermissionsRequest = {
     method: 'wallet_grantPermissions';
     params: [
@@ -2563,6 +2629,16 @@ export interface WalletSignUIRequest extends BaseUIRequest {
     // (undocumented)
     type: 'wallet_sign';
 }
+
+// @public
+export type WalletStartRecoveryRequest = {
+    method: 'wallet_startRecovery';
+    params?: [
+        {
+        account?: Address_2;
+    }
+    ];
+};
 
 // (No @packageDocumentation comment for this package)
 

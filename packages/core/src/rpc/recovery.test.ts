@@ -14,11 +14,14 @@ import {
     getCeremony,
     getRecoveryConfig,
     handleGetRecoveryRequest,
+    handleGetRecoveryStatusRequest,
     isFirstRecoverySetup,
     listCeremonies,
     minimumRecoveryDelay,
     normalizeCancelRecoveryParams,
+    normalizeRecoveryRequestParams,
     normalizeSetupRecoveryParams,
+    normalizeStartRecoveryParams,
     planRecoveryChanges,
     recoverTypedData,
     recoveryAdminTypedData,
@@ -509,6 +512,113 @@ describe('normalizeCancelRecoveryParams', () => {
         for (const params of [undefined, null, [], [null], ['0x'], {}]) {
             expect(() => normalizeCancelRecoveryParams(params)).toThrow(/expected a single object parameter/);
         }
+    });
+});
+
+describe('normalizeStartRecoveryParams', () => {
+    // The account is optional: without one, the screen asks which account to recover.
+    it.each([
+        ['no params', undefined],
+        ['an empty params list', []],
+        ['an empty object', [{}]],
+        ['a null account', [{ account: null }]],
+    ])('accepts %s as naming no account', (_name, params) => {
+        expect(normalizeStartRecoveryParams(params)).toEqual({});
+    });
+
+    it('checksums the account the app names', () => {
+        const lower = '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd';
+        expect(normalizeStartRecoveryParams([{ account: lower }])).toEqual({
+            account: '0xABcdEFABcdEFabcdEfAbCdefabcdeFABcDEFabCD',
+        });
+    });
+
+    it('does not read keys other than the account', () => {
+        expect(normalizeStartRecoveryParams([{ account: ACCOUNT, approveUrl: 'https://evil.example' }])).toEqual({
+            account: ACCOUNT,
+        });
+    });
+
+    it.each([
+        ['truncated', '0xabc'],
+        ['not hex', `0x${'zz'.repeat(20)}`],
+        ['a number', 1],
+        ['an empty string', ''],
+    ])('rejects an account that is %s with -32602', (_name, account) => {
+        expect(() => normalizeStartRecoveryParams([{ account }])).toThrow(/wallet_startRecovery: account/);
+        try {
+            normalizeStartRecoveryParams([{ account }]);
+        } catch (err) {
+            expect((err as { code?: number }).code).toBe(-32602);
+        }
+    });
+
+    it('rejects a malformed envelope', () => {
+        for (const params of [null, [null], ['0x'], {}]) {
+            expect(() => normalizeStartRecoveryParams(params)).toThrow(/expected a single object parameter/);
+        }
+    });
+});
+
+describe('normalizeRecoveryRequestParams', () => {
+    const METHODS = ['wallet_approveRecovery', 'wallet_getRecoveryStatus'] as const;
+
+    it.each(METHODS)('%s: accepts a 32-byte request id and reads nothing else', (method) => {
+        expect(normalizeRecoveryRequestParams([{ requestId: ID, capabilities: { foo: 1 } }], method)).toEqual({
+            requestId: ID,
+        });
+    });
+
+    // Both are about one ceremony, so a request that names no usable request id
+    // cannot succeed: no screen opens and nothing is read for it.
+    describe.each(METHODS)('%s', (method) => {
+        it.each(REJECTED_IDS)('rejects a request id that is %s with -32602', (_name, requestId) => {
+            expect(() => normalizeRecoveryRequestParams([{ requestId }], method)).toThrow(
+                `${method}: requestId must be a 32-byte hex value`
+            );
+            try {
+                normalizeRecoveryRequestParams([{ requestId }], method);
+            } catch (err) {
+                expect((err as { code?: number }).code).toBe(-32602);
+            }
+        });
+
+        it('rejects a malformed envelope', () => {
+            for (const params of [undefined, null, [], [null], ['0x'], {}]) {
+                expect(() => normalizeRecoveryRequestParams(params, method)).toThrow(
+                    /expected a single object parameter/
+                );
+            }
+        });
+    });
+});
+
+describe('handleGetRecoveryStatusRequest', () => {
+    const CEREMONY = { requestId: ID, account: ACCOUNT, subject: SUBJECT, collected: 1, threshold: 2 };
+
+    beforeEach(() => {
+        vi.mocked(restCall).mockReset();
+        vi.mocked(restCall).mockResolvedValue(CEREMONY as never);
+    });
+
+    test('Given a request id, When handled, Then the ceremony it names is read with the key and returned', async () => {
+        const result = await handleGetRecoveryStatusRequest(
+            { method: 'wallet_getRecoveryStatus', params: [{ requestId: ID }] },
+            KEY
+        );
+
+        expect(result).toEqual(CEREMONY);
+        expect(vi.mocked(restCall).mock.calls).toEqual([
+            ['GET_CEREMONY', 'GET', {}, { 'x-api-key': KEY }, { requestId: ID }],
+        ]);
+    });
+
+    test('Given a malformed request id, When handled, Then it rejects before anything is read', async () => {
+        await expect(
+            handleGetRecoveryStatusRequest({ method: 'wallet_getRecoveryStatus', params: [{ requestId: '0xab' }] }, KEY)
+        ).rejects.toMatchObject({ code: -32602, message: expect.stringContaining('requestId') });
+
+        expect(restCall).not.toHaveBeenCalled();
     });
 });
 

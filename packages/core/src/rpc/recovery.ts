@@ -1,6 +1,7 @@
 import {
     encodeAbiParameters,
     encodeFunctionData,
+    getAddress,
     isHex,
     keccak256,
     pad,
@@ -336,6 +337,49 @@ export type WalletGetRecoveryRequest = {
     ];
 };
 
+/**
+ * Request parameters for wallet_startRecovery
+ *
+ * For a user who lost their passkeys: the wallet creates a new passkey and
+ * opens the request the guardians approve. Works with no session and no
+ * account on the device.
+ */
+export type WalletStartRecoveryRequest = {
+    method: 'wallet_startRecovery';
+    params?: [
+        {
+            /** The account to recover, when the app knows it; the screen asks when omitted */
+            account?: Address;
+        },
+    ];
+};
+
+/**
+ * Request parameters for wallet_approveRecovery: one guardian's approval
+ */
+export type WalletApproveRecoveryRequest = {
+    method: 'wallet_approveRecovery';
+    params: [
+        {
+            /** The ceremony's request id, from the link the recovering user shared */
+            requestId: Hex;
+        },
+    ];
+};
+
+/**
+ * Request parameters for wallet_getRecoveryStatus: one request's progress
+ */
+export type WalletGetRecoveryStatusRequest = {
+    method: 'wallet_getRecoveryStatus';
+    params: [
+        {
+            /** The ceremony's request id, the same on every chain */
+            requestId: Hex;
+        },
+    ];
+};
+
 /** A wallet_setupRecovery request after validation: the end state is guaranteed present. */
 export interface NormalizedSetupRecoveryParams {
     /** The methods, commitments in their canonical form (see toOwnerBytes) */
@@ -349,6 +393,16 @@ export interface NormalizedSetupRecoveryParams {
 export interface NormalizedCancelRecoveryParams {
     requestId: Hex;
     capabilities?: RequestCapabilities;
+}
+
+/** A wallet_startRecovery request after validation: the account, when named, is checksummed. */
+export interface NormalizedStartRecoveryParams {
+    account?: Address;
+}
+
+/** A wallet_approveRecovery or wallet_getRecoveryStatus request after validation: the request id is guaranteed present. */
+export interface NormalizedRecoveryRequestParams {
+    requestId: Hex;
 }
 
 /**
@@ -898,6 +952,8 @@ export async function approveCeremonyAs(
 const SETUP_METHOD = 'wallet_setupRecovery';
 const CANCEL_METHOD = 'wallet_cancelRecovery';
 const GET_METHOD = 'wallet_getRecovery';
+const START_METHOD = 'wallet_startRecovery';
+const STATUS_METHOD = 'wallet_getRecoveryStatus';
 
 /** The largest delay the manager stores: `addRecovery` takes a uint32 */
 const MAX_RECOVERY_DELAY = 0xffffffff;
@@ -1014,6 +1070,36 @@ export function normalizeCancelRecoveryParams(params: unknown): NormalizedCancel
 }
 
 /**
+ * Validates wallet_startRecovery params. Runs in `validateSigningRequest`, so a
+ * malformed account is refused with -32602 before any screen opens, in both
+ * modes.
+ *
+ * The account is optional, and so is the envelope that carries it: without
+ * one, the screen asks which account to recover.
+ */
+export function normalizeStartRecoveryParams(params: unknown): NormalizedStartRecoveryParams {
+    if (params === undefined || (Array.isArray(params) && params.length === 0)) return {};
+    const envelope = requireParamsObject(params, START_METHOD);
+    const account = optionalHexAddress(envelope.account, START_METHOD, 'account');
+    return account ? { account: getAddress(account) } : {};
+}
+
+/**
+ * Validates wallet_approveRecovery and wallet_getRecoveryStatus params.
+ *
+ * Both are about one ceremony, so a missing request id is a malformed request,
+ * as for the veto: refused here with -32602 before any screen opens or
+ * anything is read.
+ */
+export function normalizeRecoveryRequestParams(
+    params: unknown,
+    method: 'wallet_approveRecovery' | 'wallet_getRecoveryStatus'
+): NormalizedRecoveryRequestParams {
+    const envelope = requireParamsObject(params, method);
+    return { requestId: requireHexBytes32(envelope.requestId, method, 'requestId') };
+}
+
+/**
  * Handle wallet_getRecovery request
  *
  * Reads the account named in the params, or the connected account when the
@@ -1042,6 +1128,25 @@ export async function handleGetRecoveryRequest(
         listCeremonies(address, { pending: true }, apiKey),
     ]);
     return { chains, pending };
+}
+
+/**
+ * Handle wallet_getRecoveryStatus request
+ *
+ * Reads one request's progress: the approvals collected and its state on every
+ * chain. The request id names the ceremony, so it needs no session, as for a
+ * recovering user or a guardian following the shared link.
+ *
+ * @param request - The wallet_getRecoveryStatus request
+ * @param apiKey - API key for the recovery backend, if the caller has one
+ * @returns The ceremony, as getCeremony returns it
+ */
+export async function handleGetRecoveryStatusRequest(
+    request: RequestArguments,
+    apiKey: string | undefined
+): Promise<Ceremony> {
+    const { requestId } = normalizeRecoveryRequestParams(request.params, STATUS_METHOD);
+    return await getCeremony(requestId, apiKey);
 }
 
 const ADMIN_OP_COMPONENTS = [

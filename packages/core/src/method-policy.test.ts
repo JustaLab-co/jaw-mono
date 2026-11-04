@@ -8,6 +8,7 @@ describe('method-policy', () => {
         expect(isSilentMethod('net_version')).toBe(true);
         expect(isSilentMethod('wallet_getCapabilities')).toBe(true);
         expect(isSilentMethod('wallet_getRecovery')).toBe(true);
+        expect(isSilentMethod('wallet_getRecoveryStatus')).toBe(true);
     });
 
     it('never classifies a connecting/signing/authority method as silent', () => {
@@ -24,6 +25,9 @@ describe('method-policy', () => {
             // Change who can get the account back, or veto a recovery in flight.
             'wallet_setupRecovery',
             'wallet_cancelRecovery',
+            // Create a passkey that becomes an owner, or approve one as a guardian.
+            'wallet_startRecovery',
+            'wallet_approveRecovery',
             // Shows the account's own address on a wallet surface. Serving it
             // headlessly would let a page read the address with no user gesture.
             'wallet_addFunds',

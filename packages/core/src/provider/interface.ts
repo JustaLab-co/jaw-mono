@@ -81,6 +81,12 @@ export interface JawProviderPreference {
      * Ignored when mode is Mode.AppSpecific.
      */
     transportMode?: 'popup' | 'iframe' | 'auto';
+    /**
+     * The page guardians open to approve a recovery started from this app
+     * (default: https://keys.jaw.id/recover/approve). The request id is appended
+     * as a path segment.
+     */
+    recoveryApproveUrl?: string;
 }
 
 export type ProviderEventCallback = ProviderInterface['emit'];

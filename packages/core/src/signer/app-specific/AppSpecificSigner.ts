@@ -13,6 +13,8 @@ import {
     RevokePermissionUIRequest,
     SetupRecoveryUIRequest,
     CancelRecoveryUIRequest,
+    StartRecoveryUIRequest,
+    ApproveRecoveryUIRequest,
     WalletSignUIRequest,
     AddFundsUIRequest,
     PersonalSignRequestData,
@@ -30,6 +32,8 @@ import {
     normalizeSendTransactionParams,
     normalizeSetupRecoveryParams,
     normalizeCancelRecoveryParams,
+    normalizeStartRecoveryParams,
+    normalizeRecoveryRequestParams,
 } from '../../rpc/index.js';
 import { store, SDKChain } from '../../store/index.js';
 import { ensureIntNumber } from '../../utils/index.js';
@@ -483,6 +487,66 @@ export class AppSpecificSigner extends JAWSigner {
                         chainId: resolvedChain.id,
                         requestId: cancel.requestId,
                         capabilities: cancel.capabilities,
+                    },
+                };
+
+                const response = await this.uiHandler.request(uiRequest);
+
+                if (!response.approved) {
+                    throw response.error || UIError.userRejected();
+                }
+
+                return response.data;
+            }
+
+            case 'wallet_startRecovery': {
+                const start =
+                    normalized?.method === 'wallet_startRecovery'
+                        ? normalized.params
+                        : normalizeStartRecoveryParams(request.params);
+
+                const resolvedChain = this.resolveChain();
+
+                const uiRequest: StartRecoveryUIRequest = {
+                    id: crypto.randomUUID(),
+                    type: 'wallet_startRecovery',
+                    timestamp: Date.now(),
+                    correlationId,
+                    data: {
+                        // From the params alone: the user recovering has no
+                        // account on this device to take it from.
+                        account: start.account,
+                        chainId: resolvedChain.id,
+                        approveUrl: this.recoveryApproveUrl(),
+                    },
+                };
+
+                const response = await this.uiHandler.request(uiRequest);
+
+                if (!response.approved) {
+                    throw response.error || UIError.userRejected();
+                }
+
+                return response.data;
+            }
+
+            case 'wallet_approveRecovery': {
+                const approve =
+                    normalized?.method === 'wallet_approveRecovery'
+                        ? normalized.params
+                        : normalizeRecoveryRequestParams(request.params, 'wallet_approveRecovery');
+
+                const resolvedChain = this.resolveChain();
+
+                const uiRequest: ApproveRecoveryUIRequest = {
+                    id: crypto.randomUUID(),
+                    type: 'wallet_approveRecovery',
+                    timestamp: Date.now(),
+                    correlationId,
+                    data: {
+                        address: this.accounts[0],
+                        chainId: resolvedChain.id,
+                        requestId: approve.requestId,
                     },
                 };
 

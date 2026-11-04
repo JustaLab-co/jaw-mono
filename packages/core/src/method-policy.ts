@@ -19,8 +19,8 @@
 /**
  * Read-only methods safe to resolve without any user interaction. They return
  * already-known/already-authorized state (the connected accounts, the chain,
- * capabilities, call status/history, assets, permissions, recovery config) and
- * never mutate authority.
+ * capabilities, call status/history, assets, permissions, recovery config and
+ * the progress of a recovery request) and never mutate authority.
  *
  * `eth_accounts` is the keystone: wallet libraries (wagmi) call it on mount to
  * decide whether to reconnect, so it has to answer silently — but only after
@@ -38,12 +38,13 @@ export const SILENT_METHODS: readonly string[] = [
     'wallet_getAssets',
     'wallet_getPermissions',
     'wallet_getRecovery',
+    'wallet_getRecoveryStatus',
 ];
 
 /**
  * Methods that require an interactive, user-visible flow. They either create a
  * credential, establish/elevate a connection, produce a signature, send calls,
- * change delegated authority, or change who can recover the account. None of
+ * change delegated authority, or change who can recover or own the account. None of
  * these may EVER be served headlessly.
  */
 export const INTERACTIVE_METHODS: readonly string[] = [
@@ -60,6 +61,8 @@ export const INTERACTIVE_METHODS: readonly string[] = [
     'wallet_revokePermissions',
     'wallet_setupRecovery',
     'wallet_cancelRecovery',
+    'wallet_startRecovery',
+    'wallet_approveRecovery',
     'wallet_addFunds',
 ];
 
