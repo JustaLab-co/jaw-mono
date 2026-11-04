@@ -5,7 +5,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Hex } from 'viem';
-import { Account } from './Account.js';
+import { Account, RecoveryNotFinishedError } from './Account.js';
 import { createSmartAccount } from './smartAccount.js';
 import { deriveAccountRecordV1, deriveAccountRecordV2, type AccountRecord } from './accountRecord.js';
 import { createMemoryStorage } from '../storage-manager/index.js';
@@ -39,6 +39,37 @@ vi.mock('./smartAccount.js', async (importOriginal) => ({
 }));
 
 vi.mock('../analytics/index.js', () => ({ logAccountIssuance: vi.fn() }));
+
+// The chain reads: whether a key is an owner of an account. Only the client is
+// faked; the read it is asked to make is recorded.
+const { ownerReads } = vi.hoisted(() => ({
+    ownerReads: {
+        owner: false as boolean | Error,
+        asked: [] as Array<{ chainId: number; address: string; args: unknown }>,
+    },
+}));
+vi.mock('viem', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('viem')>();
+    return {
+        ...actual,
+        createPublicClient: vi.fn(({ chain }: { chain: { id: number } }) => ({
+            readContract: async ({
+                address,
+                functionName,
+                args,
+            }: {
+                address: string;
+                functionName: string;
+                args: unknown;
+            }) => {
+                if (functionName !== 'isOwnerBytes') throw new Error(`unexpected read ${functionName}`);
+                ownerReads.asked.push({ chainId: chain.id, address, args });
+                if (ownerReads.owner instanceof Error) throw ownerReads.owner;
+                return ownerReads.owner;
+            },
+        })),
+    };
+});
 
 // factory.getAddress([publicKey, permissionsManager], 0) on Base
 const PUBLIC_KEY =
@@ -98,6 +129,8 @@ const config = (storage: ReturnType<typeof createMemoryStorage>) => ({
 beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(authenticateWithWebAuthnUtils).mockResolvedValue({} as never);
+    ownerReads.owner = false;
+    ownerReads.asked = [];
 });
 
 describe('Account.get with a credential id', () => {
@@ -120,14 +153,17 @@ describe('Account.get with a credential id', () => {
         expect(recordUsed()).toEqual(record);
     });
 
-    it("ignores a stored record that belongs to another key, and keeps the user's own address", async () => {
+    // A record that is not the key's is the account a recovery added it to,
+    // never silently replaced by the key's own derived address.
+    it('refuses a stored record that belongs to another key while the chain does not list this key as its owner', async () => {
         const foreign = deriveAccountRecordV1(OTHER_PUBLIC_KEY);
-        const storage = storageWith([storedEntry({ address: ADDRESS, account: foreign })]);
+        const storage = storageWith([storedEntry({ address: foreign.address, account: foreign })]);
 
-        const account = await Account.get(config(storage), CREDENTIAL_ID);
+        const error = await Account.get(config(storage), CREDENTIAL_ID).catch((e: unknown) => e);
 
-        expect(account.address).toBe(ADDRESS);
-        expect(recordUsed()?.address).toBe(ADDRESS);
+        expect(error).toBeInstanceOf(RecoveryNotFinishedError);
+        expect((error as RecoveryNotFinishedError).account).toBe(foreign.address);
+        expect(createSmartAccount).not.toHaveBeenCalled();
     });
 
     it('signs in when the record cannot be stored', async () => {
@@ -191,12 +227,17 @@ describe('Account.restore', () => {
         );
     });
 
-    it('fails when the credential is not stored on this device and the backend record is not this key’s', async () => {
-        vi.mocked(fetchAccountRecordFromBackend).mockResolvedValue(deriveAccountRecordV2(OTHER_PUBLIC_KEY));
+    it('fails when the credential is not stored on this device and the backend record is not this key’s, while the chain does not list this key as its owner', async () => {
+        const foreign = deriveAccountRecordV2(OTHER_PUBLIC_KEY);
+        vi.mocked(fetchAccountRecordFromBackend).mockResolvedValue(foreign);
 
-        await expect(Account.restore(config(storageWith([])), CREDENTIAL_ID, PUBLIC_KEY)).rejects.toBeInstanceOf(
-            PasskeyLookupError
+        const error = await Account.restore(config(storageWith([])), CREDENTIAL_ID, PUBLIC_KEY).catch(
+            (e: unknown) => e
         );
+
+        expect(error).toBeInstanceOf(RecoveryNotFinishedError);
+        expect((error as RecoveryNotFinishedError).account).toBe(foreign.address);
+        expect(createSmartAccount).not.toHaveBeenCalled();
     });
 
     it('does not call the backend for a credential stored on this device', async () => {
@@ -312,12 +353,134 @@ describe('Account.import', () => {
         expect(storage.getItem<{ address: string }>('authState')?.address).toBe(ADDRESS);
     });
 
-    it('fails, and stores nothing, when the backend returns a record that is not this key’s', async () => {
+    it('fails, and stores nothing, when the backend returns a record that is not this key’s and the chain does not list this key as its owner', async () => {
         const storage = storageWith([]);
-        vi.mocked(fetchAccountRecordFromBackend).mockResolvedValue(deriveAccountRecordV1(OTHER_PUBLIC_KEY));
+        const foreign = deriveAccountRecordV1(OTHER_PUBLIC_KEY);
+        vi.mocked(fetchAccountRecordFromBackend).mockResolvedValue(foreign);
 
-        await expect(Account.import(config(storage))).rejects.toBeInstanceOf(PasskeyLookupError);
+        const error = await Account.import(config(storage)).catch((e: unknown) => e);
+
+        expect(error).toBeInstanceOf(RecoveryNotFinishedError);
+        expect((error as RecoveryNotFinishedError).account).toBe(foreign.address);
         expect(storedAccounts(storage)).toEqual([]);
+        expect(storage.getItem('authState')).toBeFalsy();
+    });
+});
+
+/**
+ * A passkey a recovery added to an existing account has a record that is not
+ * its own: the account another key created. It opens that account only once
+ * the chain lists it as an owner there.
+ */
+describe('signing in with a passkey a recovery added to an account', () => {
+    const FOREIGN = deriveAccountRecordV2(OTHER_PUBLIC_KEY);
+
+    const recoveredEntry = () => storedEntry({ address: FOREIGN.address, account: FOREIGN, isImported: true });
+
+    function signedIn(storage: ReturnType<typeof createMemoryStorage>) {
+        storage.setItem('authState', { isLoggedIn: true, address: FOREIGN.address, credentialId: CREDENTIAL_ID });
+        return storage;
+    }
+
+    beforeEach(() => {
+        vi.mocked(importPasskeyUtils).mockResolvedValue({
+            credential: { id: CREDENTIAL_ID, publicKey: PUBLIC_KEY },
+        } as never);
+        vi.mocked(lookupPasskeyFromBackend).mockResolvedValue({
+            credentialId: CREDENTIAL_ID,
+            publicKey: PUBLIC_KEY,
+            displayName: 'alice',
+        });
+        vi.mocked(fetchAccountRecordFromBackend).mockResolvedValue(FOREIGN);
+    });
+
+    const entryPoints = [
+        ['Account.get with a credential id', () => Account.get(config(storageWith([recoveredEntry()])), CREDENTIAL_ID)],
+        ['Account.get restoring the session', () => Account.get(config(signedIn(storageWith([recoveredEntry()]))))],
+        [
+            'Account.restore with the entry stored',
+            () => Account.restore(config(storageWith([recoveredEntry()])), CREDENTIAL_ID, PUBLIC_KEY),
+        ],
+        [
+            'Account.restore with no entry on this device',
+            () => Account.restore(config(storageWith([])), CREDENTIAL_ID, PUBLIC_KEY),
+        ],
+        ['Account.import', () => Account.import(config(storageWith([])))],
+    ] as const;
+
+    it.each(entryPoints)(
+        "%s opens the record's account once the chain lists this key as an owner there",
+        async (_, signIn) => {
+            ownerReads.owner = true;
+
+            const account = await signIn();
+
+            expect(account.address).toBe(FOREIGN.address);
+            expect(recordUsed()).toEqual(FOREIGN);
+            // The read is for this key, at the record's address, on the Account's chain.
+            expect(ownerReads.asked).toEqual([{ chainId: 8453, address: FOREIGN.address, args: [PUBLIC_KEY] }]);
+        }
+    );
+
+    it.each(entryPoints)(
+        '%s refuses with RecoveryNotFinishedError, naming the account, while this key is not an owner',
+        async (_, signIn) => {
+            const error = await signIn().catch((e: unknown) => e);
+
+            expect(error).toBeInstanceOf(RecoveryNotFinishedError);
+            expect((error as RecoveryNotFinishedError).account).toBe(FOREIGN.address);
+            expect(createSmartAccount).not.toHaveBeenCalled();
+        }
+    );
+
+    it.each(entryPoints)('%s fails, rather than opening anything, when the chain cannot be read', async (_, signIn) => {
+        ownerReads.owner = new Error('rpc down');
+
+        await expect(signIn()).rejects.toMatchObject({ code: -32603 });
+        expect(createSmartAccount).not.toHaveBeenCalled();
+    });
+
+    it('import stores the record, so the next sign-in checks the chain again', async () => {
+        ownerReads.owner = true;
+        const storage = storageWith([]);
+
+        await Account.import(config(storage));
+
+        expect(storedAccounts(storage)[0]).toMatchObject({ address: FOREIGN.address, account: FOREIGN });
+        expect(storage.getItem<{ address: string }>('authState')?.address).toBe(FOREIGN.address);
+    });
+
+    it.each([
+        [
+            'Account.get with an entry stored before records existed',
+            () => Account.get(config(storageWith([storedEntry()])), CREDENTIAL_ID),
+        ],
+        [
+            "Account.get with the key's own record",
+            () =>
+                Account.get(
+                    config(storageWith([storedEntry({ account: deriveAccountRecordV2(PUBLIC_KEY) })])),
+                    CREDENTIAL_ID
+                ),
+        ],
+        [
+            "Account.restore with the key's own record from the backend",
+            async () => {
+                vi.mocked(fetchAccountRecordFromBackend).mockResolvedValue(deriveAccountRecordV2(PUBLIC_KEY));
+                return await Account.restore(config(storageWith([])), CREDENTIAL_ID, PUBLIC_KEY);
+            },
+        ],
+        [
+            "Account.import with the key's own record",
+            async () => {
+                vi.mocked(fetchAccountRecordFromBackend).mockResolvedValue(deriveAccountRecordV1(PUBLIC_KEY));
+                return await Account.import(config(storageWith([])));
+            },
+        ],
+    ])('%s reads nothing from the chain', async (_, signIn) => {
+        await signIn();
+
+        expect(ownerReads.asked).toEqual([]);
     });
 });
 

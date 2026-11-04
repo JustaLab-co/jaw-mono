@@ -1,10 +1,13 @@
 import { beforeEach, describe, expect, it, test, vi } from 'vitest';
-import { hashTypedData, type Hex } from 'viem';
+import { hashTypedData, recoverTypedDataAddress, type Hex } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
 import {
     AdminOpType,
     addRecoveryOp,
     approveCeremony,
+    approveRecovery,
     computeRecoveryId,
+    computeRequestId,
     createCeremony,
     diffRecoveryConfig,
     getAdminBatch,
@@ -21,6 +24,7 @@ import {
     recoveryAdminTypedData,
     submitAdminBatch,
     toOwnerBytes,
+    type Ceremony,
     type RecoveryChainConfig,
 } from './recovery.js';
 import { RECOVERY_MANAGER_ADDRESS, SIGNATURE_RECOVERY_PROVIDER_ADDRESS } from '../constants.js';
@@ -138,6 +142,26 @@ describe('the backend client', () => {
         await listCeremonies(ACCOUNT, undefined, KEY);
 
         expect(sentCall()[2]).toEqual({ account: ACCOUNT });
+    });
+
+    test.each([
+        [true, 'true'],
+        [false, 'false'],
+    ])('Given a pending filter of %s, When ceremonies are listed, Then it travels as %s', async (pending, query) => {
+        await listCeremonies(ACCOUNT, { pending }, KEY);
+
+        expect(sentCall()).toEqual([
+            'LIST_CEREMONIES',
+            'GET',
+            { account: ACCOUNT, pending: query },
+            { 'x-api-key': KEY },
+        ]);
+    });
+
+    test('Given both filters, When ceremonies are listed, Then both travel', async () => {
+        await listCeremonies(ACCOUNT, { executed: false, pending: true }, KEY);
+
+        expect(sentCall()[2]).toEqual({ account: ACCOUNT, executed: 'false', pending: 'true' });
     });
 });
 
@@ -392,7 +416,7 @@ describe('handleGetRecoveryRequest', () => {
         expect(state).toEqual({ chains: [CHAIN], pending: [PENDING] });
         expect(reads()).toEqual([
             ['GET_RECOVERY_CONFIG', 'GET', {}, { 'x-api-key': KEY }, { account: ACCOUNT }],
-            ['LIST_CEREMONIES', 'GET', { account: ACCOUNT, executed: 'false' }, { 'x-api-key': KEY }],
+            ['LIST_CEREMONIES', 'GET', { account: ACCOUNT, pending: 'true' }, { 'x-api-key': KEY }],
         ]);
     });
 
@@ -401,7 +425,7 @@ describe('handleGetRecoveryRequest', () => {
 
         expect(reads().map((call) => call[4] ?? call[2])).toEqual([
             { account: CONNECTED },
-            { account: CONNECTED, executed: 'false' },
+            { account: CONNECTED, pending: 'true' },
         ]);
     });
 
@@ -648,5 +672,119 @@ describe('normalizeSetupRecoveryParams', () => {
     it('accepts a method whose provider differs from an otherwise identical one', () => {
         const params = [{ recoveries: [method(), method({ provider: OTHER_PROVIDER })], threshold: 1 }];
         expect(normalizeSetupRecoveryParams(params).recoveries).toHaveLength(2);
+    });
+});
+
+describe('approveRecovery', () => {
+    // anvil's third and fourth default keys
+    const GUARDIAN = privateKeyToAccount('0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a');
+    const STRANGER = privateKeyToAccount('0x7c852118294e51e653712a81e05800f419141751be58f605c371e15141b007a6');
+    const SALT = `0x${'22'.repeat(32)}` as const;
+    const REQUEST_ID = computeRequestId(ACCOUNT, SUBJECT, SALT);
+    const OTHER_GUARDIAN = toOwnerBytes('0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb');
+
+    function guardian(commitment: Hex, provider: Hex = PROVIDER) {
+        return {
+            recoveryId: computeRecoveryId(ACCOUNT, provider, commitment),
+            provider,
+            commitment,
+            delay: 60,
+            approvedAt: null,
+        };
+    }
+
+    let ceremony: Ceremony;
+
+    beforeEach(() => {
+        ceremony = {
+            requestId: REQUEST_ID,
+            account: ACCOUNT,
+            subject: SUBJECT,
+            salt: SALT,
+            expiry: '2030-01-01T00:00:00.000Z',
+            createdAt: '2029-12-31T00:00:00.000Z',
+            threshold: 2,
+            collected: 0,
+            guardians: [guardian(OTHER_GUARDIAN), guardian(toOwnerBytes(GUARDIAN.address))],
+            chains: [],
+        };
+        vi.mocked(restCall).mockReset();
+        vi.mocked(restCall).mockImplementation((async (route: string) => {
+            if (route === 'GET_CEREMONY') return ceremony;
+            if (route === 'APPROVE_CEREMONY') return { collected: 1, threshold: 2, queued: false };
+            throw new Error(`unexpected route ${route}`);
+        }) as never);
+    });
+
+    /** The approval posted to the backend, if any. */
+    function posted() {
+        const call = vi.mocked(restCall).mock.calls.find(([route]) => route === 'APPROVE_CEREMONY');
+        return call && { body: call[2] as { recoveryId: Hex; proof: Hex }, pathParams: call[4] };
+    }
+
+    /** A signer that records whether it was asked to sign. */
+    function spied(account: typeof GUARDIAN) {
+        return { address: account.address, signTypedData: vi.fn(account.signTypedData) };
+    }
+
+    it('signs the ceremony the backend holds, as its guardian, and posts the proof under the request id', async () => {
+        const approval = await approveRecovery({ requestId: REQUEST_ID, signer: GUARDIAN, apiKey: KEY });
+
+        expect(approval).toEqual({ collected: 1, threshold: 2, queued: false });
+        const approved = posted();
+        expect(approved?.pathParams).toEqual({ requestId: REQUEST_ID });
+        expect(approved?.body.recoveryId).toBe(computeRecoveryId(ACCOUNT, PROVIDER, toOwnerBytes(GUARDIAN.address)));
+        const signer = await recoverTypedDataAddress({
+            ...recoverTypedData({ account: ACCOUNT, subject: SUBJECT, salt: SALT, expiry: ceremony.expiry }),
+            signature: approved?.body.proof ?? '0x',
+        });
+        expect(signer).toBe(GUARDIAN.address);
+    });
+
+    it('reads the ceremony with the api key', async () => {
+        await approveRecovery({ requestId: REQUEST_ID, signer: GUARDIAN, apiKey: KEY });
+
+        expect(vi.mocked(restCall).mock.calls[0]).toEqual([
+            'GET_CEREMONY',
+            'GET',
+            {},
+            { 'x-api-key': KEY },
+            { requestId: REQUEST_ID },
+        ]);
+    });
+
+    it.each([
+        ['a signer that is no guardian', () => spied(STRANGER), () => undefined],
+        [
+            'a guardian whose method uses another provider',
+            () => spied(GUARDIAN),
+            () => {
+                ceremony.guardians = [guardian(toOwnerBytes(GUARDIAN.address), OTHER_PROVIDER)];
+            },
+        ],
+    ])('refuses %s before anything is signed or posted', async (_, signer, arrange) => {
+        arrange();
+        const guardianSigner = signer();
+
+        await expect(approveRecovery({ requestId: REQUEST_ID, signer: guardianSigner })).rejects.toMatchObject({
+            code: -32602,
+        });
+
+        expect(guardianSigner.signTypedData).not.toHaveBeenCalled();
+        expect(posted()).toBeUndefined();
+    });
+
+    it.each([
+        ['a salt its id does not hash from', { salt: `0x${'33'.repeat(32)}` as Hex }],
+        ['a subject its id does not hash from', { subject: `0x${'55'.repeat(64)}` as Hex }],
+        ['another request id', { requestId: `0x${'ee'.repeat(32)}` as Hex }],
+    ])('refuses a ceremony that comes back with %s, before anything is signed', async (_, change) => {
+        ceremony = { ...ceremony, ...change };
+        const signer = spied(GUARDIAN);
+
+        await expect(approveRecovery({ requestId: REQUEST_ID, signer })).rejects.toMatchObject({ code: -32602 });
+
+        expect(signer.signTypedData).not.toHaveBeenCalled();
+        expect(posted()).toBeUndefined();
     });
 });

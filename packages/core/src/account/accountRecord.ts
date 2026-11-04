@@ -158,14 +158,16 @@ function sameHex(value: unknown, expected: Hex): boolean {
  * account has no other way to be found. A caller that may hold a v2 account
  * must have its record, from storage or the backend, before it gets here.
  *
- * FALLBACK, VALID ONLY WHILE NO ACCOUNT ROTATES. Deriving from the signer's
- * public key gives the right address only for a key that created its account.
- * Once the recovery module lets a passkey be added to an existing account, a
- * rotated key derives a different, empty address, and this fallback would
- * show it with no error. Before rotation ships, an account that may have
- * rotated must not reach this fallback: a missing record or a failed lookup
- * has to surface as an error the user can retry, and `isAccountRecordOf` has
- * to accept records the chain confirms instead of only derived ones.
+ * FALLBACK, FOR A KEY THAT CREATED ITS ACCOUNT. Deriving from the signer's
+ * public key gives the right address only for such a key. A passkey a
+ * recovery added to an existing account derives a different, empty address,
+ * so it never reaches this fallback: its record comes from the backend (a
+ * failed lookup is an error the user can retry) and is stored with its entry.
+ * Such a record is not the key's, so `isAccountRecordOf` rejects it and this
+ * function would derive; Account sign-in instead accepts it once the chain
+ * confirms the key is an owner at the record's address, and refuses it
+ * otherwise (`RecoveryNotFinishedError`). Only an entry stored before records
+ * existed, whose key created its account, is still derived here.
  */
 export function resolveAccountRecord(stored: AccountRecord | undefined, publicKey: Hex): AccountRecord {
     if (stored && isAccountRecordOf(stored, publicKey)) {

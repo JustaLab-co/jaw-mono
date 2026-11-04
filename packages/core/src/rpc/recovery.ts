@@ -183,6 +183,8 @@ export type Ceremony = {
     salt: Hex;
     /** The expiry every guardian signs over, ISO 8601 */
     expiry: string;
+    /** When the recovering user opened the request, ISO 8601 */
+    createdAt: string;
     /** Approvals the request needs */
     threshold: number;
     /** Verified approvals so far */
@@ -194,7 +196,7 @@ export type Ceremony = {
 /**
  * One entry of the ceremony list: the ceremony without its salt and guardians
  */
-export type CeremonyListEntry = Pick<Ceremony, 'requestId' | 'account' | 'subject' | 'expiry' | 'chains'>;
+export type CeremonyListEntry = Pick<Ceremony, 'requestId' | 'account' | 'subject' | 'expiry' | 'createdAt' | 'chains'>;
 
 export type CeremonyListResponse = {
     /** The account's newest ceremonies first, at most 50 */
@@ -229,6 +231,35 @@ export type CeremonyApproval = {
 };
 
 /**
+ * What Account.startRecovery returns: the request the guardians approve, and
+ * the new passkey that becomes an owner once it executes
+ */
+export type StartedRecovery = CreatedCeremony & {
+    credentialId: string;
+    /** The new passkey's public key: the request's subject */
+    publicKey: Hex;
+};
+
+/**
+ * A guardian that signs with a wallet or a server key. A viem LocalAccount fits.
+ */
+export type RecoveryGuardianSigner = {
+    address: Address;
+    signTypedData: (typedData: TypedDataDefinition<typeof RECOVER_TYPES, 'Recover'>) => Promise<Hex>;
+};
+
+/**
+ * The parameters of approveRecovery
+ */
+export type ApproveRecoveryParams = {
+    /** The ceremony's request id, from the link the recovering user shared */
+    requestId: Hex;
+    signer: RecoveryGuardianSigner;
+    /** API key for the recovery backend, if the caller has one */
+    apiKey?: string;
+};
+
+/**
  * The outcome of Account.setupRecovery and Account.cancelRecovery
  */
 export type RecoverySetupResult = {
@@ -250,7 +281,7 @@ export type RecoverySetupResult = {
 export type RecoveryState = {
     /** The recovery config on every recovery-supported chain */
     chains: RecoveryChainConfig[];
-    /** The account's ceremonies not executed on any chain, newest first */
+    /** The account's requests that can still complete: collecting approvals or waiting to execute on a chain, newest first */
     pending: CeremonyListEntry[];
 };
 
@@ -775,19 +806,93 @@ export async function getCeremony(requestId: Hex, apiKey?: string): Promise<Cere
  * The account's ceremonies, newest first
  *
  * @param options.executed - true keeps the ceremonies executed on at least one chain, false the others
+ * @param options.pending - true keeps the ceremonies still collecting approvals or waiting to execute on at least one chain, false the others
  */
 export async function listCeremonies(
     account: Address,
-    options?: { executed?: boolean },
+    options?: { executed?: boolean; pending?: boolean },
     apiKey?: string
 ): Promise<CeremonyListEntry[]> {
     const response = await restCall(
         'LIST_CEREMONIES',
         'GET',
-        { account, ...(options?.executed === undefined ? {} : { executed: options.executed ? 'true' : 'false' }) },
+        {
+            account,
+            ...(options?.executed === undefined ? {} : { executed: options.executed ? 'true' : 'false' }),
+            ...(options?.pending === undefined ? {} : { pending: options.pending ? 'true' : 'false' }),
+        },
         apiKeyHeaders(apiKey)
     );
     return response.ceremonies;
+}
+
+/**
+ * Approve a ceremony as a guardian that signs with a wallet or a server key.
+ *
+ * What is signed is rebuilt from the ceremony the backend holds for
+ * `requestId`, never taken from the caller. Before any signing prompt, the
+ * ceremony's id must hash from its own account, subject and salt, and the
+ * signer must be one of its guardians.
+ *
+ * @param params.requestId - The ceremony's request id
+ * @param params.signer - The guardian's address and typed-data signer
+ * @param params.apiKey - API key for the recovery backend, if the caller has one
+ * @returns The approvals collected so far, and whether this one queued the request
+ * @throws -32602 when the ceremony's id does not match it, or the signer is not one of its guardians; nothing is signed
+ *
+ * @example
+ * ```typescript
+ * import { privateKeyToAccount } from 'viem/accounts';
+ *
+ * const approval = await approveRecovery({
+ *   requestId: '0x…',
+ *   signer: privateKeyToAccount('0x…'),
+ * });
+ * ```
+ */
+export async function approveRecovery({ requestId, signer, apiKey }: ApproveRecoveryParams): Promise<CeremonyApproval> {
+    return await approveCeremonyAs(
+        requestId,
+        toOwnerBytes(signer.address),
+        (typedData) => signer.signTypedData(typedData),
+        apiKey
+    );
+}
+
+/**
+ * One guardian's approval, shared by `approveRecovery` and
+ * `Account.approveRecovery`: fetch the ceremony, check its id and find the
+ * guardian known by `ownerBytes`, then sign its typed data and post the proof.
+ * @internal
+ */
+export async function approveCeremonyAs(
+    requestId: Hex,
+    ownerBytes: Hex,
+    sign: (typedData: TypedDataDefinition<typeof RECOVER_TYPES, 'Recover'>) => Promise<Hex>,
+    apiKey?: string
+): Promise<CeremonyApproval> {
+    const ceremony = await getCeremony(requestId, apiKey);
+    const id = computeRequestId(ceremony.account, ceremony.subject, ceremony.salt).toLowerCase();
+    if (id !== requestId.toLowerCase() || id !== ceremony.requestId.toLowerCase()) {
+        throw standardErrors.rpc.invalidParams({
+            message: `Recovery request ${requestId} does not match the ceremony returned for it`,
+        });
+    }
+
+    const guardian = ceremony.guardians.find(
+        (candidate) =>
+            candidate.provider.toLowerCase() === SIGNATURE_RECOVERY_PROVIDER_ADDRESS.toLowerCase() &&
+            candidate.commitment.toLowerCase() === ownerBytes.toLowerCase()
+    );
+    if (!guardian) {
+        throw standardErrors.rpc.invalidParams({
+            message: `This signer is not a guardian of recovery request ${requestId}`,
+        });
+    }
+
+    const { account, subject, salt, expiry } = ceremony;
+    const proof = await sign(recoverTypedData({ account, subject, salt, expiry }));
+    return await approveCeremony(requestId, { recoveryId: guardian.recoveryId, proof }, apiKey);
 }
 
 const SETUP_METHOD = 'wallet_setupRecovery';
@@ -918,7 +1023,7 @@ export function normalizeCancelRecoveryParams(params: unknown): NormalizedCancel
  * @param request - The wallet_getRecovery request
  * @param apiKey - API key for the recovery backend, if the caller has one
  * @param connectedAddress - Optional connected account address to inject if no address in params
- * @returns The config on every supported chain and the ceremonies not executed anywhere
+ * @returns The config on every supported chain and the requests that can still complete
  */
 export async function handleGetRecoveryRequest(
     request: RequestArguments,
@@ -934,7 +1039,7 @@ export async function handleGetRecoveryRequest(
 
     const [{ chains }, pending] = await Promise.all([
         getRecoveryConfig(address, apiKey),
-        listCeremonies(address, { executed: false }, apiKey),
+        listCeremonies(address, { pending: true }, apiKey),
     ]);
     return { chains, pending };
 }

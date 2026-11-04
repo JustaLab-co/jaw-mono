@@ -1,6 +1,8 @@
 import type { Address, Hash, Hex, TypedDataDefinition, TypedData, LocalAccount } from 'viem';
 import {
     isHex,
+    isAddress,
+    getAddress,
     encodeFunctionData,
     decodeFunctionData,
     erc20Abi,
@@ -53,6 +55,7 @@ import {
     type NativePasskeyCreateFn,
     resolvePasskeyOptions,
     resolveRpId,
+    createPasskeyUtils,
 } from '../passkey-manager/index.js';
 import type { SyncStorage } from '../storage-manager/index.js';
 import {
@@ -79,13 +82,17 @@ import {
 } from '../rpc/permissions.js';
 import {
     type AdminOp,
+    type CeremonyApproval,
     type RecoveryConfig,
     type RecoveryNetworkStatus,
     type RecoveryNetworksPlan,
     type RecoverySetupResult,
     type RecoveryState,
+    type StartedRecovery,
     DEFAULT_RECOVERY_ADMIN_EXPIRY_SECONDS,
+    approveCeremonyAs,
     cancelRequestOp,
+    createCeremony,
     diffRecoveryConfig,
     getCeremony,
     getRecoveryConfig,
@@ -142,6 +149,32 @@ export interface AccountConfig {
 export interface CreateAccountOptions {
     /** Username/display name for the passkey */
     username: string;
+}
+
+/**
+ * Options for starting the recovery of an account whose passkey is lost
+ */
+export interface StartRecoveryOptions {
+    /** The account to recover */
+    account: Address;
+    /** Username/display name for the new passkey */
+    username: string;
+}
+
+/**
+ * Thrown at sign-in with a passkey that a recovery added to an account, while
+ * the chain does not list it as an owner there: the recovery has not executed
+ * yet, or was cancelled.
+ */
+export class RecoveryNotFinishedError extends Error {
+    /** The account the recovery adds this passkey to */
+    readonly account: Address;
+
+    constructor(account: Address, chainId: number) {
+        super(`Recovery not finished yet: this passkey is not an owner of ${account} on chain ${chainId}`);
+        this.name = 'RecoveryNotFinishedError';
+        this.account = account;
+    }
 }
 
 /**
@@ -306,13 +339,16 @@ export class Account {
      * The backend's record of the account a credential signs for, for a
      * credential this device has no entry for. The backend's record is the only
      * way to find the account: deriving one from the key gives the v1 address,
-     * which for a newer account is a different, empty one. A failed lookup, or a
-     * record that is not this key's, throws so the user can retry.
+     * which for a newer account is a different, empty one. A failed lookup
+     * throws so the user can retry; a record that is not this key's is checked
+     * on chain (see `confirmedRecordOf`).
      */
     private static async fetchAccountRecordOf(
         passkeyManager: PasskeyManager,
         credentialId: string,
-        publicKey: Hex
+        publicKey: Hex,
+        chainId: number,
+        apiKey?: string
     ): Promise<AccountRecord> {
         let fetched: AccountRecord;
         try {
@@ -323,10 +359,46 @@ export class Account {
                 error
             );
         }
-        if (!isAccountRecordOf(fetched, publicKey)) {
-            throw new PasskeyLookupError('The account returned for this passkey does not belong to it');
+        return await Account.confirmedRecordOf(fetched, publicKey, chainId, apiKey);
+    }
+
+    /**
+     * The record a stored entry signs in with. An entry stored before records
+     * existed derives its v1 record: its key created its account. A stored
+     * record is checked like a fetched one.
+     */
+    private static async storedRecordOf(
+        passkeyAccount: PasskeyAccount,
+        chainId: number,
+        apiKey?: string
+    ): Promise<AccountRecord> {
+        if (!passkeyAccount.account) return resolveAccountRecord(undefined, passkeyAccount.publicKey);
+        return await Account.confirmedRecordOf(passkeyAccount.account, passkeyAccount.publicKey, chainId, apiKey);
+    }
+
+    /**
+     * A record from the backend or this device, before anything signs in with
+     * it. The key's own record is used as it is, with no chain read. Any other
+     * record is the account a recovery added this key to, accepted only once
+     * the chain says the key is an owner at its address on `chainId`, so a
+     * record naming someone else's account never opens it.
+     * @throws RecoveryNotFinishedError when the key is not an owner there
+     */
+    private static async confirmedRecordOf(
+        record: AccountRecord,
+        publicKey: Hex,
+        chainId: number,
+        apiKey?: string
+    ): Promise<AccountRecord> {
+        if (isAccountRecordOf(record, publicKey)) return resolveAccountRecord(record, publicKey);
+        if (typeof record?.address !== 'string' || !isAddress(record.address, { strict: false })) {
+            throw new PasskeyLookupError('The account record for this passkey is not valid');
         }
-        return resolveAccountRecord(fetched, publicKey);
+
+        const address = getAddress(record.address);
+        const owned = await Account.readOwnership(address, publicKey, [chainId], apiKey);
+        if (owned.get(chainId) !== true) throw new RecoveryNotFinishedError(address, chainId);
+        return { ...record, address, factory: getAddress(record.factory) };
     }
 
     /**
@@ -415,7 +487,7 @@ export class Account {
 
             const chain = Account.buildChainConfig(chainId, apiKey, paymasterUrl, paymasterContext);
             const bundlerClient = getBundlerClient(chain);
-            const record = resolveAccountRecord(passkeyAccount.account, passkeyAccount.publicKey);
+            const record = await Account.storedRecordOf(passkeyAccount, chainId, apiKey);
             const smartAccount = await createSmartAccount(
                 webAuthnAccount,
                 bundlerClient as JustanAccountImplementation['client'],
@@ -446,7 +518,7 @@ export class Account {
 
                 const chain = Account.buildChainConfig(chainId, apiKey, paymasterUrl, paymasterContext);
                 const bundlerClient = getBundlerClient(chain);
-                const record = resolveAccountRecord(currentAccount.account, currentAccount.publicKey);
+                const record = await Account.storedRecordOf(currentAccount, chainId, apiKey);
                 const smartAccount = await createSmartAccount(
                     webAuthnAccount,
                     bundlerClient as JustanAccountImplementation['client'],
@@ -521,11 +593,10 @@ export class Account {
 
         const chain = Account.buildChainConfig(chainId, apiKey, paymasterUrl, paymasterContext);
         const bundlerClient = getBundlerClient(chain);
-        // An entry stored before records existed derives its v1 record; a
-        // credential with no entry on this device asks the backend.
+        // A credential with no entry on this device asks the backend.
         const record = passkeyAccount
-            ? resolveAccountRecord(passkeyAccount.account, publicKey)
-            : await Account.fetchAccountRecordOf(passkeyManager, credentialId, publicKey);
+            ? await Account.storedRecordOf(passkeyAccount, chainId, apiKey)
+            : await Account.fetchAccountRecordOf(passkeyManager, credentialId, publicKey, chainId, apiKey);
         const smartAccount = await createSmartAccount(
             webAuthnAccount,
             bundlerClient as JustanAccountImplementation['client'],
@@ -641,7 +712,9 @@ export class Account {
         const record = await Account.fetchAccountRecordOf(
             passkeyManager,
             importResult.credential.id,
-            importResult.credential.publicKey
+            importResult.credential.publicKey,
+            chainId,
+            apiKey
         );
 
         const bundlerClient = getBundlerClient(chain);
@@ -1517,6 +1590,90 @@ export class Account {
     // ============================================
 
     /**
+     * Start the recovery of an account whose passkey is lost: create a new
+     * passkey and open a request for the account's guardians to approve. The
+     * new passkey becomes an owner once enough guardians approve and the delay
+     * passes; until then signing in with it throws RecoveryNotFinishedError.
+     *
+     * The passkey is linked to the account on the backend, so signing in with
+     * it later finds the account. It is not added to this device's stored
+     * accounts: with no record of its own, it would open the wrong address.
+     *
+     * Reads `apiKey`, `storage`, `serverUrl` and the passkey options of
+     * `config`; no chain is involved.
+     *
+     * @param config - Account configuration
+     * @param options - The account to recover and the new passkey's username
+     * @returns The request to share with the guardians, and the new passkey
+     * @throws -32602 when recovery is not set up for the account on any network; no passkey is created
+     * @throws {PasskeyRegistrationError} when the backend refuses the link; the request stays open until it expires
+     *
+     * @example
+     * ```typescript
+     * const started = await Account.startRecovery(
+     *   { chainId: 1, apiKey: 'your-api-key' },
+     *   { account: '0x…', username: 'alice' }
+     * );
+     * // Share started.requestId with the guardians, then follow it with getCeremony
+     * ```
+     */
+    static async startRecovery(config: AccountConfig, options: StartRecoveryOptions): Promise<StartedRecovery> {
+        const { apiKey } = config;
+        const { account, username } = options;
+
+        const { chains } = await getRecoveryConfig(account, apiKey);
+        if (!chains.some((chain) => chain.deployed && chain.enrolled && chain.recoveries.length > 0)) {
+            throw standardErrors.rpc.invalidParams({ message: 'Recovery is not set up for this account' });
+        }
+
+        const resolved = resolvePasskeyOptions({
+            nativeGetFn: config.nativeGetFn,
+            nativeCreateFn: config.nativeCreateFn,
+        });
+        const { credentialId, publicKey } = await createPasskeyUtils(
+            username,
+            resolveRpId(config.rpId),
+            config.rpName ?? 'JAW',
+            undefined, // createFn: the browser default, or internalNativeCreateFn on native
+            resolved.internalNativeCreateFn,
+            resolved.getFn
+        );
+
+        const ceremony = await createCeremony({ account, subject: publicKey, salt: randomSalt() }, apiKey);
+        await Account.passkeyManager(config).addPasskeyToAccount(account, credentialId, publicKey, username);
+
+        return { ...ceremony, credentialId, publicKey };
+    }
+
+    /**
+     * Approve a recovery request as one of its guardians, with this account's
+     * own key. One signature, posted to the backend.
+     *
+     * What is signed is rebuilt from the ceremony the backend holds for
+     * `requestId`, never taken from the caller. Before any signing prompt, the
+     * ceremony's id must hash from its own account, subject and salt, and this
+     * account's key must be one of its guardians.
+     *
+     * @param requestId - The ceremony's request id, from the link the recovering user shared
+     * @returns The approvals collected so far, and whether this one queued the request
+     * @throws -32602 when the ceremony's id does not match it, or this key is not one of its guardians; nothing is signed
+     *
+     * @example
+     * ```typescript
+     * const approval = await account.approveRecovery('0x…');
+     * console.log(`${approval.collected} of ${approval.threshold} approvals`);
+     * ```
+     */
+    async approveRecovery(requestId: Hex): Promise<CeremonyApproval> {
+        return await approveCeremonyAs(
+            requestId,
+            this.recoveryOwnerBytes(),
+            async (typedData) => (await this.signRecoveryDigest(hashTypedData(typedData))).proof,
+            this._apiKey
+        );
+    }
+
+    /**
      * Set up or edit recovery. The caller passes the desired end state, not the
      * edits: the methods that may get the account back and how many of them must
      * agree.
@@ -1613,12 +1770,12 @@ export class Account {
 
     /**
      * The account's recovery config on every supported chain, and its
-     * ceremonies not executed anywhere: what a veto banner needs.
+     * requests that can still complete: what a veto banner needs.
      */
     async getRecovery(): Promise<RecoveryState> {
         const [{ chains }, pending] = await Promise.all([
             getRecoveryConfig(this.address, this._apiKey),
-            listCeremonies(this.address, { executed: false }, this._apiKey),
+            listCeremonies(this.address, { pending: true }, this._apiKey),
         ]);
         return { chains, pending };
     }
@@ -1647,16 +1804,29 @@ export class Account {
      * @internal
      */
     private async readRecoveryOwnership(chainIds: number[]): Promise<Map<number, boolean>> {
-        const ownerBytes = this.recoveryOwnerBytes();
+        return await Account.readOwnership(this.address, this.recoveryOwnerBytes(), chainIds, this._apiKey);
+    }
+
+    /**
+     * Whether `ownerBytes` is a current owner of `address` on each of
+     * `chainIds`, read from the chains in parallel. A read that fails throws.
+     * @internal
+     */
+    private static async readOwnership(
+        address: Address,
+        ownerBytes: Hex,
+        chainIds: number[],
+        apiKey?: string
+    ): Promise<Map<number, boolean>> {
         const owned = await Promise.all(
             chainIds.map(async (chainId) => {
                 const publicClient = createPublicClient({
                     chain: { id: chainId } as Parameters<typeof createPublicClient>[0]['chain'],
-                    transport: jawHttp(Account.rpcUrl(chainId, this._apiKey)),
+                    transport: jawHttp(Account.rpcUrl(chainId, apiKey)),
                 });
                 try {
                     return await publicClient.readContract({
-                        address: this.address,
+                        address,
                         abi: justanAccountAbi,
                         functionName: 'isOwnerBytes',
                         args: [ownerBytes],

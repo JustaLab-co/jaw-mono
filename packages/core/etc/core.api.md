@@ -26,6 +26,7 @@ import type * as WebAuthnP256 from 'ox/WebAuthnP256';
 // @public
 export class Account {
     get address(): Address_2;
+    approveRecovery(requestId: Hex): Promise<CeremonyApproval>;
     static backfillStoredAccountAddresses(config: Partial<AccountConfig>): Promise<PasskeyAccount[]>;
     calculateGasCost(calls: TransactionCall[], options?: {
         permissionId?: Hex;
@@ -70,6 +71,7 @@ export class Account {
     signTypedData(typedData: TypedDataDefinition<TypedData, string>, options?: {
         address?: Address_2;
     }): Promise<Hex>;
+    static startRecovery(config: AccountConfig, options: StartRecoveryOptions): Promise<StartedRecovery>;
 }
 
 // @public
@@ -180,6 +182,16 @@ export function approveCeremony(requestId: Hex, request: ApproveCeremonyRequest,
 export type ApproveCeremonyRequest = {
     recoveryId: Hex;
     proof: Hex;
+};
+
+// @public
+export function approveRecovery(input: ApproveRecoveryParams): Promise<CeremonyApproval>;
+
+// @public
+export type ApproveRecoveryParams = {
+    requestId: Hex;
+    signer: RecoveryGuardianSigner;
+    apiKey?: string;
 };
 
 // @public
@@ -363,6 +375,7 @@ export type Ceremony = {
     subject: Hex;
     salt: Hex;
     expiry: string;
+    createdAt: string;
     threshold: number;
     collected: number;
     guardians: CeremonyGuardian[];
@@ -394,7 +407,7 @@ export type CeremonyGuardian = RecoveryMethod & {
 };
 
 // @public
-export type CeremonyListEntry = Pick<Ceremony, 'requestId' | 'account' | 'subject' | 'expiry' | 'chains'>;
+export type CeremonyListEntry = Pick<Ceremony, 'requestId' | 'account' | 'subject' | 'expiry' | 'createdAt' | 'chains'>;
 
 // @public (undocumented)
 export type CeremonyListResponse = {
@@ -1020,6 +1033,7 @@ export class KeyManager {
 // @public
 export function listCeremonies(account: Address_2, options?: {
     executed?: boolean;
+    pending?: boolean;
 }, apiKey?: string): Promise<CeremonyListEntry[]>;
 
 // @public
@@ -1154,6 +1168,7 @@ export interface PasskeyLookupResponse {
 export class PasskeyManager {
     constructor(storage?: SyncStorage, preference?: JawProviderPreference, apiKey?: string);
     addAccountToList(account: PasskeyAccount): void;
+    addPasskeyToAccount(address: Address_2, credentialId: string, publicKey: `0x${string}`, name: string): Promise<void>;
     // Warning: (ae-forgotten-export) The symbol "WebAuthnAuthenticationResult" needs to be exported by the entry point index.d.ts
     authenticateWithWebAuthn(rpId: string, credentialId: string, options?: {
         userVerification?: UserVerificationRequirement;
@@ -1722,6 +1737,12 @@ export type RecoveryConfigResponse = {
 };
 
 // @public
+export type RecoveryGuardianSigner = {
+    address: Address_2;
+    signTypedData: (typedData: TypedDataDefinition<typeof RECOVER_TYPES, 'Recover'>) => Promise<Hex>;
+};
+
+// @public
 export type RecoveryMethod = {
     recoveryId: Hex;
     provider: Address_2;
@@ -1752,6 +1773,12 @@ export type RecoveryNetworksPlan = {
 
 // @public
 export type RecoveryNetworkStatus = 'ready' | 'not-deployed' | 'not-available' | 'not-owner' | 'out-of-sync';
+
+// @public
+export class RecoveryNotFinishedError extends Error {
+    constructor(account: Address_2, chainId: number);
+    readonly account: Address_2;
+}
 
 // @public
 export type RecoverySetupResult = {
@@ -2112,6 +2139,18 @@ export const standardErrors: {
         custom: <T>(opts: CustomErrorArg<T>) => EthereumProviderError<T>;
     };
 };
+
+// @public
+export type StartedRecovery = CreatedCeremony & {
+    credentialId: string;
+    publicKey: Hex;
+};
+
+// @public
+export interface StartRecoveryOptions {
+    account: Address_2;
+    username: string;
+}
 
 // Warning: (ae-forgotten-export) The symbol "StorePermissionApiRequest" needs to be exported by the entry point index.d.ts
 //

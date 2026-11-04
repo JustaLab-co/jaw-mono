@@ -1,25 +1,30 @@
 /**
  * Where each recovery operation is relayed and what leaves the account: one
  * signed batch, to the networks that can take it. The real planner and the
- * real signer run; only the backend and the chain reads are faked, so the
- * proof inside a relayed batch is a signature this test recovers.
+ * real signer run; only the backend, the chain reads and the device's passkey
+ * prompt are faked, so the proof inside a relayed batch or an approval is a
+ * signature this test recovers.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { decodeAbiParameters, parseAbiParameters, recoverTypedDataAddress, type Address, type Hex } from 'viem';
+import { decodeAbiParameters, parseAbiParameters, recoverTypedDataAddress, size, type Address, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { Account } from './Account.js';
 import { sendTransaction } from './smartAccount.js';
 import { restCall } from '../api/index.js';
 import { SIGNATURE_RECOVERY_PROVIDER_ADDRESS } from '../constants.js';
 import { createMemoryStorage } from '../storage-manager/index.js';
+import { PasskeyRegistrationError, createPasskeyUtils } from '../passkey-manager/utils.js';
 import { deriveAccountRecordV1, deriveAccountRecordV2, type AccountRecord } from './accountRecord.js';
 import {
     AdminOpType,
     computeRecoveryId,
+    computeRequestId,
+    recoverTypedData,
     recoveryAdminTypedData,
     toOwnerBytes,
     type Ceremony,
     type CeremonyChainStatus,
+    type CreateCeremonyRequest,
     type RecoveryChainConfig,
     type SubmitAdminBatchRequest,
 } from '../rpc/recovery.js';
@@ -49,6 +54,12 @@ vi.mock('./smartAccount.js', async (importOriginal) => ({
 }));
 
 vi.mock('../analytics/index.js', () => ({ logAccountIssuance: vi.fn() }));
+
+// The device's passkey prompt: what the authenticator hands back for a new passkey.
+vi.mock('../passkey-manager/utils.js', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('../passkey-manager/utils.js')>()),
+    createPasskeyUtils: vi.fn(),
+}));
 
 // The chain reads: whether the signing key owns the account on each network.
 // Only the client is faked; the request it is asked to make is checked below.
@@ -103,6 +114,7 @@ function ceremony(statuses: Array<[number, CeremonyChainStatus]>): Ceremony {
         subject: G2,
         salt: `0x${'22'.repeat(32)}`,
         expiry: '2026-11-01T00:00:00.000Z',
+        createdAt: '2026-10-31T00:00:00.000Z',
         threshold: 1,
         collected: 1,
         guardians: [],
@@ -117,7 +129,13 @@ function ceremony(statuses: Array<[number, CeremonyChainStatus]>): Ceremony {
 }
 
 /** What the backend holds for the account, and what it received. */
-let backend: { chains: RecoveryChainConfig[]; ceremony: Ceremony; submitted: SubmitAdminBatchRequest[] };
+let backend: {
+    chains: RecoveryChainConfig[];
+    ceremony: Ceremony;
+    submitted: SubmitAdminBatchRequest[];
+    /** A failure the passkey link answers with, when set */
+    linkError?: Error;
+};
 
 beforeEach(() => {
     backend = {
@@ -157,6 +175,21 @@ beforeEach(() => {
                 return backend.ceremony;
             case 'LIST_CEREMONIES':
                 return { ceremonies: [backend.ceremony] };
+            case 'CREATE_CEREMONY': {
+                const { account, subject, salt } = request as CreateCeremonyRequest;
+                return {
+                    requestId: computeRequestId(account, subject, salt),
+                    account,
+                    subject,
+                    salt,
+                    expiry: '2026-11-08T00:00:00.000Z',
+                };
+            }
+            case 'APPROVE_CEREMONY':
+                return { collected: 1, threshold: 2, queued: false };
+            case 'ADD_ACCOUNT_PASSKEY':
+                if (backend.linkError) throw backend.linkError;
+                return undefined;
             default:
                 throw new Error(`unexpected route ${route}`);
         }
@@ -441,11 +474,194 @@ describe('cancelRecovery', () => {
 });
 
 describe('getRecovery', () => {
-    it('returns the config per chain and the ceremonies not executed anywhere', async () => {
+    it('returns the config per chain and the requests that can still complete', async () => {
         const state = await (await account()).getRecovery();
 
         expect(state).toEqual({ chains: backend.chains, pending: [backend.ceremony] });
         const list = vi.mocked(restCall).mock.calls.find((call) => call[0] === 'LIST_CEREMONIES');
-        expect(list?.[2]).toEqual({ account: ACCOUNT, executed: 'false' });
+        expect(list?.[2]).toEqual({ account: ACCOUNT, pending: 'true' });
+    });
+});
+
+describe('Account.startRecovery', () => {
+    // The new passkey the recovering user creates on the new device
+    const NEW_PUBLIC_KEY = `0x${'5a'.repeat(64)}` as Hex;
+    const NEW_CREDENTIAL = 'new-cred';
+
+    let storage: ReturnType<typeof createMemoryStorage>;
+
+    beforeEach(() => {
+        storage = createMemoryStorage();
+        vi.mocked(createPasskeyUtils).mockReset();
+        vi.mocked(createPasskeyUtils).mockResolvedValue({
+            credentialId: NEW_CREDENTIAL,
+            publicKey: NEW_PUBLIC_KEY,
+            webAuthnAccount: { type: 'webAuthn', publicKey: NEW_PUBLIC_KEY } as never,
+        });
+    });
+
+    const start = () =>
+        Account.startRecovery(
+            { chainId: CONNECTED, apiKey: 'api-key', rpId: 'example.com', storage },
+            { account: ACCOUNT, username: 'alice' }
+        );
+
+    function sent(route: string) {
+        return vi.mocked(restCall).mock.calls.filter((call) => call[0] === route);
+    }
+
+    it.each([
+        [
+            'no network has the account',
+            [chain(CONNECTED, { deployed: false, enrolled: false, threshold: 0, recoveries: [] })],
+        ],
+        ['the manager is an owner nowhere', [chain(CONNECTED, { enrolled: false })]],
+        [
+            'no network holds a recovery method',
+            [chain(CONNECTED, { threshold: 0, recoveries: [] }), chain(10, { threshold: 0, recoveries: [] })],
+        ],
+    ])('refuses before any passkey prompt when %s', async (_, chains) => {
+        backend.chains = chains;
+
+        await expect(start()).rejects.toMatchObject({
+            code: -32602,
+            message: expect.stringContaining('Recovery is not set up for this account'),
+        });
+
+        expect(createPasskeyUtils).not.toHaveBeenCalled();
+        expect(sent('CREATE_CEREMONY')).toEqual([]);
+        expect(sent('ADD_ACCOUNT_PASSKEY')).toEqual([]);
+    });
+
+    it("opens a request whose subject is the new passkey's public key, with a fresh salt", async () => {
+        const started = await start();
+
+        const [[, method, request, headers]] = sent('CREATE_CEREMONY');
+        const { account: requested, subject, salt } = request as CreateCeremonyRequest;
+        expect(method).toBe('POST');
+        expect(headers).toEqual({ 'x-api-key': 'api-key' });
+        expect(requested).toBe(ACCOUNT);
+        expect(subject).toBe(NEW_PUBLIC_KEY);
+        expect(size(salt)).toBe(32);
+        expect(started).toEqual({
+            requestId: computeRequestId(ACCOUNT, NEW_PUBLIC_KEY, salt),
+            account: ACCOUNT,
+            subject: NEW_PUBLIC_KEY,
+            salt,
+            expiry: '2026-11-08T00:00:00.000Z',
+            credentialId: NEW_CREDENTIAL,
+            publicKey: NEW_PUBLIC_KEY,
+        });
+    });
+
+    it('creates the passkey with the configured relying party', async () => {
+        await Account.startRecovery(
+            { chainId: CONNECTED, apiKey: 'api-key', rpId: 'example.com', rpName: 'Example', storage },
+            { account: ACCOUNT, username: 'alice' }
+        );
+
+        expect(vi.mocked(createPasskeyUtils).mock.calls[0].slice(0, 3)).toEqual(['alice', 'example.com', 'Example']);
+    });
+
+    it('links the new passkey to the account being recovered, once the request is open', async () => {
+        await start();
+
+        const routes = vi.mocked(restCall).mock.calls.map((call) => call[0]);
+        expect(routes.indexOf('ADD_ACCOUNT_PASSKEY')).toBeGreaterThan(routes.indexOf('CREATE_CEREMONY'));
+        const [[, method, body, headers, pathParams]] = sent('ADD_ACCOUNT_PASSKEY');
+        expect(method).toBe('POST');
+        expect(body).toEqual({ credentialId: NEW_CREDENTIAL, publicKey: NEW_PUBLIC_KEY, displayName: 'alice' });
+        expect(headers).toEqual({ 'x-api-key': 'api-key' });
+        expect(pathParams).toEqual({ address: ACCOUNT });
+    });
+
+    it("adds nothing to this device's stored accounts and signs nobody in", async () => {
+        await start();
+
+        expect(storage.getItem('accounts') ?? []).toEqual([]);
+        expect(storage.getItem('authState')).toBeFalsy();
+    });
+
+    it('fails when the backend refuses the link, after the request was opened', async () => {
+        backend.linkError = new Error('404');
+
+        await expect(start()).rejects.toBeInstanceOf(PasskeyRegistrationError);
+
+        expect(sent('CREATE_CEREMONY')).toHaveLength(1);
+        expect(storage.getItem('accounts') ?? []).toEqual([]);
+    });
+});
+
+describe('account.approveRecovery', () => {
+    const SALT = `0x${'22'.repeat(32)}` as const;
+    const OTHER_GUARDIAN = toOwnerBytes('0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb');
+    // The account being recovered, which this account guards
+    const RECOVERED = '0x00000000000000000000000000000000000000aa' as const;
+    const REQUEST = computeRequestId(RECOVERED, G2, SALT);
+
+    function guardian(commitment: Hex) {
+        return {
+            recoveryId: computeRecoveryId(RECOVERED, PROVIDER, commitment),
+            provider: PROVIDER,
+            commitment,
+            delay: 60,
+            approvedAt: null,
+        };
+    }
+
+    beforeEach(() => {
+        backend.ceremony = {
+            ...ceremony([[CONNECTED, 'COLLECTING']]),
+            requestId: REQUEST,
+            account: RECOVERED,
+            subject: G2,
+            salt: SALT,
+            threshold: 2,
+            collected: 0,
+            guardians: [guardian(OTHER_GUARDIAN), guardian(toOwnerBytes(OWNER.address))],
+        };
+    });
+
+    function posted() {
+        const call = vi.mocked(restCall).mock.calls.find(([route]) => route === 'APPROVE_CEREMONY');
+        return call && { body: call[2] as { recoveryId: Hex; proof: Hex }, pathParams: call[4] };
+    }
+
+    it("signs the fetched ceremony with this account's key and posts it as that key's guardian", async () => {
+        const approval = await (await account()).approveRecovery(REQUEST);
+
+        expect(approval).toEqual({ collected: 1, threshold: 2, queued: false });
+        const approved = posted();
+        expect(approved?.pathParams).toEqual({ requestId: REQUEST });
+        expect(approved?.body.recoveryId).toBe(computeRecoveryId(RECOVERED, PROVIDER, toOwnerBytes(OWNER.address)));
+        const signer = await recoverTypedDataAddress({
+            ...recoverTypedData({ account: RECOVERED, subject: G2, salt: SALT, expiry: backend.ceremony.expiry }),
+            signature: approved?.body.proof ?? '0x',
+        });
+        expect(signer).toBe(OWNER.address);
+    });
+
+    it('refuses when this key is not a guardian, before anything is signed or posted', async () => {
+        backend.ceremony.guardians = [guardian(OTHER_GUARDIAN)];
+        const opened = await account();
+        const sign = vi.spyOn(OWNER, 'sign');
+
+        await expect(opened.approveRecovery(REQUEST)).rejects.toMatchObject({ code: -32602 });
+
+        expect(sign).not.toHaveBeenCalled();
+        expect(posted()).toBeUndefined();
+        sign.mockRestore();
+    });
+
+    it('refuses a ceremony whose id does not hash from its own tuple, before anything is signed', async () => {
+        backend.ceremony.salt = `0x${'33'.repeat(32)}`;
+        const opened = await account();
+        const sign = vi.spyOn(OWNER, 'sign');
+
+        await expect(opened.approveRecovery(REQUEST)).rejects.toMatchObject({ code: -32602 });
+
+        expect(sign).not.toHaveBeenCalled();
+        expect(posted()).toBeUndefined();
+        sign.mockRestore();
     });
 });

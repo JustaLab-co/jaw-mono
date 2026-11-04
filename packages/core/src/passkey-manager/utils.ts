@@ -2,7 +2,8 @@ import { createWebAuthnCredential, toWebAuthnAccount } from 'viem/account-abstra
 import type * as WebAuthnP256 from 'ox/WebAuthnP256';
 import * as PublicKey from 'ox/PublicKey';
 import { restCall } from '../api/index.js';
-import type { PasskeyRegistrationRequest, PasskeyLookupResponse } from './types.js';
+import type { Address } from 'viem';
+import type { PasskeyRegistrationRequest, PasskeyLookupResponse, AddAccountPasskeyRequest } from './types.js';
 import type { AccountRecord } from '../account/accountRecord.js';
 import type { WebAuthnAccount } from 'viem/account-abstraction';
 
@@ -571,6 +572,44 @@ export async function registerPasskeyInBackend(
     } catch (error) {
         throw new PasskeyRegistrationError(
             `Failed to register passkey: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            error
+        );
+    }
+}
+
+/**
+ * Link a passkey to an account that already exists, such as the one a
+ * recovery adds it to, so the backend returns that account's record for it.
+ * @param address - The account the passkey is linked to
+ * @param request - The passkey to link
+ * @param apiKey - Optional API key for authentication
+ * @param dev - Whether to use the staging environment (ignored when serverUrl is given)
+ * @param serverUrl - Optional passkeys endpoint URL; the link is posted to its sibling `accounts` path
+ * @throws {PasskeyRegistrationError} If the request fails, or the backend holds no account at `address`
+ */
+export async function addPasskeyToAccountInBackend(
+    address: Address,
+    request: AddAccountPasskeyRequest,
+    apiKey?: string,
+    dev?: boolean,
+    serverUrl?: string
+): Promise<void> {
+    const endpoint = serverUrl ? accountsEndpoint(serverUrl) : undefined;
+    try {
+        await restCall(
+            'ADD_ACCOUNT_PASSKEY',
+            'POST',
+            request,
+            apiKey ? { 'x-api-key': apiKey } : {},
+            { address },
+            dev,
+            endpoint?.baseUrl,
+            undefined,
+            endpoint ? `${endpoint.path}/:address/passkeys` : undefined
+        );
+    } catch (error) {
+        throw new PasskeyRegistrationError(
+            `Failed to link passkey to account: ${error instanceof Error ? error.message : 'Unknown error'}`,
             error
         );
     }

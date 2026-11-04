@@ -1,5 +1,6 @@
 import type {
     PasskeyRegistrationRequest,
+    AddAccountPasskeyRequest,
     PasskeysByCredIdsResponse,
     LookupPasskeysRequest,
     AccountByCredIdRequest,
@@ -37,5 +38,11 @@ export interface PasskeyRoutes {
         response: AccountRecord;
         headers: Record<string, string>;
         pathParams?: never;
+    };
+    ADD_ACCOUNT_PASSKEY: {
+        request: AddAccountPasskeyRequest;
+        response: void;
+        headers: Record<string, string>;
+        pathParams: { address: string };
     };
 }

@@ -18,13 +18,15 @@ export const RECOVERY_ROUTE = '/recovery/v2';
 
 /**
  * Query for the ceremony list. Values travel as strings; the backend reads
- * `executed` as a boolean.
+ * `executed` and `pending` as booleans.
  */
 export interface ListCeremoniesRequest {
     /** The smart account whose ceremonies are listed */
     account: Address;
     /** 'true' keeps the ceremonies executed on at least one chain, 'false' the others; absent keeps all */
     executed?: 'true' | 'false';
+    /** 'true' keeps the ceremonies collecting, pending or requested on at least one chain, 'false' the others; absent keeps all */
+    pending?: 'true' | 'false';
 }
 
 /**
