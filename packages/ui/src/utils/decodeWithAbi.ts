@@ -31,6 +31,7 @@ export function decodeWithAbi(abi: Abi, data: Hex): DecodedCalldata | null {
     const canonical = encodeFunctionData({ abi: [item], functionName: item.name, args });
     const isCanonical = data.toLowerCase().startsWith(canonical.toLowerCase());
     const tail = isCanonical ? data.slice(canonical.length) : '';
+    const extraBytes = isCanonical ? 0 : (data.length - canonical.length) / 2;
     const { inputs } = item;
     return {
       functionName: item.name,
@@ -43,6 +44,7 @@ export function decodeWithAbi(abi: Abi, data: Hex): DecodedCalldata | null {
       })),
       ...(tail ? { trailing: `0x${tail}` as Hex } : {}),
       ...(isCanonical ? {} : { nonCanonical: true }),
+      ...(extraBytes > 0 ? { extraBytes } : {}),
     };
   } catch (err) {
     console.debug('[useDecodedCalldata] raw decode failed:', err);

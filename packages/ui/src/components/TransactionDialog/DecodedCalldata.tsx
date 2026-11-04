@@ -67,11 +67,14 @@ const TrailingBytes = ({ hex }: { hex: string }) => (
   </div>
 );
 
-const NonCanonicalNote = () => (
-  <p className="text-warning text-xs leading-normal">
-    Not in canonical ABI encoding. The contract may read these values differently.
-  </p>
-);
+const NonCanonicalNote = ({ extraBytes }: { extraBytes?: number }) => {
+  const extra = extraBytes ? `, and ${extraBytes} bytes longer than these arguments encode to` : '';
+  return (
+    <p className="text-warning text-xs leading-normal">
+      Not in canonical ABI encoding{extra}. The contract may read these values differently.
+    </p>
+  );
+};
 
 /**
  * ERC-8213 Calldata Digest, collapsed behind a disclosure like the raw calldata
@@ -188,7 +191,7 @@ export const DecodedCalldataView = ({
                     </div>
                   ))}
                   {decoded.trailing && <TrailingBytes hex={decoded.trailing} />}
-                  {decoded.nonCanonical && <NonCanonicalNote />}
+                  {decoded.nonCanonical && <NonCanonicalNote extraBytes={decoded.extraBytes} />}
                 </div>
               </>
             ) : null}
@@ -273,7 +276,7 @@ export const DecodedCalldataView = ({
           );
         })}
         {decoded.trailing && <TrailingBytes hex={decoded.trailing} />}
-        {decoded.nonCanonical && <NonCanonicalNote />}
+        {decoded.nonCanonical && <NonCanonicalNote extraBytes={decoded.extraBytes} />}
       </div>
 
       <details className="text-xs">

@@ -28,6 +28,8 @@ export interface DecodedCalldata {
   trailing?: Hex;
   /** The ABI decodes the calldata but does not re-encode to it, so the suffix cannot be told apart. */
   nonCanonical?: boolean;
+  /** On a non-canonical decode, how many bytes the calldata runs past what its arguments re-encode to. */
+  extraBytes?: number;
 }
 
 /**

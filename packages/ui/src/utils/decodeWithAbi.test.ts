@@ -79,6 +79,13 @@ describe('decodeWithAbi', () => {
     expect(decoded?.trailing).toBeUndefined();
   });
 
+  it('counts the bytes a non-canonical decode runs past the re-encoded call', () => {
+    const dirty = `${data.slice(0, 10)}ff${data.slice(12)}`;
+    expect(decodeWithAbi(abi4, `${dirty}deadbeef` as Hex)?.extraBytes).toBe(4);
+    expect(decodeWithAbi(abi4, dirty as Hex)?.extraBytes).toBeUndefined();
+    expect(decodeWithAbi(abi4, `${data}deadbeef` as Hex)?.extraBytes).toBeUndefined();
+  });
+
   it('returns null for calldata with an odd number of hex digits', () => {
     const erc20 = parseAbi(['function approve(address spender, uint256 amount)']);
     const calldata = encodeFunctionData({
