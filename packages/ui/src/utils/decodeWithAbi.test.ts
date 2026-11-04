@@ -103,29 +103,46 @@ describe('decodeWithAbi', () => {
 
   it('marks every decode that does not re-encode to the calldata, over random bodies', () => {
     const selector = toFunctionSelector(abi4[0]);
+    const body = data.slice(10);
     let seed = 1;
-    const next = () => (seed = (seed * 1103515245 + 12345) % 2 ** 31);
-    const hex = (bytes: number) =>
-      Array.from({ length: bytes }, () => (next() % 256).toString(16).padStart(2, '0')).join('');
+    const rand = (n: number) => (seed = (seed * 16807) % 2147483647) % n;
+    const digit = () => rand(16).toString(16);
+    let dirty = 0;
 
-    for (let i = 0; i < 300; i++) {
-      const input = `${selector}${hex(next() % 160)}` as Hex;
+    // Bodies of 240 to 339 hex digits: odd, word-aligned and not. The first 100 are random, the
+    // rest are valid calldata with up to two digits changed.
+    for (let i = 0; i < 400; i++) {
+      const digits = 240 + (i % 100);
+      const chars = Array.from({ length: digits }, (_, j) => (i >= 100 && j < body.length ? body[j] : digit()));
+      for (let k = rand(3); k > 0; k--) chars[rand(digits)] = digit();
+      const input = `${selector}${chars.join('')}` as Hex;
       const decoded = decodeWithAbi(abi4, input);
+      expect(!!decoded).toBe(digits % 2 === 0 && digits >= 256);
       if (!decoded) continue;
       const types = decoded.params.map((p) => p.type).join(',');
       expect(decoded.signature).toBe(`depositErc20(${types.replaceAll(',', ', ')})`);
+      // Every argument is static, so each one is read from its own word.
+      const word = (j: number) => input.slice(10 + 64 * j, 74 + 64 * j);
+      expect(decoded.params.map((p) => p.value.toLowerCase())).toEqual([
+        `0x${word(0).slice(24)}`,
+        `0x${word(1).slice(24)}`,
+        BigInt(`0x${word(2)}`).toString(),
+        `0x${word(3)}`,
+      ]);
       const again = encodeFunctionData({
         abi: abi4,
         functionName: 'depositErc20',
         args: decoded.params.map((p, j) => (j === 2 ? BigInt(p.value) : p.value)) as never,
       });
       if (decoded.nonCanonical) {
+        dirty++;
         expect(input.toLowerCase().startsWith(again.toLowerCase())).toBe(false);
         expect(decoded.trailing).toBeUndefined();
       } else {
         expect(`${again}${decoded.trailing?.slice(2) ?? ''}`.toLowerCase()).toBe(input.toLowerCase());
       }
     }
+    expect(dirty).toBeGreaterThan(0);
   });
 
   it('decodes nothing for every truncation of valid calldata', () => {
