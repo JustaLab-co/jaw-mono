@@ -260,6 +260,25 @@ export const SiweDialog = ({
               </div>
             )}
 
+            {/* The request id, large, so a person can match it against the code
+                the page that sent them here shows. The dApp writes it, so it is
+                labelled as the request's own value and promises nothing more. */}
+            {parsed?.requestId && (
+              <div className="border-border rounded-box border p-3 text-center">
+                <span className="text-muted-foreground text-label font-mono uppercase">Request code</span>
+                <p
+                  className={`text-foreground mt-1 break-all font-mono font-semibold ${
+                    parsed.requestId.length <= 16 ? 'text-title tracking-widest' : 'text-body-sm'
+                  }`}
+                >
+                  {parsed.requestId}
+                </p>
+                <p className="text-muted-foreground text-body-xs mt-1 leading-normal">
+                  Check it matches the code on the page that sent you here.
+                </p>
+              </div>
+            )}
+
             {/* The dApp's statement, quarantined in its own box so this
                 attacker-supplied text is unmistakably content, never chrome. */}
             {parsed?.statement && (

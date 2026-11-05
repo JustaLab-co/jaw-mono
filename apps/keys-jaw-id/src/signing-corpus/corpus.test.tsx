@@ -27,7 +27,8 @@ interface Expect {
   integrity?: boolean;
   /** False when pressing sign must not reach the passkey at all. */
   prompts?: boolean;
-  siwe?: { domain: string; uri: string; chainId: string; nonce: string };
+  /** `requestId`, when set, is the code the screen shows under "Request code". */
+  siwe?: { domain: string; uri: string; chainId: string; nonce: string; requestId?: string };
   /** The text the screen presents as the message, when it differs from the raw param. */
   signedText?: string;
 }
@@ -110,6 +111,9 @@ async function check(f: Fixture, e: Expect) {
     expect(screen.visible).toContain(e.siwe.uri);
     expect(screen.visible).toContain(e.siwe.chainId);
     expect(screen.visible).toContain(e.siwe.nonce);
+    if (e.siwe.requestId) {
+      expect(screen.pair('Request code', e.siwe.requestId), `pair Request code: ${e.siwe.requestId}`).toBe(true);
+    }
   }
 
   if (screen.decision === 'blocked') {
@@ -151,6 +155,8 @@ async function check(f: Fixture, e: Expect) {
     expect(lines).toContain(`URI: ${e.siwe.uri}`);
     expect(lines).toContain(`Chain ID: ${e.siwe.chainId}`);
     expect(lines).toContain(`Nonce: ${e.siwe.nonce}`);
+    // The last line, so a "Request ID:" the statement carries is not the one checked.
+    if (e.siwe.requestId) expect(lines.at(-1)).toBe(`Request ID: ${e.siwe.requestId}`);
   }
 }
 

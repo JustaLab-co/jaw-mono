@@ -269,5 +269,35 @@
       },
       "fails": "hides ​"
     }
+  },
+  {
+    "id": "siwe-request-code",
+    "attack": "None. A sign-in carrying a request id, which the screen shows as a code to compare with the page that sent the user.",
+    "message": "app.example wants you to sign in with your Ethereum account:\n0x9fD37D2cF1b32b3f7dBae480bbd44BE3De2A9e0F\n\nConnect Example. Code: K7MXQ4.\n\nURI: https://app.example\nVersion: 1\nChain ID: 8453\nNonce: abcdef123456\nIssued At: 2026-01-01T00:00:00.000Z\nRequest ID: K7MXQ4",
+    "expect": {
+      "decision": "sign",
+      "siwe": {
+        "domain": "app.example",
+        "uri": "https://app.example",
+        "chainId": "8453",
+        "nonce": "abcdef123456",
+        "requestId": "K7MXQ4"
+      }
+    }
+  },
+  {
+    "id": "siwe-request-id-in-statement",
+    "attack": "The statement carries its own \"Request ID:\" line with another code, so a parser that takes the first match shows the dApp's text as the request code.",
+    "message": "app.example wants you to sign in with your Ethereum account:\n0x9fD37D2cF1b32b3f7dBae480bbd44BE3De2A9e0F\n\nConnect Example.\nRequest ID: SPOOF1\n\nURI: https://app.example\nVersion: 1\nChain ID: 8453\nNonce: abcdef123456\nIssued At: 2026-01-01T00:00:00.000Z\nRequest ID: K7MXQ4",
+    "expect": {
+      "decision": "sign",
+      "siwe": {
+        "domain": "app.example",
+        "uri": "https://app.example",
+        "chainId": "8453",
+        "nonce": "abcdef123456",
+        "requestId": "K7MXQ4"
+      }
+    }
   }
 ]

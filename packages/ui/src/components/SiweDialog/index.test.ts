@@ -95,3 +95,29 @@ describe('SiweDialog — parse failure surfaced, not silent (blocker 3)', () => 
     expect(html).not.toContain("couldn't read the full sign-in request");
   });
 });
+
+describe('SiweDialog — request code', () => {
+  const withRequestId = (id: string) => VALID_SIWE + `\nRequest ID: ${id}`;
+  /** The element showing the code, found by its label rather than anywhere in the raw message. */
+  const codeShown = () =>
+    [...document.querySelectorAll('span')].find((s) => s.textContent === 'Request code')?.nextElementSibling;
+
+  it('shows the request id as a code to compare when the message carries one', async () => {
+    const html = await render(props({ message: withRequestId('K7MXQ4') }));
+    expect(codeShown()?.textContent).toBe('K7MXQ4');
+    expect(codeShown()?.className).toContain('tracking-widest');
+    expect(html).toContain('Check it matches the code on the page that sent you here.');
+  });
+
+  it('shows no request code for a sign-in without one', async () => {
+    await render(props({ message: VALID_SIWE }));
+    expect(codeShown()).toBeUndefined();
+  });
+
+  it('still shows a long request id, in smaller type', async () => {
+    const id = 'req-0123456789abcdef0123456789abcdef';
+    await render(props({ message: withRequestId(id) }));
+    expect(codeShown()?.textContent).toBe(id);
+    expect(codeShown()?.className).not.toContain('tracking-widest');
+  });
+});
