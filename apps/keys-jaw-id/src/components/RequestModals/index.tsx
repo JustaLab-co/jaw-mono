@@ -10,6 +10,9 @@ import { isSiweMessage, getSiweOriginWarningFromMessage } from '@jaw.id/ui';
 import { Eip712Modal } from '../Eip712Modal';
 import { PermissionModal, type PermissionRequestData } from '../PermissionModal';
 import { RecoveryModal } from '../RecoveryModal';
+import { RecoveryStartModal } from '../RecoveryStartModal';
+import { GuardianApproveModal } from '../GuardianApproveModal';
+import { RecoveryCancelModal } from '../RecoveryCancelModal';
 import { AddFundsModal } from '../AddFundsModal';
 import type { WalletSendCallsReturn, EthSendTransactionReturn } from '../../lib/tx-handler';
 import { SDKRequestType } from '../../lib/sdk-types';
@@ -423,6 +426,87 @@ export function RequestModals({
             communicator.requestClose();
           }
         }}
+      />
+    );
+  }
+
+  // The three recovery ceremony requests answer as soon as there is something to answer with (the
+  // request opened, the approval posted, the veto relayed) and keep their outcome on screen until
+  // Done, as the App-Specific dialogs do. The answer releases the flow, so Done only closes.
+  const answerRecovery = async (result: unknown, what: string) => {
+    try {
+      await pendingRequest.onApprove(result);
+      debugLog(`✅ Recovery ${what}`);
+    } catch (err) {
+      console.error(`❌ Failed to answer the recovery ${what}:`, err);
+      setError(err instanceof Error ? err.message : 'Failed to answer the request');
+      setPhase('failed');
+    }
+  };
+  const closeRecovery = () => {
+    setPhase('done');
+    scheduleClose(closeDelayMs);
+  };
+  const rejectRecovery = async (error: Error, errorCode?: number) => {
+    try {
+      // Forward error and code directly from modal
+      await pendingRequest.onReject(error.message, errorCode ?? standardErrorCodes.provider.userRejectedRequest);
+      communicator.requestClose();
+    } catch (err) {
+      console.error('❌ Failed to reject:', err);
+      communicator.requestClose();
+    }
+  };
+
+  if (pendingRequest.type === SDKRequestType.START_RECOVERY) {
+    return (
+      // Keyed by request: see TransactionModal above.
+      <RecoveryStartModal
+        key={pendingRequest.requestId}
+        params={pendingRequest.params}
+        chain={pendingRequest.chain as chain}
+        apiKey={apiKey}
+        appName={pendingRequest.metadata?.appName}
+        appLogoUrl={pendingRequest.metadata?.appLogoUrl}
+        onStarted={(ceremony) => answerRecovery(ceremony, 'request opened')}
+        onDone={closeRecovery}
+        onError={rejectRecovery}
+      />
+    );
+  }
+
+  if (pendingRequest.type === SDKRequestType.APPROVE_RECOVERY) {
+    return (
+      // Keyed by request: see TransactionModal above.
+      <GuardianApproveModal
+        key={pendingRequest.requestId}
+        params={pendingRequest.params}
+        chain={pendingRequest.chain as chain}
+        apiKey={apiKey}
+        origin={pendingRequest.origin}
+        appName={pendingRequest.metadata?.appName}
+        appLogoUrl={pendingRequest.metadata?.appLogoUrl}
+        onApproved={(result) => answerRecovery(result, 'approval posted')}
+        onDone={closeRecovery}
+        onError={rejectRecovery}
+      />
+    );
+  }
+
+  if (pendingRequest.type === SDKRequestType.CANCEL_RECOVERY) {
+    return (
+      // Keyed by request: see TransactionModal above.
+      <RecoveryCancelModal
+        key={pendingRequest.requestId}
+        params={pendingRequest.params}
+        chain={pendingRequest.chain as chain}
+        apiKey={apiKey}
+        origin={pendingRequest.origin}
+        appName={pendingRequest.metadata?.appName}
+        appLogoUrl={pendingRequest.metadata?.appLogoUrl}
+        onCancelled={(result) => answerRecovery(result, 'cancel relayed')}
+        onDone={closeRecovery}
+        onError={rejectRecovery}
       />
     );
   }

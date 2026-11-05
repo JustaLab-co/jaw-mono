@@ -3,15 +3,31 @@
 import {
   LocalStorageAccount,
   OnboardingDialog,
+  RecoveryWarning,
   type CreatedAccountData,
   toLocalStorageAccount,
   getLastAuthenticatedCredentialId,
+  formatAddress,
+  selectDefaultAccount,
+  usePendingRecoveries,
+  useReverseIdentity,
 } from '@jaw.id/ui';
 import { debugLog } from '../../lib/debug-log';
 import { useLogin, usePasskeyLogin, usePasskeys, useCreatePasskey, useAuth } from '../../hooks';
 import { useState, useMemo } from 'react';
-import { SUPPORTED_CHAINS, Chain, SubnameTextRecordCapabilityRequest, JAW_RPC_URL } from '@jaw.id/core';
+import {
+  SUPPORTED_CHAINS,
+  Chain,
+  SubnameTextRecordCapabilityRequest,
+  JAW_RPC_URL,
+  RecoveryNotFinishedError,
+  listCeremonies,
+  type PasskeyAccount,
+} from '@jaw.id/core';
+import type { Address, Hex } from 'viem';
 import { ChainId } from '../../utils/types';
+import { RecoveryStartFlow, recoveryApproveUrl } from '../RecoveryStartModal';
+import { RecoveryCancelFlow } from '../RecoveryCancelModal';
 
 // Authenticated account data returned after successful login
 export interface AuthenticatedAccount {
@@ -43,6 +59,20 @@ interface SignInScreenProps {
   onClose?: () => void;
   /** Open on the create view — see OnboardingDialogProps.startInCreate. */
   startInCreate?: boolean;
+  /** The requesting dApp, named on the recovery screens. */
+  appName?: string;
+  appLogoUrl?: string;
+}
+
+/**
+ * The request a passkey belongs to when it signs in before its recovery finished: the account's
+ * newest request whose subject is this key, whatever its stage, so an ending shows too.
+ */
+async function recoveryRequestOf(error: RecoveryNotFinishedError, apiKey?: string): Promise<Hex | null> {
+  const ceremonies = await listCeremonies(error.account, undefined, apiKey);
+  return (
+    ceremonies.find((ceremony) => ceremony.subject.toLowerCase() === error.publicKey.toLowerCase())?.requestId ?? null
+  );
 }
 
 export function SignInScreen({
@@ -57,8 +87,10 @@ export function SignInScreen({
   onCreateNewAccount,
   startInCreate,
   onClose,
+  appName,
+  appLogoUrl,
 }: SignInScreenProps) {
-  const { accounts, accountsLoading, refetchAccounts } = usePasskeys({ apiKey });
+  const { accounts, accountsLoading, refetchAccounts, restoreAccount } = usePasskeys({ apiKey });
   const { mutateAsync: login } = useLogin();
   const { mutateAsync: passkeyLogin, isPending: isImportingPasskey } = usePasskeyLogin();
   const { refetch: refetchAuth } = useAuth({ origin });
@@ -77,12 +109,68 @@ export function SignInScreen({
     [preferredCredentialId, apiKey]
   );
 
+  // The recovery flow, opened from "Lost your passkey?" or by a passkey a recovery added signing in
+  // before it finished (then with its account and request). The pending request stays open
+  // throughout: only signing in with the recovered passkey answers it, and Done declines it.
+  const [recovery, setRecovery] = useState<{ account?: Address; requestId?: Hex } | null>(null);
+
+  // The owner's warning: someone is recovering the account the welcome view offers. "Review and
+  // cancel" opens the veto for the newest request; a request vetoed here is not warned about again
+  // while its cancel is still landing.
+  const [cancelling, setCancelling] = useState<{ requestId: Hex; account: PasskeyAccount } | null>(null);
+  const [vetoed, setVetoed] = useState<Hex[]>([]);
+  const localAccounts = useMemo(() => accounts.map(toLocalStorageAccount), [accounts]);
+  const welcomeAccount = useMemo(
+    () => selectDefaultAccount(localAccounts, lastAuthenticatedCredentialId),
+    [localAccounts, lastAuthenticatedCredentialId]
+  );
+  const warnedAddress = welcomeAccount?.address as Address | undefined;
+  const pendingRecoveries = usePendingRecoveries(warnedAddress, apiKey);
+  const warnedIdentity = useReverseIdentity(warnedAddress, 1, mainnetRpcUrl);
+  const newestPending = pendingRecoveries
+    ?.filter((entry) => !vetoed.some((id) => id.toLowerCase() === entry.requestId.toLowerCase()))
+    .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))[0];
+  const warnedAccount = welcomeAccount && accounts.find((a) => a.credentialId === welcomeAccount.credentialId);
+
+  // Safari can't create a passkey in the embedded dialog, and a recovery start creates one: it
+  // continues in the popup, switched within this click as account creation is (onCreateNewAccount).
+  // The popup opens on the sign-up view, which carries the same link.
+  const openRecovery = onCreateNewAccount ?? (() => setRecovery({}));
+
   debugLog('✅ OnboardingSection: ENS Config =', ensConfig || 'NOT PROVIDED');
   debugLog('✅ OnboardingSection: ChainId =', chainId || 'NOT PROVIDED');
   debugLog('✅ OnboardingSection: ApiKey =', apiKey ? 'PROVIDED' : 'NOT PROVIDED');
   debugLog('✅ OnboardingSection: SubnameTextRecords =', subnameTextRecords);
 
   const { mutateAsync: register, isPending: isCreatingPasskey } = useCreatePasskey();
+
+  // The chain a sign-in restores the account on: the request's, else the dialog's default.
+  const resolveTargetChain = (): Chain => {
+    if (chainConfig && chainConfig.rpcUrl) {
+      return {
+        id: chainConfig.id,
+        rpcUrl: chainConfig.rpcUrl,
+        ...(chainConfig.paymasterUrl && { paymaster: { url: chainConfig.paymasterUrl } }),
+      };
+    }
+    const fallbackChain = SUPPORTED_CHAINS.find((chain) => chain.id === (chainId ?? 1));
+    if (!fallbackChain) {
+      throw new Error(`Chain ${chainId ?? 1} is not supported`);
+    }
+    return { id: fallbackChain.id };
+  };
+
+  // A passkey a recovery added, signing in before the recovery finished: show where its request
+  // stands instead of the sign-in screen. Any other failure stays on the sign-in screen, as before.
+  const showRecoveryOf = async (error: unknown) => {
+    if (!(error instanceof RecoveryNotFinishedError)) return;
+    try {
+      const requestId = await recoveryRequestOf(error, apiKey);
+      if (requestId) setRecovery({ account: error.account, requestId });
+    } catch (lookupError) {
+      console.error('❌ Recovery request lookup failed:', lookupError);
+    }
+  };
 
   const handleAccountSelect = async (account: LocalStorageAccount) => {
     try {
@@ -91,21 +179,7 @@ export function SignInScreen({
       }
       setLoggingInAccount(account.username);
 
-      let targetChain: Chain;
-
-      if (chainConfig && chainConfig.rpcUrl) {
-        targetChain = {
-          id: chainConfig.id,
-          rpcUrl: chainConfig.rpcUrl,
-          ...(chainConfig.paymasterUrl && { paymaster: { url: chainConfig.paymasterUrl } }),
-        };
-      } else {
-        const fallbackChain = SUPPORTED_CHAINS.find((chain) => chain.id === (chainId ?? 1));
-        if (!fallbackChain) {
-          throw new Error(`Chain ${chainId ?? 1} is not supported`);
-        }
-        targetChain = { id: fallbackChain.id };
-      }
+      const targetChain = resolveTargetChain();
 
       const result = await login({
         chainId: targetChain,
@@ -128,6 +202,7 @@ export function SignInScreen({
     } catch (error) {
       console.error('❌ Login failed:', error);
       setLoggingInAccount(null);
+      await showRecoveryOf(error);
     }
   };
 
@@ -195,9 +270,12 @@ export function SignInScreen({
         publicKey: importedAccount.publicKey as `0x${string}`,
       };
 
+      // Signed in: a recovery screen this opened from is done with.
+      setRecovery(null);
       onComplete(authenticatedAccount);
     } catch (error) {
       console.error('❌ Import failed:', error);
+      await showRecoveryOf(error);
     }
   };
 
@@ -205,10 +283,64 @@ export function SignInScreen({
     return null;
   }
 
+  if (cancelling) {
+    const { requestId, account } = cancelling;
+    return (
+      <RecoveryCancelFlow
+        requestId={requestId}
+        // Restored with no prompt: the cancel signature that follows is the one prompt.
+        openAccount={() => restoreAccount(resolveTargetChain(), account.credentialId, account.publicKey, apiKey)}
+        apiKey={apiKey}
+        origin={origin || ''}
+        appName={appName}
+        appLogoUrl={appLogoUrl}
+        // The request is still open: Not now and Done go back to it, and a failure stays on screen.
+        onClose={() => setCancelling(null)}
+        onDone={() => {
+          setVetoed((ids) => [...ids, requestId]);
+          setCancelling(null);
+        }}
+      />
+    );
+  }
+
+  if (recovery) {
+    // Done ends the pending request as cancelled: nothing signed in.
+    const decline = onClose ?? (() => setRecovery(null));
+    return (
+      <RecoveryStartFlow
+        account={recovery.account}
+        requestId={recovery.requestId}
+        approveUrl={recoveryApproveUrl()}
+        chainId={chainConfig?.id ?? chainId ?? 1}
+        apiKey={apiKey}
+        appName={appName}
+        appLogoUrl={appLogoUrl}
+        onStarted={(ceremony) => setRecovery((current) => ({ ...current, requestId: ceremony.requestId }))}
+        onBack={() => setRecovery(null)}
+        onClose={decline}
+        onDone={decline}
+        onStartAgain={onCreateNewAccount ?? (() => setRecovery((current) => ({ account: current?.account })))}
+        onOpenAccount={handleImportAccount}
+        isOpeningAccount={isImportingPasskey}
+      />
+    );
+  }
+
   return (
     <OnboardingDialog
       onClose={onClose}
-      accounts={accounts.map(toLocalStorageAccount)}
+      onLostPasskey={openRecovery}
+      notice={
+        newestPending && warnedAccount ? (
+          <RecoveryWarning
+            request={newestPending}
+            accountName={warnedIdentity.plainName ?? (warnedAccount.username || formatAddress(warnedAddress ?? ''))}
+            onReview={() => setCancelling({ requestId: newestPending.requestId, account: warnedAccount })}
+          />
+        ) : undefined
+      }
+      accounts={localAccounts}
       onAccountSelect={handleAccountSelect}
       loggingInAccount={loggingInAccount}
       onImportAccount={handleImportAccount}

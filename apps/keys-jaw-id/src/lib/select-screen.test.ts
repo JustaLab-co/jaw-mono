@@ -16,6 +16,10 @@ const MODAL_REQUESTS = [
   SDKRequestType.GRANT_PERMISSIONS,
   SDKRequestType.REVOKE_PERMISSIONS,
   SDKRequestType.SETUP_RECOVERY,
+  // A guardian approving and an owner cancelling sign with their account, so
+  // they sign in first, as the setup does.
+  SDKRequestType.APPROVE_RECOVERY,
+  SDKRequestType.CANCEL_RECOVERY,
   // Signs nothing, but it puts a screen up and holds it until the user is done,
   // which is the shape this set is about.
   SDKRequestType.ADD_FUNDS,
@@ -120,6 +124,44 @@ describe('selectScreen', () => {
     });
   });
 
+  describe('a recovery start', () => {
+    // The user recovering has lost their passkey: there is no account to sign
+    // in with, so onboarding would be a dead end.
+    it.each(ALL_PHASES.filter((phase) => phase !== 'done' && phase !== 'failed'))(
+      'shows the modal with no account signed in, in %s',
+      (phase) => {
+        expect(selectScreen({ requestType: SDKRequestType.START_RECOVERY, phase, isAuthenticated: false })).toEqual({
+          kind: 'modal',
+        });
+      }
+    );
+
+    it('shows the modal when an account is signed in too', () => {
+      expect(
+        selectScreen({ requestType: SDKRequestType.START_RECOVERY, phase: 'choosing-account', isAuthenticated: true })
+      ).toEqual({ kind: 'modal' });
+    });
+
+    it.each([
+      ['done', 'receipt'],
+      ['failed', 'failure'],
+    ] as [Phase, Screen['kind']][])('does NOT reopen the modal once %s', (phase, expected) => {
+      expect(selectScreen({ requestType: SDKRequestType.START_RECOVERY, phase, isAuthenticated: false })).toEqual({
+        kind: expected,
+      });
+    });
+
+    it('never needs the account screen', () => {
+      expect(
+        needsAccountScreen({
+          requestType: SDKRequestType.START_RECOVERY,
+          phase: 'reading-passkeys',
+          isAuthenticated: false,
+        })
+      ).toBe(false);
+    });
+  });
+
   describe('phase alone, with nothing pending', () => {
     it.each([
       ['starting', 'loading'],
@@ -138,7 +180,13 @@ describe('selectScreen', () => {
   it('always returns a screen, for every input combination', () => {
     // Exhaustive: every combination maps to a screen, so no input can leave the
     // dialog with nothing to render.
-    const types = [...MODAL_REQUESTS, SDKRequestType.CONNECT, SDKRequestType.UNSUPPORTED_METHOD, undefined];
+    const types = [
+      ...MODAL_REQUESTS,
+      SDKRequestType.START_RECOVERY,
+      SDKRequestType.CONNECT,
+      SDKRequestType.UNSUPPORTED_METHOD,
+      undefined,
+    ];
     for (const requestType of types) {
       for (const phase of ALL_PHASES) {
         for (const isAuthenticated of [true, false]) {

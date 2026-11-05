@@ -25,6 +25,9 @@ export enum SDKRequestType {
   GRANT_PERMISSIONS = 'grant_permissions',
   REVOKE_PERMISSIONS = 'revoke_permissions',
   SETUP_RECOVERY = 'setup_recovery',
+  START_RECOVERY = 'start_recovery',
+  APPROVE_RECOVERY = 'approve_recovery',
+  CANCEL_RECOVERY = 'cancel_recovery',
   ADD_FUNDS = 'add_funds',
   UNSUPPORTED_METHOD = 'unsupported_method',
 }

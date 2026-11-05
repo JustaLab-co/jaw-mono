@@ -841,6 +841,12 @@ function KeysJawIdAppContent({
         requestType = SDKRequestType.REVOKE_PERMISSIONS;
       } else if (method === 'wallet_setupRecovery') {
         requestType = SDKRequestType.SETUP_RECOVERY;
+      } else if (method === 'wallet_startRecovery') {
+        requestType = SDKRequestType.START_RECOVERY;
+      } else if (method === 'wallet_approveRecovery') {
+        requestType = SDKRequestType.APPROVE_RECOVERY;
+      } else if (method === 'wallet_cancelRecovery') {
+        requestType = SDKRequestType.CANCEL_RECOVERY;
       } else if (method === 'wallet_addFunds') {
         requestType = SDKRequestType.ADD_FUNDS;
       } else if (method === 'wallet_connect') {
@@ -1098,6 +1104,8 @@ function KeysJawIdAppContent({
               preferredCredentialId={hintedCredentialId ?? undefined}
               onCreateNewAccount={createEscapesToPopup ? switchToPopupForCreate : undefined}
               startInCreate={startInCreate}
+              appName={pendingRequest?.metadata?.appName}
+              appLogoUrl={pendingRequest?.metadata?.appLogoUrl}
               onComplete={async (authenticatedAccount: AuthenticatedAccount) => {
                 try {
                   // Set the current account from the passed data
@@ -1131,7 +1139,9 @@ function KeysJawIdAppContent({
                     pendingRequest?.type === SDKRequestType.SEND_TRANSACTION ||
                     pendingRequest?.type === SDKRequestType.GRANT_PERMISSIONS ||
                     pendingRequest?.type === SDKRequestType.REVOKE_PERMISSIONS ||
-                    pendingRequest?.type === SDKRequestType.SETUP_RECOVERY
+                    pendingRequest?.type === SDKRequestType.SETUP_RECOVERY ||
+                    pendingRequest?.type === SDKRequestType.APPROVE_RECOVERY ||
+                    pendingRequest?.type === SDKRequestType.CANCEL_RECOVERY
                   ) {
                     // If there's a pending sign message, typed data, transaction, or permission request,
                     // the modal will be shown in the priority logic above since user is now authenticated
@@ -1171,6 +1181,8 @@ function KeysJawIdAppContent({
               preferredCredentialId={hintedCredentialId ?? undefined}
               onCreateNewAccount={createEscapesToPopup ? switchToPopupForCreate : undefined}
               startInCreate={startInCreate}
+              appName={pendingRequest?.metadata?.appName}
+              appLogoUrl={pendingRequest?.metadata?.appLogoUrl}
               onComplete={async (authenticatedAccount: AuthenticatedAccount) => {
                 try {
                   // Set the current account from the passed data
@@ -1226,7 +1238,9 @@ function KeysJawIdAppContent({
                     pendingRequest?.type === SDKRequestType.SEND_TRANSACTION ||
                     pendingRequest?.type === SDKRequestType.GRANT_PERMISSIONS ||
                     pendingRequest?.type === SDKRequestType.REVOKE_PERMISSIONS ||
-                    pendingRequest?.type === SDKRequestType.SETUP_RECOVERY
+                    pendingRequest?.type === SDKRequestType.SETUP_RECOVERY ||
+                    pendingRequest?.type === SDKRequestType.APPROVE_RECOVERY ||
+                    pendingRequest?.type === SDKRequestType.CANCEL_RECOVERY
                   ) {
                     // If there's a pending sign message, typed data, transaction, or permission request,
                     // the modal will be shown in the priority logic above since user is now authenticated

@@ -69,13 +69,24 @@ const MODAL_REQUESTS: ReadonlySet<SDKRequestType> = new Set([
   SDKRequestType.GRANT_PERMISSIONS,
   SDKRequestType.REVOKE_PERMISSIONS,
   SDKRequestType.SETUP_RECOVERY,
+  SDKRequestType.APPROVE_RECOVERY,
+  SDKRequestType.CANCEL_RECOVERY,
   SDKRequestType.ADD_FUNDS,
 ]);
+
+/**
+ * Request types answered by a modal with no account signed in. A recovery start is made by someone
+ * who has lost their passkey: there is no account to sign in with, so it must never fall to
+ * onboarding.
+ */
+const ACCOUNTLESS_MODAL_REQUESTS: ReadonlySet<SDKRequestType> = new Set([SDKRequestType.START_RECOVERY]);
 
 /** Phases where the flow has finished; its modal must not come back. */
 const TERMINAL: ReadonlySet<Phase> = new Set<Phase>(['done', 'failed']);
 
 export function selectScreen({ requestType, phase, isAuthenticated }: SelectScreenInput): Screen {
+  if (requestType && ACCOUNTLESS_MODAL_REQUESTS.has(requestType) && !TERMINAL.has(phase)) return { kind: 'modal' };
+
   if (requestType && MODAL_REQUESTS.has(requestType) && !TERMINAL.has(phase)) {
     // `working` also passes: once the user has confirmed, the modal owns the
     // screen and shows its own progress, even though auth may have been rotated

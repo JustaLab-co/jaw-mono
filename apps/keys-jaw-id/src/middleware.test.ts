@@ -33,6 +33,19 @@ describe('framing policy is route-scoped', () => {
     });
   });
 
+  // The guardian page signs a recovery approval: a dApp must never be able to frame it.
+  describe('/recover/approve/<request id>: never embeddable', () => {
+    const path = `/recover/approve/0x${'ab'.repeat(32)}`;
+
+    it('keeps frame-ancestors none', () => {
+      expect(cspFor(path)).toContain("frame-ancestors 'none'");
+    });
+
+    it('keeps X-Frame-Options DENY', () => {
+      expect(headersFor(path).get('X-Frame-Options')).toBe('DENY');
+    });
+  });
+
   describe('any other route — default deny', () => {
     it.each(['/settings', '/some/future/route', '/dialog'])('%s keeps both deny headers', (path) => {
       expect(cspFor(path)).toContain("frame-ancestors 'none'");
