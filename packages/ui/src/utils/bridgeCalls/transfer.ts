@@ -19,6 +19,8 @@ export type BridgeTransfer = {
   origin: ChainLabel;
   receive?: Received;
   destination?: ChainLabel;
+  /** Pays out on the chain it starts on, so the simulation sees what arrives. */
+  sameChain?: true;
   /** Set when what arrives goes to an address other than this account. */
   otherRecipient?: Address;
   details: Detail[];
@@ -36,7 +38,7 @@ const tokenNotice = (token: Token) =>
 const unknownChain = (id: number) =>
   `This screen does not know chain ${id} and cannot confirm that the recipient there is this account. Check it before you confirm.`;
 const RELAY_SWAP_HIDDEN =
-  'Relay does not say in this transaction what the swap pays out. This screen cannot show what you get. Confirm only if you started this swap yourself.';
+  'Relay does not say in this transaction what the swap pays out, so this screen cannot confirm what you get. Confirm only if you started this swap yourself.';
 const RELAY_HIDDEN =
   'Relay keeps the destination chain and the recipient in an order outside this transaction. This screen cannot show them. Confirm only if you started this transfer yourself.';
 
@@ -158,6 +160,7 @@ function relaySwapTransfer(contracts: BridgeContracts, swap: RelaySwap, account:
       title: 'Swap through Relay',
       send: swap.send,
       origin: labelOf(contracts, swap.send.chainId),
+      sameChain: true,
       details: [accountDetail('Refund to', account, account)],
     },
     notices,

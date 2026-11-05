@@ -16,7 +16,7 @@ const BASE_WETH = '0x4200000000000000000000000000000000000006';
 const OTHER = '0x1111111111111111111111111111111111111111';
 
 const SWAP_HIDDEN =
-  'Relay does not say in this transaction what the swap pays out. This screen cannot show what you get. Confirm only if you started this swap yourself.';
+  'Relay does not say in this transaction what the swap pays out, so this screen cannot confirm what you get. Confirm only if you started this swap yourself.';
 const UNPAIRED = 'This batch has an approval that no deposit uses. Check its token, amount and spender.';
 const DEPOSIT_2 =
   'This screen cannot confirm where the deposit in step 2 sends the funds. Check the raw details before you confirm.';
@@ -73,6 +73,7 @@ describe('given the Relay quote for a same-chain swap on Base, 10 USDC to ETH', 
       title: 'Swap through Relay',
       send: tenUsdc,
       origin: { name: 'Base', nativeSymbol: 'ETH' },
+      sameChain: true,
       details: [{ label: 'Refund to', value: 'This account', copy: getAddress(account) }],
     });
     expect(batch?.steps).toEqual([null, null]);
