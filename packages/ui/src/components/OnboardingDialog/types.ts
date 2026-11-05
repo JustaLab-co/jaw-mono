@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import type { SubnameTextRecordCapabilityRequest } from '@jaw.id/core';
 
 export interface LocalStorageAccount {
@@ -41,6 +42,18 @@ export interface OnboardingDialogProps {
 
   /** Open on the sign-in/create view even when a default account exists (popup opened via the Safari create escape). */
   startInCreate?: boolean;
+
+  /**
+   * Opens the recovery flow for a user whose passkey is lost. Shown as a "Lost your passkey?" link
+   * under the sign-in view only when set.
+   */
+  onLostPasskey?: () => void;
+
+  /**
+   * Shown above the welcome-back title, for the account that view offers: the owner's recovery
+   * warning while someone is recovering it.
+   */
+  notice?: ReactNode;
 
   /**
    * Declines the connect request — the host's existing reject path (userRejected), surfaced as the

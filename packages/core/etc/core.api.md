@@ -591,6 +591,12 @@ export function decryptContent<R extends RPCRequest | RPCResponse>(encryptedData
 export const DEFAULT_RECOVERY_ADMIN_EXPIRY_SECONDS = 600;
 
 // @public
+export function deriveAccountRecordV1(publicKey: Hex): AccountRecord;
+
+// @public
+export function deriveAccountRecordV2(publicKey: Hex): AccountRecord;
+
+// @public
 export function deriveSharedSecret(ownPrivateKey: CryptoKey, peerPublicKey: CryptoKey): Promise<CryptoKey>;
 
 // @public
@@ -1810,8 +1816,9 @@ export type RecoveryNetworkStatus = 'ready' | 'not-deployed' | 'not-available' |
 
 // @public
 export class RecoveryNotFinishedError extends Error {
-    constructor(account: Address_2, chainId: number);
+    constructor(account: Address_2, chainId: number, publicKey: Hex);
     readonly account: Address_2;
+    readonly publicKey: Hex;
 }
 
 // @public
@@ -2407,6 +2414,7 @@ export interface UIHandlerConfig {
     defaultChainId?: number;
     ens?: string;
     paymasters?: Record<number, PaymasterConfig>;
+    recoveryApproveUrl?: string;
     serverUrl?: string;
     showTestnets?: boolean;
     theme?: JawTheme;

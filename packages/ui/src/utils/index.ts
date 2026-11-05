@@ -23,6 +23,8 @@ export * from './functionSignature';
 export * from './transactionFailure';
 export * from './permissionExecution';
 export * from './recoverySetup';
+export * from './recoveryRequest';
+export * from './ensResolve';
 export * from './assetPreview';
 export * from './eip681';
 export * from './qrPath';

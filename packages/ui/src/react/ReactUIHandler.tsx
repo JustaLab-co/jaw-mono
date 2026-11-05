@@ -17,6 +17,9 @@ import {
   PermissionUIRequest,
   RevokePermissionUIRequest,
   SetupRecoveryUIRequest,
+  StartRecoveryUIRequest,
+  ApproveRecoveryUIRequest,
+  CancelRecoveryUIRequest,
   AddFundsUIRequest,
   WalletSignUIRequest,
   Account,
@@ -30,11 +33,16 @@ import {
   buildRevokePermissionCall,
   buildErc20PaymasterContext,
   isFirstRecoverySetup,
+  listCeremonies,
+  RecoveryNotFinishedError,
   type Chain,
   type SignInWithEthereumCapabilityRequest,
   type PaymasterConfig,
   type RecoveryConfig,
   type RecoverySetupResult,
+  type CreatedCeremony,
+  type StartedRecovery,
+  type CeremonyApproval,
   ensureIntNumber,
   standardErrorCodes,
 } from '@jaw.id/core';
@@ -54,6 +62,10 @@ import { PermissionDialog } from '../components/PermissionDialog';
 import { isWildcard } from '../components/PermissionDialog/Sections';
 import { toDialogCalls } from '../components/PermissionDialog/calls';
 import { RecoveryDialog } from '../components/RecoveryDialog';
+import { RecoveryStartDialog } from '../components/RecoveryStartDialog';
+import { GuardianApproveDialog } from '../components/GuardianApproveDialog';
+import { RecoveryCancelDialog } from '../components/RecoveryCancelDialog';
+import { RecoveryWarning } from '../components/RecoveryWarning';
 import { ConnectDialog } from '../components/ConnectDialog';
 import { AddFundsDialog } from '../components/AddFundsDialog';
 import { ResponsiveDialogAnchor } from '../components/DialogPresentation';
@@ -63,6 +75,7 @@ import {
   getStoredLocalAccounts,
   getLastAuthenticatedCredentialId,
 } from '../components/OnboardingDialog/accountHelpers';
+import { selectDefaultAccount } from '../components/OnboardingDialog/selectDefaultAccount';
 import { useChainIconURI } from '../hooks/useChainIconURI';
 import { useGasEstimation } from '../hooks/useGasEstimation';
 import { useSpenderPrefund, describeSpenderPrefund } from '../hooks/useSpenderPrefund';
@@ -70,6 +83,11 @@ import { useAssetPreview } from '../hooks/useAssetPreview';
 import { usePermissionExecution } from '../hooks/usePermissionExecution';
 import { usePermissionRevocation } from '../hooks/usePermissionRevocation';
 import { useRecoveryNetworks } from '../hooks/useRecoveryNetworks';
+import { useRecoveryRequest } from '../hooks/useRecoveryRequest';
+import { usePendingRecoveries } from '../hooks/usePendingRecoveries';
+import { useReverseIdentity } from '../hooks/useReverseIdentity';
+import { guardianApprovalBlock } from '../utils/recoveryRequest';
+import { formatAddress } from '../utils/formatAddress';
 import { recoveryActivationCalls, recoveryPlanStillHolds, recoveryUnavailable } from '../utils/recoverySetup';
 import { useFunctionSignatures } from '../hooks/useFunctionSignatures';
 import { fetchTokenBalance, isNativeToken } from '../utils/tokenBalance';
@@ -89,6 +107,16 @@ const SIGNED_TICK_MS = 850;
 // How long the recovery outcome screen stays up after the dApp has its answer, unless the user
 // closes it first: long enough to watch a relayed change land (polling stops at five minutes).
 const RECOVERY_OUTCOME_HOLD_MS = 5 * 60_000;
+
+// How long the recovery status stays up after the dApp has its request, unless the user closes it
+// first: long enough to send the link and watch the first approvals land, while a forgotten tab
+// stops polling.
+const RECOVERY_STATUS_HOLD_MS = 30 * 60_000;
+
+// The guardians' page when the recovery starts from the connect screen's "Lost your passkey?" and
+// the SDK did not hand one over in `init` (`UIHandlerConfig.recoveryApproveUrl`): keys' own page,
+// core's default for the preference.
+const DEFAULT_RECOVERY_APPROVE_URL = 'https://keys.jaw.id/recover/approve';
 
 // After the activation transaction lands, the networks are read again until one can take the
 // change: the read is live, and a node a block behind can still answer with the old state.
@@ -453,6 +481,9 @@ export class ReactUIHandler implements UIHandler {
       'wallet_grantPermissions',
       'wallet_revokePermissions',
       'wallet_setupRecovery',
+      'wallet_cancelRecovery',
+      'wallet_startRecovery',
+      'wallet_approveRecovery',
       'wallet_sign',
       'wallet_addFunds',
     ].includes(request.type);
@@ -498,6 +529,7 @@ export class ReactUIHandler implements UIHandler {
             paymasters={this.config.paymasters}
             ens={this.config.ens}
             serverUrl={this.config.serverUrl}
+            recoveryApproveUrl={this.config.recoveryApproveUrl}
           />
         );
 
@@ -723,6 +755,53 @@ export class ReactUIHandler implements UIHandler {
           />
         );
 
+      case 'wallet_cancelRecovery':
+        return (
+          <RecoveryCancelDialogWrapper
+            key={request.id}
+            request={request as CancelRecoveryUIRequest}
+            onApprove={onApprove}
+            onReject={onReject}
+            onSubmissionInFlight={onSubmissionInFlight}
+            apiKey={this.config.apiKey}
+            defaultChainId={this.config.defaultChainId}
+            paymasters={this.config.paymasters}
+            appName={this.config.appName}
+            appLogoUrl={this.config.appLogoUrl}
+          />
+        );
+
+      case 'wallet_approveRecovery':
+        return (
+          <GuardianApproveDialogWrapper
+            key={request.id}
+            request={request as ApproveRecoveryUIRequest}
+            onApprove={onApprove}
+            onReject={onReject}
+            onSubmissionInFlight={onSubmissionInFlight}
+            apiKey={this.config.apiKey}
+            defaultChainId={this.config.defaultChainId}
+            paymasters={this.config.paymasters}
+            appName={this.config.appName}
+            appLogoUrl={this.config.appLogoUrl}
+          />
+        );
+
+      case 'wallet_startRecovery':
+        return (
+          <RecoveryStartDialogWrapper
+            key={request.id}
+            request={request as StartRecoveryUIRequest}
+            onApprove={onApprove}
+            onReject={onReject}
+            onSubmissionInFlight={onSubmissionInFlight}
+            apiKey={this.config.apiKey}
+            serverUrl={this.config.serverUrl}
+            appName={this.config.appName}
+            appLogoUrl={this.config.appLogoUrl}
+          />
+        );
+
       case 'wallet_addFunds':
         return (
           <AddFundsDialogWrapper
@@ -771,6 +850,83 @@ async function getAccountForSigning(apiKey?: string, chainId?: number, paymaster
   });
 }
 
+/**
+ * Start a recovery with a new passkey that belongs to this site, as the one `Account.create`
+ * makes at sign-up does.
+ */
+async function startRecoveryHere(
+  config: { chainId: number; apiKey?: string; serverUrl?: string },
+  account: Address,
+  username: string
+): Promise<StartedRecovery> {
+  if (!config.apiKey) {
+    throw new Error('API key is required');
+  }
+  return await Account.startRecovery(
+    { ...config, rpId: typeof window !== 'undefined' ? window.location.hostname : 'localhost', rpName: 'JAW' },
+    { account, username }
+  );
+}
+
+/**
+ * The request a passkey belongs to when it signs in before its recovery finished: the account's
+ * newest request whose subject is this key, whatever its stage, so an ending shows too.
+ */
+async function recoveryRequestOf(error: RecoveryNotFinishedError, apiKey?: string): Promise<Hex | null> {
+  const ceremonies = await listCeremonies(error.account, undefined, apiKey);
+  return (
+    ceremonies.find((ceremony) => ceremony.subject.toLowerCase() === error.publicKey.toLowerCase())?.requestId ?? null
+  );
+}
+
+/**
+ * A passkey stored on this device as an Account, with no prompt: the signature that follows is
+ * the one prompt. The owner's veto from the connect screen uses it, before anything signed in.
+ */
+async function restoreStoredAccount(
+  account: LocalStorageAccount,
+  config: { chainId: number; apiKey?: string; paymasters?: Record<number, PaymasterConfig>; serverUrl?: string }
+): Promise<Account> {
+  if (!config.apiKey) throw new Error('API key is required');
+  const stored = Account.getStoredAccounts(config.apiKey).find((entry) => entry.credentialId === account.credentialId);
+  if (!stored) throw new Error('This passkey isn’t stored on this device');
+  return await Account.restore(
+    {
+      chainId: config.chainId,
+      apiKey: config.apiKey,
+      paymasterUrl: config.paymasters?.[config.chainId]?.url,
+      serverUrl: config.serverUrl,
+    },
+    stored.credentialId,
+    stored.publicKey
+  );
+}
+
+/**
+ * The signed-in passkey's public key when it is the account at `address`; undefined when this
+ * device does not know it. A known key that is none of a request's guardians is refused before
+ * any prompt.
+ */
+function signedInKeyOf(address: Address, apiKey?: string): Hex | undefined {
+  const current = Account.getCurrentAccount(apiKey);
+  const signedIn = Account.getAuthenticatedAddress(apiKey);
+  return current && signedIn?.toLowerCase() === address.toLowerCase() ? current.publicKey : undefined;
+}
+
+/**
+ * The answer for a failed approval or veto: a cancelled passkey prompt is the user's no (4001),
+ * core refusing the request before any prompt keeps its -32602, anything else is internal.
+ */
+function recoveryRejection(error: unknown): UIError {
+  const errorObj = error instanceof Error ? error : new Error(String(error));
+  if (errorObj.name === 'NotAllowedError') return UIError.userRejected('User cancelled the passkey prompt');
+  const code = (error as { code?: unknown }).code;
+  if (code === standardErrorCodes.rpc.invalidParams) {
+    return new UIError(standardErrorCodes.rpc.invalidParams as UIErrorCode, errorObj.message);
+  }
+  return new UIError(standardErrorCodes.rpc.internal as UIErrorCode, errorObj.message);
+}
+
 // OnboardingDialogWrapper - handles passkey authentication flow with ConnectDialog confirmation
 function OnboardingDialogWrapper({
   request,
@@ -781,6 +937,7 @@ function OnboardingDialogWrapper({
   paymasters,
   ens,
   serverUrl,
+  recoveryApproveUrl,
 }: {
   request: ConnectUIRequest;
   onApprove: (data: any) => void;
@@ -790,6 +947,8 @@ function OnboardingDialogWrapper({
   paymasters?: Record<number, PaymasterConfig>;
   ens?: string;
   serverUrl?: string;
+  /** The page guardians open, from `UIHandlerConfig`; keys' page when the SDK sent none. */
+  recoveryApproveUrl?: string;
 }) {
   const [open, setOpen] = useState(true);
   const [accounts, setAccounts] = useState<LocalStorageAccount[]>(() => getStoredLocalAccounts(apiKey));
@@ -816,6 +975,32 @@ function OnboardingDialogWrapper({
   // State for SIWE signing flow
   const [isSiweSigning, setIsSiweSigning] = useState(false);
   const [siweStatus, setSiweStatus] = useState<string>('');
+
+  // The recovery flow, opened from "Lost your passkey?" or by a passkey a recovery added signing in
+  // before it finished (then with its account and request). The connect stays open throughout:
+  // only signing in with the recovered passkey answers it.
+  const [recovery, setRecovery] = useState<{ account?: Address; requestId?: Hex } | null>(null);
+  const [isStartingRecovery, setIsStartingRecovery] = useState(false);
+  const [recoveryError, setRecoveryError] = useState('');
+  const startingRecoveryRef = useRef(false);
+
+  // The owner's warning: someone is recovering the account the welcome view offers. "Review and
+  // cancel" opens the veto for the newest request; a request vetoed here is not warned about
+  // again while its cancel is still landing.
+  const [cancelling, setCancelling] = useState<{ requestId: Hex; account: LocalStorageAccount } | null>(null);
+  const [vetoed, setVetoed] = useState<Hex[]>([]);
+  const welcomeAccount = useMemo(
+    () => selectDefaultAccount(accounts, lastAuthenticatedCredentialId),
+    [accounts, lastAuthenticatedCredentialId]
+  );
+  // A silent connect with a session answers without any screen: nothing to warn on, nothing read.
+  const answersSilently = !!request.data.silent && !!Account.getAuthenticatedAddress(apiKey);
+  const warnedAddress = answersSilently ? undefined : (welcomeAccount?.address as Address | undefined);
+  const pendingRecoveries = usePendingRecoveries(warnedAddress, apiKey);
+  const warnedIdentity = useReverseIdentity(warnedAddress, 1, getMainnetRpcUrl(apiKey));
+  const newestPending = pendingRecoveries
+    ?.filter((entry) => !vetoed.some((id) => id.toLowerCase() === entry.requestId.toLowerCase()))
+    .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))[0];
 
   // Get rpId from current domain
   const rpId = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
@@ -922,6 +1107,7 @@ function OnboardingDialogWrapper({
     } catch (error) {
       console.error('Login failed:', error);
       setLoggingInAccount(null);
+      await showRecoveryOf(error);
     }
   };
 
@@ -943,6 +1129,8 @@ function OnboardingDialogWrapper({
 
       // Import wrote the account + auth state to storage
       refreshAccounts();
+      // Signed in: a recovery screen this opened from is done with.
+      setRecovery(null);
 
       const metadata = accountInstance.getMetadata();
 
@@ -972,6 +1160,37 @@ function OnboardingDialogWrapper({
     } catch (error) {
       console.error('Import failed:', error);
       setIsImporting(false);
+      await showRecoveryOf(error);
+    }
+  };
+
+  // A passkey a recovery added, signing in before the recovery finished: show where its request
+  // stands instead of the sign-in screen. Any other failure stays on the sign-in screen, as before.
+  const showRecoveryOf = async (error: unknown) => {
+    if (!(error instanceof RecoveryNotFinishedError)) return;
+    try {
+      const requestId = await recoveryRequestOf(error, apiKey);
+      if (requestId) setRecovery({ account: error.account, requestId });
+    } catch (lookupError) {
+      console.error('Recovery request lookup failed:', lookupError);
+    }
+  };
+
+  const handleStartRecovery = async (account: Address, username: string) => {
+    if (startingRecoveryRef.current) return;
+    startingRecoveryRef.current = true;
+    setIsStartingRecovery(true);
+    setRecoveryError('');
+    try {
+      const started = await startRecoveryHere({ chainId: targetChainId, apiKey, serverUrl }, account, username);
+      setRecovery((current) => ({ ...current, requestId: started.requestId }));
+    } catch (error) {
+      console.error('Recovery start failed:', error);
+      // The connect is still open: the error stays on screen for another try, Back or Cancel.
+      setRecoveryError(`Error: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      startingRecoveryRef.current = false;
+      setIsStartingRecovery(false);
     }
   };
 
@@ -1230,6 +1449,57 @@ function OnboardingDialogWrapper({
     );
   }
 
+  if (cancelling) {
+    const { requestId, account } = cancelling;
+    return (
+      <RecoveryCancelFlow
+        requestId={requestId}
+        openAccount={() => restoreStoredAccount(account, { chainId: targetChainId, apiKey, paymasters, serverUrl })}
+        apiKey={apiKey}
+        appName={request.data.appName}
+        appLogoUrl={request.data.appLogoUrl}
+        // The connect is still open: Not now and Done go back to it, and a failure stays on screen.
+        onClose={() => setCancelling(null)}
+        onDone={() => {
+          setVetoed((ids) => [...ids, requestId]);
+          setCancelling(null);
+        }}
+      />
+    );
+  }
+
+  if (recovery) {
+    return (
+      <RecoveryStartDialog
+        open={open}
+        onOpenChange={(newOpen) => {
+          if (!newOpen) handleCancel();
+        }}
+        account={recovery.account}
+        approveUrl={recoveryApproveUrl ?? DEFAULT_RECOVERY_APPROVE_URL}
+        appName={request.data.appName}
+        appLogoUrl={request.data.appLogoUrl}
+        apiKey={apiKey}
+        mainnetRpcUrl={getMainnetRpcUrl(apiKey)}
+        onStart={handleStartRecovery}
+        isStarting={isStartingRecovery}
+        error={recoveryError}
+        requestId={recovery.requestId}
+        onBack={() => {
+          setRecovery(null);
+          setRecoveryError('');
+        }}
+        onClose={handleCancel}
+        // From the connect screen, Done ends the connect as cancelled: nothing signed in.
+        onDone={handleCancel}
+        onStartAgain={() => setRecovery((current) => ({ account: current?.account }))}
+        onOpenAccount={handleImportAccount}
+        isOpeningAccount={isImporting}
+        chainId={targetChainId}
+      />
+    );
+  }
+
   return (
     <DefaultDialogComponent
       open={open}
@@ -1255,6 +1525,16 @@ function OnboardingDialogWrapper({
         // The SAME handleCancel the outside-click dismiss above already calls — the X is only a
         // visible affordance for the existing decline path, not a second one.
         onClose={handleCancel}
+        onLostPasskey={() => setRecovery({})}
+        notice={
+          newestPending && welcomeAccount ? (
+            <RecoveryWarning
+              request={newestPending}
+              accountName={warnedIdentity.plainName ?? (welcomeAccount.username || formatAddress(warnedAddress ?? ''))}
+              onReview={() => setCancelling({ requestId: newestPending.requestId, account: welcomeAccount })}
+            />
+          ) : undefined
+        }
         accounts={accounts}
         onAccountSelect={handleAccountSelect}
         loggingInAccount={loggingInAccount}
@@ -3730,6 +4010,383 @@ function RecoveryDialogWrapper({
       showFeeTokenSelector={!isSponsored && feeTokens.length > 0}
       isPayingWithErc20={isPayingWithErc20}
       nativeCurrencySymbol={viemChain?.nativeCurrency?.symbol}
+    />
+  );
+}
+
+// RecoveryStartDialogWrapper - handles wallet_startRecovery (R22)
+//
+// The user recovering has no session and no account on this device. The screen takes the account
+// the app named or asks for one, creates a new passkey on this site and opens the request for the
+// guardians. The app gets the request the moment it exists; the status stays on screen until Done.
+function RecoveryStartDialogWrapper({
+  request,
+  onApprove,
+  onReject,
+  onSubmissionInFlight,
+  apiKey,
+  serverUrl,
+  appName,
+  appLogoUrl,
+}: {
+  request: StartRecoveryUIRequest;
+  onApprove: (data: CreatedCeremony, holdMs?: number) => void;
+  onReject: (error?: Error) => void;
+  onSubmissionInFlight?: (inFlight: boolean) => void;
+  apiKey?: string;
+  serverUrl?: string;
+  appName?: string;
+  appLogoUrl?: string | null;
+}) {
+  const [open, setOpen] = useState(true);
+  const [isStarting, setIsStarting] = useState(false);
+  const [isOpeningAccount, setIsOpeningAccount] = useState(false);
+  const [created, setCreated] = useState<CreatedCeremony | null>(null);
+  // Synchronous re-entry guard: one tap, one passkey and one request.
+  const submittingRef = useRef(false);
+
+  const handleStart = async (account: Address, username: string) => {
+    if (submittingRef.current) return;
+    submittingRef.current = true;
+    setIsStarting(true);
+    onSubmissionInFlight?.(true);
+    try {
+      const started = await startRecoveryHere({ chainId: request.data.chainId, apiKey, serverUrl }, account, username);
+      // What wallet_startRecovery returns: the request as created, not the new passkey's details.
+      const ceremony: CreatedCeremony = {
+        requestId: started.requestId,
+        account: started.account,
+        subject: started.subject,
+        salt: started.salt,
+        expiry: started.expiry,
+      };
+      // Answered now: the request exists, so nothing after it (closing the window, a crash on the
+      // status screen) may report a rejection. The status stays up as information until Done.
+      onApprove(ceremony, RECOVERY_STATUS_HOLD_MS);
+      setCreated(ceremony);
+    } catch (error) {
+      console.error('Recovery start failed:', error);
+      const errorObj = error instanceof Error ? error : new Error(String(error));
+      if (errorObj.name === 'NotAllowedError') {
+        onReject(UIError.userRejected('User cancelled the passkey prompt'));
+      } else {
+        onReject(new UIError(standardErrorCodes.rpc.internal as UIErrorCode, errorObj.message));
+      }
+    } finally {
+      onSubmissionInFlight?.(false);
+      submittingRef.current = false;
+      setIsStarting(false);
+    }
+  };
+
+  // The dApp already has its request: this only closes the screen.
+  const handleDone = () => {
+    if (!created) return;
+    setOpen(false);
+    onApprove(created);
+  };
+
+  const handleClose = () => {
+    if (submittingRef.current) return;
+    if (created) return handleDone();
+    setOpen(false);
+    onReject(UIError.userRejected());
+  };
+
+  // The recovery executed while the screen was open: sign in with the new passkey here, so the
+  // app's next connect finds the account, then close.
+  const handleOpenAccount = async () => {
+    setIsOpeningAccount(true);
+    try {
+      if (!apiKey) throw new Error('API key is required');
+      await Account.import({ chainId: request.data.chainId, apiKey, serverUrl });
+      handleDone();
+    } catch (error) {
+      console.error('Sign-in with the recovered passkey failed:', error);
+      setIsOpeningAccount(false);
+    }
+  };
+
+  return (
+    <RecoveryStartDialog
+      open={open}
+      onOpenChange={(newOpen) => {
+        if (!newOpen) handleClose();
+      }}
+      account={request.data.account}
+      approveUrl={request.data.approveUrl}
+      appName={appName}
+      appLogoUrl={appLogoUrl}
+      apiKey={apiKey}
+      mainnetRpcUrl={getMainnetRpcUrl(apiKey)}
+      onStart={handleStart}
+      isStarting={isStarting}
+      requestId={created?.requestId}
+      onClose={handleClose}
+      onDone={handleDone}
+      onOpenAccount={handleOpenAccount}
+      isOpeningAccount={isOpeningAccount}
+      chainId={request.data.chainId}
+    />
+  );
+}
+
+// RecoveryCancelFlow - the owner's veto (R22), for wallet_cancelRecovery and the connect screen's
+// warning
+//
+// Reads the request, signs the cancel of exactly that request id with the account `openAccount`
+// gives, and shows the outcome per network until Done. Where the account comes from, and what a
+// cancel, a failure and Done answer, is the caller's.
+function RecoveryCancelFlow({
+  requestId,
+  openAccount,
+  apiKey,
+  appName,
+  appLogoUrl,
+  onCancelled,
+  onFailed,
+  onClose,
+  onDone,
+  onSubmissionInFlight,
+}: {
+  requestId: Hex;
+  /** The owner's account, ready to sign; nothing prompts before the cancel is signed. */
+  openAccount: () => Promise<Account>;
+  apiKey?: string;
+  appName?: string;
+  appLogoUrl?: string | null;
+  /** The cancel was relayed: answer now, while the outcome stays on screen. */
+  onCancelled?: (result: RecoverySetupResult) => void;
+  /** The cancel failed. Absent, the error stays on screen for another try. */
+  onFailed?: (error: unknown) => void;
+  /** Not now, or the close button, before anything is signed. */
+  onClose: () => void;
+  /** Done on the outcome screen, with the latest status per network. */
+  onDone: (result: RecoverySetupResult) => void;
+  onSubmissionInFlight?: (inFlight: boolean) => void;
+}) {
+  const [isCancelling, setIsCancelling] = useState(false);
+  const [result, setResult] = useState<RecoverySetupResult | null>(null);
+  const [error, setError] = useState('');
+  // Synchronous re-entry guard: one tap, one signature.
+  const submittingRef = useRef(false);
+  const { ceremony, failed } = useRecoveryRequest(requestId, apiKey);
+
+  const handleConfirm = async () => {
+    if (submittingRef.current) return;
+    submittingRef.current = true;
+    setIsCancelling(true);
+    setError('');
+    onSubmissionInFlight?.(true);
+    try {
+      const account = await openAccount();
+      const cancelled = await account.cancelRecovery(requestId);
+      // Answered now, while the submission is still marked in flight: once the veto is relayed,
+      // nothing after it (closing the window, a crash on the outcome screen) may report a
+      // rejection.
+      onCancelled?.(cancelled);
+      setResult(cancelled);
+    } catch (cancelError) {
+      console.error('Recovery cancel failed:', cancelError);
+      if (onFailed) onFailed(cancelError);
+      else setError(`Error: ${cancelError instanceof Error ? cancelError.message : String(cancelError)}`);
+    } finally {
+      onSubmissionInFlight?.(false);
+      submittingRef.current = false;
+      setIsCancelling(false);
+    }
+  };
+
+  const handleClose = () => {
+    // The dismissable gate commits a render late: a same-tick close must not report "rejected"
+    // while the signed veto is being relayed.
+    if (submittingRef.current) return;
+    // Closing the outcome screen is Done: the veto already happened.
+    if (result) return onDone(result);
+    onClose();
+  };
+
+  return (
+    <RecoveryCancelDialog
+      open
+      onOpenChange={(newOpen) => {
+        if (!newOpen) handleClose();
+      }}
+      origin={typeof window !== 'undefined' ? window.location.origin : 'unknown'}
+      appName={appName}
+      appLogoUrl={appLogoUrl}
+      apiKey={apiKey}
+      mainnetRpcUrl={getMainnetRpcUrl(apiKey)}
+      ceremony={ceremony}
+      failed={failed}
+      onConfirm={handleConfirm}
+      isCancelling={isCancelling}
+      result={result}
+      error={error}
+      onCancel={handleClose}
+      onDone={onDone}
+    />
+  );
+}
+
+// RecoveryCancelDialogWrapper - handles wallet_cancelRecovery (R22)
+//
+// The signed-in owner vetoes the request the app names: one signature, relayed by JAW to every
+// network where the request waits. The app gets the outcome the moment it is relayed; the
+// statuses stay on screen until Done.
+function RecoveryCancelDialogWrapper({
+  request,
+  onApprove,
+  onReject,
+  onSubmissionInFlight,
+  apiKey,
+  defaultChainId,
+  paymasters,
+  appName,
+  appLogoUrl,
+}: {
+  request: CancelRecoveryUIRequest;
+  onApprove: (data: RecoverySetupResult, holdMs?: number) => void;
+  onReject: (error?: Error) => void;
+  onSubmissionInFlight?: (inFlight: boolean) => void;
+  apiKey?: string;
+  defaultChainId?: number;
+  paymasters?: Record<number, PaymasterConfig>;
+  appName?: string;
+  appLogoUrl?: string | null;
+}) {
+  const chainId = request.data.chainId || defaultChainId || 1;
+
+  return (
+    <RecoveryCancelFlow
+      requestId={request.data.requestId}
+      openAccount={() => getAccountForSigning(apiKey, chainId, paymasters?.[chainId]?.url)}
+      apiKey={apiKey}
+      appName={appName}
+      appLogoUrl={appLogoUrl}
+      onCancelled={(result) => onApprove(result, RECOVERY_OUTCOME_HOLD_MS)}
+      onFailed={(error) => onReject(recoveryRejection(error))}
+      onClose={() => onReject(UIError.userRejected())}
+      // The app already has its answer: this only closes the screen.
+      onDone={(latest) => onApprove(latest)}
+      onSubmissionInFlight={onSubmissionInFlight}
+    />
+  );
+}
+
+// GuardianApproveDialogWrapper - handles wallet_approveRecovery (R22)
+//
+// The provider signed the guardian in first. The screen reads the request, says when this account
+// can't approve it (before any prompt when its key is known here), and approves once with the
+// guardian's passkey. The app gets the approval the moment it is posted; the count stays on screen
+// until Done.
+function GuardianApproveDialogWrapper({
+  request,
+  onApprove,
+  onReject,
+  onSubmissionInFlight,
+  apiKey,
+  defaultChainId,
+  paymasters,
+  appName,
+  appLogoUrl,
+}: {
+  request: ApproveRecoveryUIRequest;
+  onApprove: (data: CeremonyApproval, holdMs?: number) => void;
+  onReject: (error?: Error) => void;
+  onSubmissionInFlight?: (inFlight: boolean) => void;
+  apiKey?: string;
+  defaultChainId?: number;
+  paymasters?: Record<number, PaymasterConfig>;
+  appName?: string;
+  appLogoUrl?: string | null;
+}) {
+  const [open, setOpen] = useState(true);
+  const [isApproving, setIsApproving] = useState(false);
+  const [approval, setApproval] = useState<CeremonyApproval | null>(null);
+  // Core refused this key before any prompt (-32602): the screen says it isn't a guardian, and
+  // closing answers with core's own error.
+  const [refusal, setRefusal] = useState<UIError | null>(null);
+  // Synchronous re-entry guard: one tap, one approval.
+  const submittingRef = useRef(false);
+
+  const chainId = request.data.chainId || defaultChainId || 1;
+  const { ceremony, failed } = useRecoveryRequest(request.data.requestId, apiKey);
+  const openRequests = usePendingRecoveries(ceremony?.account, apiKey);
+  const guardianKey = useMemo(() => signedInKeyOf(request.data.address, apiKey), [request.data.address, apiKey]);
+  const block = refusal ? 'not-guardian' : ceremony ? guardianApprovalBlock(ceremony, guardianKey) : null;
+
+  const handleApprove = async () => {
+    if (submittingRef.current || block) return;
+    submittingRef.current = true;
+    setIsApproving(true);
+    onSubmissionInFlight?.(true);
+    try {
+      const account = await getAccountForSigning(apiKey, chainId, paymasters?.[chainId]?.url);
+      // Core reads the request by this id again and signs it: the id hashes from the account and
+      // the new passkey this screen shows, and core checks that before the prompt.
+      const result = await account.approveRecovery(request.data.requestId);
+      // Answered now: the approval is posted, so nothing after it may report a rejection.
+      onApprove(result, RECOVERY_OUTCOME_HOLD_MS);
+      setApproval(result);
+    } catch (error) {
+      console.error('Recovery approval failed:', error);
+      const rejection = recoveryRejection(error);
+      if ((rejection.code as number) === standardErrorCodes.rpc.invalidParams) setRefusal(rejection);
+      else onReject(rejection);
+    } finally {
+      onSubmissionInFlight?.(false);
+      submittingRef.current = false;
+      setIsApproving(false);
+    }
+  };
+
+  // The app already has its approval: this only closes the screen.
+  const handleDone = () => {
+    if (!approval) return;
+    setOpen(false);
+    onApprove(approval);
+  };
+
+  const handleClose = () => {
+    if (submittingRef.current) return;
+    if (approval) return handleDone();
+    setOpen(false);
+    // A request this account can't approve answers with why, as core would.
+    if (refusal) return onReject(refusal);
+    if (block) {
+      return onReject(
+        new UIError(
+          standardErrorCodes.rpc.invalidParams as UIErrorCode,
+          block === 'not-guardian'
+            ? 'This account is not a guardian of this recovery request'
+            : 'This recovery request no longer takes approvals'
+        )
+      );
+    }
+    onReject(UIError.userRejected());
+  };
+
+  return (
+    <GuardianApproveDialog
+      open={open}
+      onOpenChange={(newOpen) => {
+        if (!newOpen) handleClose();
+      }}
+      origin={typeof window !== 'undefined' ? window.location.origin : 'unknown'}
+      appName={appName}
+      appLogoUrl={appLogoUrl}
+      mainnetRpcUrl={getMainnetRpcUrl(apiKey)}
+      ceremony={ceremony}
+      failed={failed}
+      openRequests={openRequests}
+      guardian={request.data.address}
+      block={block}
+      onApprove={handleApprove}
+      isApproving={isApproving}
+      approval={approval}
+      onCancel={handleClose}
+      onDone={handleDone}
     />
   );
 }

@@ -1,8 +1,14 @@
 'use client';
 
-import { useState, type ReactNode } from 'react';
-import { ChevronDown, ExternalLink, TriangleAlert } from 'lucide-react';
-import { SUPPORTED_CHAINS, type AdminBatchChain, type RecoveryNetwork } from '@jaw.id/core';
+import { useMemo, useState, type ReactNode } from 'react';
+import { ChevronDown, ExternalLink, Info, TriangleAlert, type LucideIcon } from 'lucide-react';
+import {
+  SUPPORTED_CHAINS,
+  deriveAccountRecordV1,
+  deriveAccountRecordV2,
+  type AdminBatchChain,
+  type RecoveryNetwork,
+} from '@jaw.id/core';
 import type { Hex } from 'viem';
 import { Spinner } from '../ui/spinner';
 import { AccountAvatar } from '../AccountAvatar';
@@ -11,8 +17,10 @@ import { Eyebrow } from '../primitives';
 import { ChainIcon } from '../AddFundsDialog/ChainIcon';
 import { cn } from '../../lib/utils';
 import { getDisplayAddress } from '../../utils';
-import { useReverseIdentity } from '../../hooks/useReverseIdentity';
+import { useAddressIdentities } from '../../hooks/useAddressIdentities';
 import { useChainIcons } from '../../hooks/useChainIcons';
+import { ENS_ONLY } from '../../utils/addressIdentity';
+import { identityKey } from '../../utils/reverseResolve';
 import {
   RECOVERY_DELAY_WARNING_TEXT,
   RECOVERY_RELAY_STATE_TEXT,
@@ -22,6 +30,7 @@ import {
   recoveryNetworkNote,
   recoveryRelayState,
   type RecoveryGuardianRow,
+  type RecoveryRelayState,
 } from '../../utils/recoverySetup';
 
 /** The network's name, for a chain id the configs read or the relayer reports. */
@@ -35,7 +44,7 @@ function explorerTxUrl(chainId: number, txHash: Hex): string | null {
 }
 
 /** A section label, sitting above the card it describes. */
-function SectionHeading({ label }: { label: string }) {
+export function SectionHeading({ label }: { label: string }) {
   return (
     <div className="pl-3">
       <Eyebrow>{label}</Eyebrow>
@@ -43,37 +52,72 @@ function SectionHeading({ label }: { label: string }) {
   );
 }
 
-/** A warning in the dialog's two tones: amber advises, red is the one to stop at. */
+/**
+ * A notice in the dialog's three tones: grey informs, amber advises, red is the one to stop at.
+ * The title is optional: a plain notice is its line alone.
+ */
 export function RecoveryNotice({
   tone,
   title,
+  icon,
+  action,
   children,
 }: {
-  tone: 'warning' | 'destructive';
-  title: string;
+  tone: 'info' | 'warning' | 'destructive';
+  title?: string;
+  /** Replaces the tone's own icon (an info circle, else a warning triangle). */
+  icon?: LucideIcon;
+  /** A button under the text, lined up with it. */
+  action?: ReactNode;
   children?: ReactNode;
 }) {
+  const Icon = icon ?? (tone === 'info' ? Info : TriangleAlert);
+  const text = (
+    <p className="text-body-sm">
+      {title && <span className="block font-semibold">{title}</span>}
+      {children}
+    </p>
+  );
   return (
     <div
       className={cn(
         'rounded-box flex items-start gap-2 p-3',
-        tone === 'destructive' ? 'bg-destructive/10 text-destructive' : 'bg-warning/10 text-warning'
+        tone === 'destructive' && 'bg-destructive/10 text-destructive dark:text-negative',
+        tone === 'warning' && 'bg-warning/10 text-warning',
+        tone === 'info' && 'bg-secondary text-secondary-foreground'
       )}
     >
-      <TriangleAlert className="mt-px size-3.5 flex-none" strokeWidth={2} />
-      <p className="text-body-sm">
-        <span className="block font-semibold">{title}</span>
-        {children}
-      </p>
+      <Icon className="mt-px size-3.5 flex-none" strokeWidth={2} />
+      {action ? (
+        <div className="flex min-w-0 flex-col items-start gap-2.5">
+          {text}
+          {action}
+        </div>
+      ) : (
+        text
+      )}
+    </div>
+  );
+}
+
+/** One row of a facts card: what it is on the left, its value on the right. */
+export function RecoveryFact({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="border-border/40 flex min-h-11 items-center justify-between gap-3 border-t px-3 py-2 first:border-t-0">
+      <span className="text-muted-foreground text-body-sm flex-none">{label}</span>
+      <span className="text-foreground text-body-sm min-w-0 text-right font-semibold">{children}</span>
     </div>
   );
 }
 
 /**
  * Who a guardian is: the address's reverse-resolved name, else the short address, the short
- * address always underneath. A passkey has no address, so its truncated public key identifies it.
+ * address always underneath. A passkey has no address of its own, but the JAW account its key
+ * created does, and that account's name is the one people know it by: the v2 account's name,
+ * then the v1 account's, with that account's address underneath. A passkey whose accounts have no
+ * name shows its truncated public key.
  */
-function GuardianIdentity({
+export function GuardianIdentity({
   commitment,
   chainId,
   mainnetRpcUrl,
@@ -86,8 +130,22 @@ function GuardianIdentity({
   struck?: boolean;
 }) {
   const address = recoveryMethodAddress(commitment);
-  const identity = useReverseIdentity(address ?? undefined, chainId, mainnetRpcUrl);
-  const truncated = getDisplayAddress(undefined, address ?? commitment);
+  // The addresses that may carry this guardian's name, in the order they are trusted.
+  const candidates = useMemo(
+    () =>
+      address ? [address] : [deriveAccountRecordV2(commitment).address, deriveAccountRecordV1(commitment).address],
+    [address, commitment]
+  );
+  const identities = useAddressIdentities(
+    chainId ? candidates.map((candidate) => ({ address: candidate, chainId })) : [],
+    { mainnetRpcUrl, include: ENS_ONLY }
+  );
+  const named = chainId
+    ? candidates.find((candidate) => identities[identityKey(candidate, chainId)]?.ensName)
+    : undefined;
+  const found = named && chainId ? identities[identityKey(named, chainId)] : undefined;
+  const identity = { name: found?.ensName ?? null, avatar: found?.ensAvatar ?? null };
+  const truncated = getDisplayAddress(undefined, named ?? address ?? commitment);
 
   return (
     <>
@@ -117,15 +175,28 @@ function GuardianIdentity({
   );
 }
 
-/** A small status pill: green for what is added, red for what goes, amber for what changes. */
-function Badge({ tone, children }: { tone: 'success' | 'destructive' | 'warning'; children: ReactNode }) {
+/**
+ * A small status pill: green for what is added, red for what goes, amber for what changes, grey
+ * for what is only waiting.
+ */
+export function Badge({
+  tone,
+  className,
+  children,
+}: {
+  tone: 'success' | 'destructive' | 'warning' | 'muted';
+  className?: string;
+  children: ReactNode;
+}) {
   return (
     <span
       className={cn(
         'text-code rounded-pill flex-none px-2 py-0.5 font-mono font-semibold',
+        className,
         tone === 'success' && 'bg-success/10 text-success',
-        tone === 'destructive' && 'bg-destructive/10 text-destructive',
-        tone === 'warning' && 'bg-warning/10 text-warning'
+        tone === 'destructive' && 'bg-destructive/10 text-destructive dark:text-negative',
+        tone === 'warning' && 'bg-warning/10 text-warning',
+        tone === 'muted' && 'bg-secondary text-muted-foreground'
       )}
     >
       {children}
@@ -245,7 +316,7 @@ const STACK_STEP = 14;
  * One chain's icon on a white plate, as Add Funds draws them: brand marks with transparent grounds
  * read as holes on the dark dialog without it.
  */
-function NetworkIcon({
+export function NetworkIcon({
   icon,
   stacked,
   index = 0,
@@ -297,18 +368,18 @@ const ROW = 'border-border/40 flex min-h-11 items-center gap-2 border-t px-3 py-
  * The networks that share one outcome. Up to two are a row each; more fold into one row, a
  * button that opens the list underneath, each network with its reason.
  */
-function NetworkGroup({
+export function NetworkGroup({
   rows,
   status,
   icons,
 }: {
-  rows: Array<{ network: RecoveryNetwork; note?: string }>;
+  rows: Array<{ network: Pick<RecoveryNetwork, 'chainId'>; note?: string }>;
   status: ReactNode;
   icons: Readonly<Record<number, string>>;
 }) {
   const [open, setOpen] = useState(false);
 
-  const name = (network: RecoveryNetwork, note?: string) => (
+  const name = (network: Pick<RecoveryNetwork, 'chainId'>, note?: string) => (
     <span className="flex min-w-0 flex-1 flex-col">
       <span className="text-foreground text-body-sm font-medium">{chainName(network.chainId)}</span>
       {note && <span className="text-muted-foreground text-body-xs">{note}</span>}
@@ -407,12 +478,7 @@ export function RecoveryNetworks({
         {excluded.length > 0 && (
           <NetworkGroup rows={excluded} icons={icons} status={<Badge tone="warning">Not included</Badge>} />
         )}
-        <div className="border-border/40 flex min-h-11 items-center justify-between gap-3 border-t px-3 py-2">
-          <span className="text-muted-foreground text-body-sm">Network fees</span>
-          <span className="text-success bg-success/10 rounded-xs text-body-xs px-2 py-0.5 font-semibold">
-            Paid by JAW
-          </span>
-        </div>
+        <NetworkFeesRow />
       </div>
       {unused && (
         <p className="text-muted-foreground text-body-sm">
@@ -423,8 +489,29 @@ export function RecoveryNetworks({
   );
 }
 
-/** The outcome per network: landed, still on its way, or failed. */
-export function NetworkStatusList({ chains, apiKey }: { chains: AdminBatchChain[]; apiKey?: string }) {
+/** The last row of a networks card: a relayed change costs the user nothing. */
+export function NetworkFeesRow() {
+  return (
+    <div className="border-border/40 flex min-h-11 items-center justify-between gap-3 border-t px-3 py-2">
+      <span className="text-muted-foreground text-body-sm">Network fees</span>
+      <span className="text-success bg-success/10 rounded-xs text-body-xs px-2 py-0.5 font-semibold">Paid by JAW</span>
+    </div>
+  );
+}
+
+/**
+ * The outcome per network: landed, still on its way, or failed. `labels` renames an outcome for
+ * the change at hand (a cancel that landed reads "Cancelled", not "Active").
+ */
+export function NetworkStatusList({
+  chains,
+  apiKey,
+  labels,
+}: {
+  chains: AdminBatchChain[];
+  apiKey?: string;
+  labels?: Partial<Record<RecoveryRelayState, string>>;
+}) {
   const icons = useChainIcons(apiKey);
 
   return (
@@ -456,7 +543,7 @@ export function NetworkStatusList({ chains, apiKey }: { chains: AdminBatchChain[
               ) : state !== 'failed' ? (
                 <SuccessCheck size={16} />
               ) : null}
-              {RECOVERY_RELAY_STATE_TEXT[state]}
+              {labels?.[state] ?? RECOVERY_RELAY_STATE_TEXT[state]}
               {txUrl && (
                 <a
                   href={txUrl}

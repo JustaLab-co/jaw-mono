@@ -403,6 +403,12 @@ export interface UIHandlerConfig {
     theme?: JawTheme;
     /** Passkey server endpoint, passed on to Account as `serverUrl` */
     serverUrl?: string;
+    /**
+     * The page guardians open to approve a recovery started from this app's
+     * own screens (the `recoveryApproveUrl` preference, else keys' page); the
+     * request id is appended as a path segment
+     */
+    recoveryApproveUrl?: string;
 }
 
 /**

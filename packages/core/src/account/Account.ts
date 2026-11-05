@@ -169,11 +169,14 @@ export interface StartRecoveryOptions {
 export class RecoveryNotFinishedError extends Error {
     /** The account the recovery adds this passkey to */
     readonly account: Address;
+    /** The passkey's public key: the subject of the recovery request that adds it */
+    readonly publicKey: Hex;
 
-    constructor(account: Address, chainId: number) {
+    constructor(account: Address, chainId: number, publicKey: Hex) {
         super(`Recovery not finished yet: this passkey is not an owner of ${account} on chain ${chainId}`);
         this.name = 'RecoveryNotFinishedError';
         this.account = account;
+        this.publicKey = publicKey;
     }
 }
 
@@ -397,7 +400,7 @@ export class Account {
 
         const address = getAddress(record.address);
         const owned = await Account.readOwnership(address, publicKey, [chainId], apiKey);
-        if (owned.get(chainId) !== true) throw new RecoveryNotFinishedError(address, chainId);
+        if (owned.get(chainId) !== true) throw new RecoveryNotFinishedError(address, chainId, publicKey);
         return { ...record, address, factory: getAddress(record.factory) };
     }
 

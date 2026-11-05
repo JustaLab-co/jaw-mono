@@ -355,4 +355,6 @@ function RecoveryDone({
   );
 }
 
+// The recovery screens' notice and section label, for a host that builds a recovery page around them.
+export { RecoveryNotice, SectionHeading } from './Sections';
 export * from './types';

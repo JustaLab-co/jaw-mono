@@ -121,7 +121,30 @@ describe('AppSpecificSigner', () => {
                 paymasters: { 1: { url: 'https://paymaster.test.com' } },
                 appName: 'Test App',
                 appLogoUrl: 'https://test.com/logo.png',
+                // No preference set: keys' own guardian page.
+                recoveryApproveUrl: 'https://keys.jaw.id/recover/approve',
             });
+        });
+
+        it("hands the UI handler the app's guardian page, so a recovery started from its own screens links there", () => {
+            vi.spyOn(store.config, 'get').mockReturnValue({
+                metadata: mockMetadata,
+                version: '1.0.0',
+                apiKey: 'test-api-key',
+                preference: { recoveryApproveUrl: 'https://app.example/guardians' },
+            });
+            const handler: UIHandler = { request: vi.fn(), init: vi.fn() };
+
+            new AppSpecificSigner({
+                metadata: mockMetadata,
+                uiHandler: handler,
+                callback: mockCallback,
+                apiKey: 'test-api-key',
+            });
+
+            expect(handler.init).toHaveBeenCalledWith(
+                expect.objectContaining({ recoveryApproveUrl: 'https://app.example/guardians' })
+            );
         });
 
         it('should not call init if uiHandler.init is undefined', () => {

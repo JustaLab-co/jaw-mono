@@ -19,8 +19,9 @@ export { SUPPORTED_CHAINS, MAINNET_CHAINS, TESTNET_CHAINS, getSupportedChains } 
 // Advanced: Low-level smart account creation (for custom implementations)
 export { toJustanAccount, type ToJustanAccountParameters, type ToJustanAccountReturnType } from './toJustanAccount.js';
 
-// What a passkey account was created from, as stored on PasskeyAccount.account
-export { type AccountRecord } from './accountRecord.js';
+// What a passkey account was created from, as stored on PasskeyAccount.account, and the
+// records a passkey's own key derives (the screens name a passkey guardian by its account)
+export { type AccountRecord, deriveAccountRecordV1, deriveAccountRecordV2 } from './accountRecord.js';
 
 // Advanced: Temporary smart account for signing on behalf of another account
 export { createSmartAccountForAddress } from './smartAccount.js';

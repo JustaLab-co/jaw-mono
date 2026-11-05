@@ -163,6 +163,7 @@ describe('Account.get with a credential id', () => {
 
         expect(error).toBeInstanceOf(RecoveryNotFinishedError);
         expect((error as RecoveryNotFinishedError).account).toBe(foreign.address);
+        expect((error as RecoveryNotFinishedError).publicKey).toBe(PUBLIC_KEY);
         expect(createSmartAccount).not.toHaveBeenCalled();
     });
 
@@ -237,6 +238,7 @@ describe('Account.restore', () => {
 
         expect(error).toBeInstanceOf(RecoveryNotFinishedError);
         expect((error as RecoveryNotFinishedError).account).toBe(foreign.address);
+        expect((error as RecoveryNotFinishedError).publicKey).toBe(PUBLIC_KEY);
         expect(createSmartAccount).not.toHaveBeenCalled();
     });
 
@@ -362,6 +364,7 @@ describe('Account.import', () => {
 
         expect(error).toBeInstanceOf(RecoveryNotFinishedError);
         expect((error as RecoveryNotFinishedError).account).toBe(foreign.address);
+        expect((error as RecoveryNotFinishedError).publicKey).toBe(PUBLIC_KEY);
         expect(storedAccounts(storage)).toEqual([]);
         expect(storage.getItem('authState')).toBeFalsy();
     });
@@ -423,12 +426,14 @@ describe('signing in with a passkey a recovery added to an account', () => {
     );
 
     it.each(entryPoints)(
-        '%s refuses with RecoveryNotFinishedError, naming the account, while this key is not an owner',
+        '%s refuses with RecoveryNotFinishedError, naming the account and the key, while this key is not an owner',
         async (_, signIn) => {
             const error = await signIn().catch((e: unknown) => e);
 
             expect(error).toBeInstanceOf(RecoveryNotFinishedError);
             expect((error as RecoveryNotFinishedError).account).toBe(FOREIGN.address);
+            // And this key, so a screen can find the one request that adds it.
+            expect((error as RecoveryNotFinishedError).publicKey).toBe(PUBLIC_KEY);
             expect(createSmartAccount).not.toHaveBeenCalled();
         }
     );

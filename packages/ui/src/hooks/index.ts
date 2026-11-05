@@ -14,6 +14,8 @@ export * from './usePermissionExecution';
 export * from './usePermissionRevocation';
 export * from './useRecoveryNetworks';
 export * from './useRecoveryRelayStatus';
+export * from './useRecoveryRequest';
+export * from './usePendingRecoveries';
 export * from './useFunctionSignatures';
 export * from './useDecodedCalldata';
 export * from './useClearSigningTypedData';

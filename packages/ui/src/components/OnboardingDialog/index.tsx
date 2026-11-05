@@ -369,6 +369,8 @@ export function OnboardingDialog({
   isImporting,
   onCreateNewAccount,
   startInCreate,
+  onLostPasskey,
+  notice,
   onClose,
   onCreateAccount,
   onAccountCreationComplete,
@@ -516,6 +518,17 @@ export function OnboardingDialog({
               {createForm}
             </>
           )}
+
+          {onLostPasskey && (
+            <button
+              type="button"
+              onClick={onLostPasskey}
+              disabled={isBusy}
+              className="text-foreground decoration-border hover:decoration-foreground text-body-sm mx-auto mt-4 flex min-h-11 cursor-pointer items-center bg-transparent px-3 font-semibold underline underline-offset-[3px] transition-colors"
+            >
+              Lost your passkey?
+            </button>
+          )}
         </div>
       </DialogShell>
     );
@@ -525,6 +538,8 @@ export function OnboardingDialog({
   return (
     <DialogShell onClose={isBusy ? undefined : onClose}>
       <div className="flex flex-col p-6">
+        {/* Clear of the shell's close button, which sits over the top-right corner. */}
+        {notice && <div className="mb-6 mt-8">{notice}</div>}
         <h2 className="text-foreground text-title-xl leading-none">Welcome back.</h2>
         <p className="text-muted-foreground text-body mt-2">Pick up where you left off.</p>
 
@@ -601,3 +616,5 @@ export function OnboardingDialog({
 
 export * from './types';
 export * from './accountHelpers';
+// The account the welcome view offers, for a host that says something about that account.
+export { selectDefaultAccount } from './selectDefaultAccount';

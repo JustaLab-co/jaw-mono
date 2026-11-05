@@ -73,6 +73,7 @@ export class AppSpecificSigner extends JAWSigner {
                 ens: params.ens,
                 theme: params.theme,
                 serverUrl: params.serverUrl,
+                recoveryApproveUrl: this.recoveryApproveUrl(),
             });
         }
     }

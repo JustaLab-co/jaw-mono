@@ -4,7 +4,8 @@ import { useCallback, useState } from 'react';
 import type { ParameterDefinition } from '../../lib/rpc-methods';
 import { defaultParams, methodBlocked, type PlaygroundMethod } from '../../lib/method-ui-meta';
 import { ParameterField } from '../parameter-field';
-import { isLikelyEnsName, resolveEnsToAddress, resolveEnsToAddresses } from '../../lib/ens-resolver';
+import { resolveEnsToAddress, resolveEnsToAddresses } from '@jaw.id/ui';
+import { isLikelyEnsName } from '../../lib/ens-resolver';
 
 export interface ExecutableMethod extends PlaygroundMethod {
   parameters?: ParameterDefinition[];
