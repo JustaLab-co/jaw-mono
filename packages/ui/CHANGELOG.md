@@ -1,3 +1,17 @@
+## 1.12.0 (2026-11-05)
+
+### 🚀 Features
+
+- **ui:** show the SIWE request id as a code to compare ([c56bcfff](https://github.com/JustaLab-co/jaw-mono/commit/c56bcfff))
+
+### 🩹 Fixes
+
+- **ui:** show only a strict request code and refuse mid-line field blocks ([873d7bcc](https://github.com/JustaLab-co/jaw-mono/commit/873d7bcc))
+
+### ❤️ Thank You
+
+- Ghadi Mhawej
+
 ## 1.11.7 (2026-11-03)
 
 ### 🩹 Fixes
