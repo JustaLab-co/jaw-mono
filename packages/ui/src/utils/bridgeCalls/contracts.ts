@@ -20,12 +20,14 @@ export type AcrossContracts = {
  * protocolChain is Relay's name for the chain in an order, such as `base`. An order is filled
  * through one of erc20Routers by one of the solvers; testnet orders may leave the router out.
  * erc20Routers holds every router Relay lists for the chain, since quotes and older orders
- * name different versions.
+ * name different versions. approvalProxies are the contracts a same-chain swap pulls the token
+ * through, one per router version; the network overlay never replaces them.
  */
 export type RelayContracts = {
   depository: Address;
   protocolChain: string;
   erc20Routers: readonly Address[];
+  approvalProxies?: readonly Address[];
   solvers: readonly Address[];
   testnet?: true;
 };
