@@ -30,6 +30,13 @@ export interface SiweDialogProps {
   // Security warning for origin mismatch
   warningMessage?: string;
 
+  /**
+   * Asks the user to check the request code against the page that sent them, for a caller
+   * that has such a page (the keys popup). Never shown alongside `warningMessage`, since
+   * there the sending page wrote the code.
+   */
+  requestCodeHint?: boolean;
+
   // RPC configuration
   mainnetRpcUrl: string;
 }

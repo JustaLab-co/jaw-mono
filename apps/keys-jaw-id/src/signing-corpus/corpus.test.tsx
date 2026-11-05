@@ -155,8 +155,12 @@ async function check(f: Fixture, e: Expect) {
     expect(lines).toContain(`URI: ${e.siwe.uri}`);
     expect(lines).toContain(`Chain ID: ${e.siwe.chainId}`);
     expect(lines).toContain(`Nonce: ${e.siwe.nonce}`);
-    // The last line, so a "Request ID:" the statement carries is not the one checked.
-    if (e.siwe.requestId) expect(lines.at(-1)).toBe(`Request ID: ${e.siwe.requestId}`);
+    if (e.siwe.requestId) {
+      // Read after the last "Issued At:" line, so a "Request ID:" the statement carries is not
+      // the one checked, and "Resources:" may still follow it as EIP-4361 orders them.
+      const fieldBlock = lines.slice(lines.findLastIndex((l) => l.startsWith('Issued At: ')));
+      expect(fieldBlock.filter((l) => l.startsWith('Request ID: '))).toEqual([`Request ID: ${e.siwe.requestId}`]);
+    }
   }
 }
 

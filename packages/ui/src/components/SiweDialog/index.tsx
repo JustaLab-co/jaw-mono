@@ -10,6 +10,7 @@ import { Button } from '../ui/button';
 import { Checkbox } from '../ui/checkbox';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
 import { SiweDialogProps } from './types';
+import { isRequestCode } from './requestCode';
 import { SUPPORTED_CHAINS } from '@jaw.id/core';
 import { useReverseIdentity } from '../../hooks/useReverseIdentity';
 import { dateTone } from '../../utils/displayFormat';
@@ -86,6 +87,7 @@ export const SiweDialog = ({
   siweStatus,
   canSign,
   warningMessage,
+  requestCodeHint,
 }: SiweDialogProps) => {
   const parsed = useMemo(() => parseSiweMessage(message), [message]);
   // Falls back to a shape-checked read when the parse fails. Without it the mismatch advisory below
@@ -126,6 +128,11 @@ export const SiweDialog = ({
   // Looked like SIWE but didn't parse → no advisories ran, and the origin check is
   // parse-gated upstream so it didn't either. Surface the gap rather than a blind Sign In.
   const parseFailed = !parsed;
+
+  // Shown as written, never trimmed: a whitespace-only id is treated as absent, and one with
+  // stray spaces fails the code pattern and lands in a plain row with its spaces.
+  const requestId = parsed?.requestId?.trim() ? parsed.requestId : undefined;
+  const requestCode = requestId && isRequestCode(requestId) ? requestId : undefined;
 
   // Require a fresh acknowledgement of the phishing warning for every request.
   const ackId = useId();
@@ -201,6 +208,7 @@ export const SiweDialog = ({
           expiryTone === 'expired' ? "This sign-in has already expired, so the signature can't be used." : undefined,
       });
     if (parsed.notBefore) fields.push({ label: 'Not before', value: parsed.notBefore });
+    if (requestId && !requestCode) fields.push({ label: 'Request ID', value: requestId });
   }
 
   return (
@@ -260,22 +268,18 @@ export const SiweDialog = ({
               </div>
             )}
 
-            {/* The request id, large, so a person can match it against the code
-                the page that sent them here shows. The dApp writes it, so it is
-                labelled as the request's own value and promises nothing more. */}
-            {parsed?.requestId && (
+            {/* A short request id, large, so a person can match it against a code shown
+                elsewhere. The dApp writes it, so it is labelled as the request's own value;
+                the line asking for a match only shows where the caller has a page to match. */}
+            {requestCode && (
               <div className="border-border rounded-box border p-3 text-center">
                 <span className="text-muted-foreground text-label font-mono uppercase">Request code</span>
-                <p
-                  className={`text-foreground mt-1 break-all font-mono font-semibold ${
-                    parsed.requestId.length <= 16 ? 'text-title tracking-widest' : 'text-body-sm'
-                  }`}
-                >
-                  {parsed.requestId}
-                </p>
-                <p className="text-muted-foreground text-body-xs mt-1 leading-normal">
-                  Check it matches the code on the page that sent you here.
-                </p>
+                <p className="text-foreground text-title mt-1 font-mono font-semibold tracking-widest">{requestCode}</p>
+                {requestCodeHint && !warningMessage && (
+                  <p className="text-muted-foreground text-body-xs mt-1 leading-normal">
+                    Check it matches the code on the page that sent you here.
+                  </p>
+                )}
               </div>
             )}
 
