@@ -1,5 +1,12 @@
 # [JAW.id](https://jaw.id/)
 
+[![Coverage](https://github.com/JustaLab-co/jaw-mono/raw/badges/coverage.svg)](https://github.com/JustaLab-co/jaw-mono/actions/workflows/coverage.yml)
+[![@jaw.id/core](https://img.shields.io/npm/v/@jaw.id/core?label=%40jaw.id%2Fcore)](https://www.npmjs.com/package/@jaw.id/core)
+[![@jaw.id/wagmi](https://img.shields.io/npm/v/@jaw.id/wagmi?label=%40jaw.id%2Fwagmi)](https://www.npmjs.com/package/@jaw.id/wagmi)
+[![@jaw.id/ui](https://img.shields.io/npm/v/@jaw.id/ui?label=%40jaw.id%2Fui)](https://www.npmjs.com/package/@jaw.id/ui)
+[![Node](https://img.shields.io/badge/node-%3E%3D22.13-339933)](./package.json)
+[![License](https://img.shields.io/github/license/JustaLab-co/jaw-mono)](./LICENSE)
+
 Smart account wallet infrastructure with passkey authentication.
 
 ## Packages
