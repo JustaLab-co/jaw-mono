@@ -38,8 +38,9 @@ export type RelaySwap = { kind: 'swap'; provider: 'relay'; send: TokenAmount };
 
 /**
  * The proxy pulls exactly `tokens` and `amounts` from the account into Relay's router, which runs
- * the inner calls with only those funds and returns what is left to `refundTo`. The summary claims
- * nothing about the inner calls, so they are not read.
+ * the inner calls with only those funds and returns only leftover native token to `refundTo`.
+ * ERC-20 leftovers move through the inner calls, which are not read, so the summary claims nothing
+ * about them.
  */
 export function readRelaySwap(
   contracts: BridgeContracts,

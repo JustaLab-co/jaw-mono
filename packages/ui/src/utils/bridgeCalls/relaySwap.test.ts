@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decodeFunctionData, encodeFunctionData, getAddress, parseAbi, type Address } from 'viem';
+import { decodeFunctionData, encodeFunctionData, parseAbi, type Address } from 'viem';
 import { readBridgeBatch } from './batch';
 import { BRIDGE_CHAINS } from './contracts';
 import { RELAY_SWAP, RELAY_SWAP_ACCOUNT, RELAY_SWAP_APPROVE, RELAY_USDC_DEPOSIT, RELAY_USDC_ORDER } from './fixtures';
@@ -63,7 +63,7 @@ function expectUnreadable(calls: BridgeCall[]) {
 }
 
 describe('given the Relay quote for a same-chain swap on Base, 10 USDC to ETH', () => {
-  it('when it is read, then it is a Relay swap that sends exactly 10 USDC and refunds to this account', () => {
+  it('when it is read, then it is a Relay swap that sends exactly 10 USDC and lists no terms', () => {
     const batch = readBridgeBatch(contracts, [RELAY_SWAP_APPROVE, RELAY_SWAP], account);
     expect(batch?.transfer).toEqual({
       provider: 'relay',
@@ -71,7 +71,7 @@ describe('given the Relay quote for a same-chain swap on Base, 10 USDC to ETH', 
       send: tenUsdc,
       origin: { name: 'Base', nativeSymbol: 'ETH' },
       sameChain: true,
-      details: [{ label: 'Refund to', value: 'This account', copy: getAddress(account) }],
+      details: [],
     });
     expect(batch?.steps).toEqual([null, null]);
     expect(batch?.alerts).toEqual([]);

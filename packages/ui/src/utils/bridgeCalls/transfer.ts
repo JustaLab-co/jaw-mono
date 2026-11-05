@@ -48,7 +48,7 @@ export function transferOf(
   account: Address,
   order?: RelayOrder | OrderUnshown
 ): TransferRead {
-  if (deposit.kind === 'swap') return relaySwapTransfer(contracts, deposit, account);
+  if (deposit.kind === 'swap') return relaySwapTransfer(contracts, deposit);
   if (deposit.provider === 'across') return acrossTransfer(contracts, deposit, account);
   return relayTransfer(contracts, deposit, account, order);
 }
@@ -150,8 +150,7 @@ function relayTransfer(
   };
 }
 
-// The reader only accepts a swap that refunds to this account.
-function relaySwapTransfer(contracts: BridgeContracts, swap: RelaySwap, account: Address): TransferRead {
+function relaySwapTransfer(contracts: BridgeContracts, swap: RelaySwap): TransferRead {
   const notices = [RELAY_SWAP_HIDDEN];
   if (!swap.send.token.known) notices.push(tokenNotice(swap.send.token));
   return {
@@ -161,7 +160,7 @@ function relaySwapTransfer(contracts: BridgeContracts, swap: RelaySwap, account:
       send: swap.send,
       origin: labelOf(contracts, swap.send.chainId),
       sameChain: true,
-      details: [accountDetail('Refund to', account, account)],
+      details: [],
     },
     notices,
   };
