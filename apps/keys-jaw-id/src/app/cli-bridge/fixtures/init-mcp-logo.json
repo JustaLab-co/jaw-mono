@@ -11,12 +11,12 @@
     "type": "init",
     "chainId": 84532,
     "appName": "Claude (via JAW MCP)",
-    "appLogoUrl": "https://mcp.jaw.id/logos/claude.svg",
+    "appLogoUrl": "https://mcp.jaw.id/logos/claude.png",
     "client": "jaw-mcp/a1b2c3d"
   },
   "expect": {
     "appName": "Claude (via JAW MCP)",
-    "appLogoUrl": "https://mcp.jaw.id/logos/claude.svg",
+    "appLogoUrl": "https://mcp.jaw.id/logos/claude.png",
     "defaultChainId": 84532,
     "apiKey": "workspace-key",
     "readyApiKey": "workspace-key",
