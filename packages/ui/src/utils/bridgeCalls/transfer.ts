@@ -3,7 +3,7 @@ import { groupNumber } from '../displayFormat';
 import { formatAddress } from '../formatAddress';
 import type { AcrossDeposit } from './across';
 import type { BridgeChain } from './contracts';
-import type { RelayDeposit } from './relay';
+import type { RelayDeposit, RelaySwap } from './relay';
 import type { OrderUnshown, RelayOrder } from './relayOrder';
 import type { BridgeContracts } from './table';
 import type { BridgeProvider, Received, Token, TokenAmount } from './view';
@@ -35,18 +35,21 @@ const tokenNotice = (token: Token) =>
     : `This screen does not know the token ${token.address}. Check it before you confirm.`;
 const unknownChain = (id: number) =>
   `This screen does not know chain ${id} and cannot confirm that the recipient there is this account. Check it before you confirm.`;
+const RELAY_SWAP_HIDDEN =
+  'Relay does not say in this transaction what the swap pays out. This screen cannot show what you get. Confirm only if you started this swap yourself.';
 const RELAY_HIDDEN =
   'Relay keeps the destination chain and the recipient in an order outside this transaction. This screen cannot show them. Confirm only if you started this transfer yourself.';
 
-export const transferOf = (
+export function transferOf(
   contracts: BridgeContracts,
-  deposit: AcrossDeposit | RelayDeposit,
+  deposit: AcrossDeposit | RelayDeposit | RelaySwap,
   account: Address,
   order?: RelayOrder | OrderUnshown
-): TransferRead =>
-  deposit.provider === 'across'
-    ? acrossTransfer(contracts, deposit, account)
-    : relayTransfer(contracts, deposit, account, order);
+): TransferRead {
+  if (deposit.kind === 'swap') return relaySwapTransfer(contracts, deposit, account);
+  if (deposit.provider === 'across') return acrossTransfer(contracts, deposit, account);
+  return relayTransfer(contracts, deposit, account, order);
+}
 
 function acrossTransfer(contracts: BridgeContracts, deposit: AcrossDeposit, account: Address): TransferRead {
   const { fee } = deposit;
@@ -140,6 +143,22 @@ function relayTransfer(
       destination,
       otherRecipient: isAddressEqual(order.recipient, account) ? undefined : getAddress(order.recipient),
       details: [accountDetail('Recipient', order.recipient, account), ...refundDetails, credited, orderDetail],
+    },
+    notices,
+  };
+}
+
+// The reader only accepts a swap that refunds to this account.
+function relaySwapTransfer(contracts: BridgeContracts, swap: RelaySwap, account: Address): TransferRead {
+  const notices = [RELAY_SWAP_HIDDEN];
+  if (!swap.send.token.known) notices.push(tokenNotice(swap.send.token));
+  return {
+    transfer: {
+      provider: 'relay',
+      title: 'Swap through Relay',
+      send: swap.send,
+      origin: labelOf(contracts, swap.send.chainId),
+      details: [accountDetail('Refund to', account, account)],
     },
     notices,
   };

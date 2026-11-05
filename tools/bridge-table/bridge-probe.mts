@@ -7,7 +7,7 @@ import { zeroAddress, type Address } from 'viem';
 import { readAcrossCall } from '../../packages/ui/src/utils/bridgeCalls/across.ts';
 import { readBridgeApprove } from '../../packages/ui/src/utils/bridgeCalls/approve.ts';
 import { BRIDGE_CHAINS, JAW_FEE_RECIPIENT } from '../../packages/ui/src/utils/bridgeCalls/contracts.ts';
-import { readRelayCall } from '../../packages/ui/src/utils/bridgeCalls/relay.ts';
+import { readRelayCall, readRelaySwap } from '../../packages/ui/src/utils/bridgeCalls/relay.ts';
 import { readRelayOrder } from '../../packages/ui/src/utils/bridgeCalls/relayOrder.ts';
 import { snapshotContracts } from '../../packages/ui/src/utils/bridgeCalls/table.ts';
 import type { BridgeCall } from '../../packages/ui/src/utils/bridgeCalls/view.ts';
@@ -55,6 +55,16 @@ const PAIRS: Pair[] = [
     send: USDC[BASE],
     receive: WETH_ARBITRUM,
     amount: TEN_USDC,
+  },
+  // Relay routes a same-chain swap through its approval proxy, not the depository.
+  {
+    name: 'USDC Base -> ETH Base',
+    from: BASE,
+    to: BASE,
+    send: USDC[BASE],
+    receive: NATIVE,
+    amount: TEN_USDC,
+    only: 'relay',
   },
   { name: 'ETH Base -> ETH Optimism', from: BASE, to: 10, send: NATIVE, receive: NATIVE, amount: ETH_AMOUNT },
   // Across swaps small amounts into stocks through Uniswap and larger ones through LiFi.
@@ -162,9 +172,14 @@ async function problemOf(provider: Provider, pair: Pair): Promise<string | undef
   }
   const { calls, orderData } = await relayCalls(pair);
   let deposits = 0;
-  for (const call of calls) {
-    const read = readRelayCall(contracts, call) ?? readBridgeApprove(contracts, call);
-    if (read?.kind === 'deposit') {
+  for (const [at, call] of calls.entries()) {
+    const read =
+      readRelayCall(contracts, call) ??
+      readRelaySwap(contracts, call, ACCOUNT, calls[at - 1]) ??
+      readBridgeApprove(contracts, call);
+    if (read?.kind === 'swap') {
+      deposits++;
+    } else if (read?.kind === 'deposit') {
       deposits++;
       const order = readRelayOrder(contracts, { orderData }, read);
       if (order?.kind === 'unshown') line('warn', `${labelOf('relay', pair)}: ${order.reason}`);
