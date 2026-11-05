@@ -149,3 +149,29 @@ describe('parseInit client', () => {
     expect(Object.keys(result)).toEqual(['chainId']);
   });
 });
+
+describe('parseInit appLogoUrl', () => {
+  it('keeps an https logo address', () => {
+    const appLogoUrl = 'https://mcp.jaw.id/logos/claude.svg';
+    expect(parseInit({ type: 'init', chainId: 1, appName: 'Claude', appLogoUrl }, chains)).toEqual({
+      chainId: 1,
+      appName: 'Claude',
+      appLogoUrl,
+    });
+  });
+
+  it.each([
+    ['a number', 7],
+    ['an empty string', ''],
+    ['an http address', 'http://mcp.jaw.id/logos/claude.svg'],
+    ['a data uri', 'data:image/png;base64,iVBORw0KGgo='],
+    ['a javascript uri', 'javascript:alert(1)'],
+    ['a relative path', '/logos/claude.svg'],
+    ['an address too long', `https://mcp.jaw.id/${'a'.repeat(2048)}`],
+    ['null', null],
+  ])('drops %s without refusing the init', (_, appLogoUrl) => {
+    const result = parseInit({ type: 'init', chainId: 1, appLogoUrl }, chains);
+    expect(result).toEqual({ chainId: 1 });
+    expect(Object.keys(result)).toEqual(['chainId']);
+  });
+});

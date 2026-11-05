@@ -89,6 +89,8 @@ function CLIBridgeContent() {
   const sdkSignatureRef = useRef<string | null>(null);
   /** The first name a client gave. A dialog may be open under it, so a later init cannot rename the page. */
   const appNameRef = useRef<string | null>(null);
+  /** The logo that came with that first name, kept with it so a later init cannot swap one without the other. */
+  const appLogoRef = useRef<{ url?: string } | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const sharedSecretRef = useRef<CryptoKey | null>(null);
   /**
@@ -226,6 +228,7 @@ function CLIBridgeContent() {
                   setState('connected');
                   const { chainId, ens, paymaster, client } = parsed;
                   const name = (appNameRef.current ??= resolveBridgeAppName(parsed.appName));
+                  const appLogoUrl = (appLogoRef.current ??= { url: parsed.appLogoUrl }).url;
                   setAppName(name);
 
                   // A CLI that brought its own key keeps it, so anyone who wants
@@ -257,11 +260,12 @@ function CLIBridgeContent() {
                   // first SDK meant the browser kept signing under the key, the
                   // chain and the paymaster of the previous run while the CLI
                   // recorded the new ones, and neither side could see the gap.
-                  const signature = JSON.stringify({ chainId, ens, paymaster, apiKey, name });
+                  const signature = JSON.stringify({ chainId, ens, paymaster, apiKey, name, appLogoUrl });
                   if (!sdkRef.current || sdkSignatureRef.current !== signature) {
                     sdkSignatureRef.current = signature;
                     sdkRef.current = JAW.create({
                       appName: name,
+                      ...(appLogoUrl ? { appLogoUrl } : {}),
                       defaultChainId: chainId,
                       preference: {
                         mode: Mode.AppSpecific,
@@ -383,6 +387,7 @@ function CLIBridgeContent() {
       cancelled = true;
       clearTimeout(unanswered);
       appNameRef.current = null;
+      appLogoRef.current = null;
       setAppName(DEFAULT_BRIDGE_APP_NAME);
       if (beforeUnloadHandler) {
         window.removeEventListener('beforeunload', beforeUnloadHandler);
