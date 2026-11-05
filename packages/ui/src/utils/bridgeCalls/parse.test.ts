@@ -41,6 +41,11 @@ describe('given the body the proxy serves for the bridge table', () => {
     expect(reason(raw)).toBe('chain 4663: an address holds two roles');
   });
 
+  it('when a Relay approval proxy is lowercase, then it is rejected as not checksummed', () => {
+    const raw = body((b) => (b.chains['8453'].relay!.approvalProxies = ['0x5567954cd026cebfe486062cb75848e0f1c12e58']));
+    expect(reason(raw)).toContain('not a checksummed address');
+  });
+
   it('when keys arrive in another order, then the table is the same', () => {
     const raw = body() as Body;
     raw.chains = Object.fromEntries(Object.entries(raw.chains).reverse());
@@ -111,6 +116,14 @@ describe('given the body the proxy serves for the bridge table', () => {
     ['a Relay router and the depository', (c: BridgeChain) => (c.relay!.erc20Routers = [c.relay!.depository])],
     ['a Relay solver and the Across spoke pool', (c: BridgeChain) => (c.relay!.solvers = [c.across!.spokePool])],
     ['a Relay router and a Relay solver', (c: BridgeChain) => (c.relay!.erc20Routers = [...c.relay!.solvers])],
+    [
+      'a Relay approval proxy and the depository',
+      (c: BridgeChain) => (c.relay!.approvalProxies = [c.relay!.depository]),
+    ],
+    [
+      'a Relay approval proxy and a Relay router',
+      (c: BridgeChain) => (c.relay!.approvalProxies = [...c.relay!.erc20Routers]),
+    ],
   ])('when one chain gives %s the same address, then it is rejected', (_name, change) => {
     expect(reason(body((b) => change(b.chains['8453'])))).toBe('chain 8453: an address holds two roles');
   });
