@@ -3,7 +3,7 @@ import { groupNumber } from '../displayFormat';
 import { formatAddress } from '../formatAddress';
 import type { AcrossDeposit } from './across';
 import type { BridgeChain } from './contracts';
-import type { RelayDeposit } from './relay';
+import type { RelayDeposit, RelaySwap } from './relay';
 import type { OrderUnshown, RelayOrder } from './relayOrder';
 import type { BridgeContracts } from './table';
 import type { BridgeProvider, Received, Token, TokenAmount } from './view';
@@ -19,6 +19,8 @@ export type BridgeTransfer = {
   origin: ChainLabel;
   receive?: Received;
   destination?: ChainLabel;
+  /** Pays out on the chain it starts on, so the simulation sees what arrives. */
+  sameChain?: true;
   /** Set when what arrives goes to an address other than this account. */
   otherRecipient?: Address;
   details: Detail[];
@@ -35,18 +37,21 @@ const tokenNotice = (token: Token) =>
     : `This screen does not know the token ${token.address}. Check it before you confirm.`;
 const unknownChain = (id: number) =>
   `This screen does not know chain ${id} and cannot confirm that the recipient there is this account. Check it before you confirm.`;
+const RELAY_SWAP_HIDDEN =
+  'Relay does not say in this transaction what the swap pays out, so this screen cannot confirm what you get. Confirm only if you started this swap yourself.';
 const RELAY_HIDDEN =
   'Relay keeps the destination chain and the recipient in an order outside this transaction. This screen cannot show them. Confirm only if you started this transfer yourself.';
 
-export const transferOf = (
+export function transferOf(
   contracts: BridgeContracts,
-  deposit: AcrossDeposit | RelayDeposit,
+  deposit: AcrossDeposit | RelayDeposit | RelaySwap,
   account: Address,
   order?: RelayOrder | OrderUnshown
-): TransferRead =>
-  deposit.provider === 'across'
-    ? acrossTransfer(contracts, deposit, account)
-    : relayTransfer(contracts, deposit, account, order);
+): TransferRead {
+  if (deposit.kind === 'swap') return relaySwapTransfer(contracts, deposit);
+  if (deposit.provider === 'across') return acrossTransfer(contracts, deposit, account);
+  return relayTransfer(contracts, deposit, account, order);
+}
 
 function acrossTransfer(contracts: BridgeContracts, deposit: AcrossDeposit, account: Address): TransferRead {
   const { fee } = deposit;
@@ -143,6 +148,16 @@ function relayTransfer(
     },
     notices,
   };
+}
+
+function relaySwapTransfer(contracts: BridgeContracts, swap: RelaySwap): TransferRead {
+  const notices = [swap.crossChain ? RELAY_HIDDEN : RELAY_SWAP_HIDDEN];
+  if (!swap.send.token.known) notices.push(tokenNotice(swap.send.token));
+  const origin = labelOf(contracts, swap.send.chainId);
+  const transfer: BridgeTransfer = swap.crossChain
+    ? { provider: 'relay', title: 'Bridge through Relay', send: swap.send, origin, details: [] }
+    : { provider: 'relay', title: 'Swap through Relay', send: swap.send, origin, sameChain: true, details: [] };
+  return { transfer, notices };
 }
 
 // Only a plain Across deposit can name a chain the table lacks, and what it pays out is never native.

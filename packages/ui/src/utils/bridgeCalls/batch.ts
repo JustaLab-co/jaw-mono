@@ -10,7 +10,7 @@ import {
 } from 'viem';
 import { readAcrossCall, type AcrossDeposit } from './across';
 import { readBridgeApprove, type BridgeApprove } from './approve';
-import { readRelayCall, type RelayDeposit } from './relay';
+import { readRelayCall, readRelaySwap, type RelayDeposit, type RelaySwap } from './relay';
 import { readRelayOrder } from './relayOrder';
 import type { BridgeContracts } from './table';
 import { transferOf, type BridgeTransfer } from './transfer';
@@ -29,7 +29,7 @@ export type BridgeStep = { unreadable: true } | null;
 /** `alerts` are red: a bridge call this screen cannot read. `notices` are yellow: worth a look, maybe intended. */
 export type BridgeBatch = { transfer?: BridgeTransfer; steps: BridgeStep[]; alerts: string[]; notices: string[] };
 
-type Deposit = AcrossDeposit | RelayDeposit;
+type Deposit = AcrossDeposit | RelayDeposit | RelaySwap;
 type Read = Deposit | BridgeApprove | Inert | Unreadable | undefined;
 type Pull = { token: Address; amount: bigint; spender: Address };
 
@@ -71,14 +71,20 @@ export function readBridgeBatchWithUnread(
   relayOrder?: unknown
 ): { batch: BridgeBatch; unread: TokenRef[] } | null {
   const reads: Read[] = calls.map(
-    (call) => readAcrossCall(contracts, call) ?? readRelayCall(contracts, call) ?? readBridgeApprove(contracts, call)
+    (call, at) =>
+      readAcrossCall(contracts, call) ??
+      readRelayCall(contracts, call) ??
+      readRelaySwap(contracts, call, account, calls[at - 1]) ??
+      readBridgeApprove(contracts, call)
   );
   if (reads.every((read) => read === undefined)) return null;
 
   const steps = reads.map(stepOf);
-  const deposits = reads.filter((read): read is Deposit => read?.kind === 'deposit');
+  const deposits = reads.filter(isDeposit);
   const orders = deposits.map((deposit) =>
-    deposit.provider === 'relay' ? readRelayOrder(contracts, relayOrder, deposit) : undefined
+    deposit.kind === 'deposit' && deposit.provider === 'relay'
+      ? readRelayOrder(contracts, relayOrder, deposit)
+      : undefined
   );
   const transfers = deposits.map((deposit, at) => transferOf(contracts, deposit, account, orders[at]));
   const notices = transfers.flatMap((read) => read.notices);
@@ -136,7 +142,7 @@ function approveNotices(calls: BridgeCall[], reads: Read[]): string[] {
   const paired = new Set<Read>();
   reads.forEach((read, at) => {
     const before = reads[at - 1];
-    if (read?.kind !== 'deposit' || before?.kind !== 'approve' || calls[at - 1].chainId !== calls[at].chainId) return;
+    if (!isDeposit(read) || before?.kind !== 'approve' || calls[at - 1].chainId !== calls[at].chainId) return;
     const pull = pullOf(read, calls[at]);
     if (!pull) return;
     paired.add(before);
@@ -145,6 +151,8 @@ function approveNotices(calls: BridgeCall[], reads: Read[]): string[] {
   if (reads.some((read) => read?.kind === 'approve' && !paired.has(read))) notices.push(UNPAIRED);
   return notices;
 }
+
+const isDeposit = (read: Read): read is Deposit => read?.kind === 'deposit' || read?.kind === 'swap';
 
 const stepOf = (read: Read): BridgeStep => (read?.kind === 'unreadable' ? { unreadable: true } : null);
 

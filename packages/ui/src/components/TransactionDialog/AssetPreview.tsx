@@ -237,6 +237,8 @@ function DeltaColumn({
   );
 }
 
+const SIMULATED_ONLY = 'Simulated, not guaranteed.';
+
 const SIMULATION_FAILED =
   'Could not simulate this transaction. Balance changes are unknown; review each call before you approve.';
 
@@ -354,6 +356,11 @@ function BridgeColumns({
           </PlainRow>
         )}
       </DeltaColumn>
+      {!receive && received.length > 0 && (
+        <DeltaColumn direction="in" deltas={received} {...columnProps}>
+          <RowNote>{SIMULATED_ONLY}</RowNote>
+        </DeltaColumn>
+      )}
       {receive && destination !== undefined && bridge.destination && (
         <DeltaColumn
           direction="in"
@@ -393,11 +400,16 @@ export const AssetPreview = ({
   const [prices, setPrices] = useState<Record<string, number>>({});
 
   // The simulation cannot see the other chain, so a bridge view takes its receive side from the
-  // decoded deposit alone. Simulated incoming tokens are a different thing and stay out of it.
+  // decoded deposit alone. A same-chain transfer that names no receive side still shows what the
+  // simulation saw arrive, marked as not guaranteed.
   const bridgeOut =
     bridge &&
     (!error && assetsOut.length > 0 ? assetsOut.map((d) => withBridgeRead(d, bridge.send)) : sentDeltas(bridge.send));
-  const bridgeIn = bridge?.receive ? receivedDeltas(bridge.receive) : [];
+  let bridgeIn: AssetDelta[] = [];
+  if (bridge?.receive) bridgeIn = receivedDeltas(bridge.receive);
+  // Named here so the native row is priced like the bridge rows, which carry their symbol.
+  else if (bridge?.sameChain && !error)
+    bridgeIn = assetsIn.map((d) => (d.isNative ? { ...d, symbol: nativeSymbol } : d));
   const shown = bridgeOut ? bridgeOut : [...assetsOut, ...assetsIn];
   // An unverified symbol is the token's own word, and a base units row has no price to scale, so
   // neither keys a price. A token with no symbol has nothing to key on.
