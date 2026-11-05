@@ -50,7 +50,7 @@ export function readRelaySwap(
   const proxies = contracts.chain(call.chainId)?.relay?.approvalProxies ?? [];
   const { to } = call;
   if (!isAddress(to, { strict: false }) || !proxies.some((proxy) => isAddressEqual(proxy, to))) return undefined;
-  return swapOf(contracts, call, account, before) ?? { kind: 'unreadable', what: 'deposit' };
+  return swapOf(contracts, call, account, before) ?? { kind: 'unreadable', what: 'swap' };
 }
 
 // One token, pulled for the exact amount in the call. Relay leaves the approve out when the allowance

@@ -18,8 +18,7 @@ const OTHER = '0x1111111111111111111111111111111111111111';
 const SWAP_HIDDEN =
   'Relay does not say in this transaction what the swap pays out, so this screen cannot confirm what you get. Confirm only if you started this swap yourself.';
 const UNPAIRED = 'This batch has an approval that no deposit uses. Check its token, amount and spender.';
-const DEPOSIT_2 =
-  'This screen cannot confirm where the deposit in step 2 sends the funds. Check the raw details before you confirm.';
+const SWAP_2 = 'This screen cannot read the swap in step 2. Check the raw details before you confirm.';
 const CHECK = 'Check it before you confirm.';
 const UNREADABLE = { unreadable: true };
 
@@ -60,7 +59,7 @@ function expectUnreadable(calls: BridgeCall[]) {
   const batch = readBridgeBatch(contracts, calls, account);
   expect(batch?.transfer).toBeUndefined();
   expect(batch?.steps).toEqual([null, UNREADABLE]);
-  expect(batch?.alerts).toEqual([DEPOSIT_2]);
+  expect(batch?.alerts).toEqual([SWAP_2]);
 }
 
 describe('given the Relay quote for a same-chain swap on Base, 10 USDC to ETH', () => {
@@ -150,6 +149,30 @@ describe('given a same-chain Relay swap that breaks a rule', () => {
     expect(batch?.steps).toEqual([null]);
     expect(batch?.alerts).toEqual([]);
     expect(batch?.notices).toEqual([SWAP_HIDDEN]);
+  });
+});
+
+describe('given a batch with a Relay deposit and a Relay swap that it cannot read', () => {
+  const RAW = 'Check the raw details before you confirm.';
+  // The depository is read exactly, so a trailing byte makes the deposit unreadable.
+  const badDeposit: BridgeCall = { ...RELAY_USDC_DEPOSIT, data: RELAY_USDC_DEPOSIT.data + '00' };
+  const badSwap: BridgeCall = { ...RELAY_SWAP, value: '1' };
+
+  it('when there is one of each, then the deposit and the swap are named on their own lines', () => {
+    const batch = readBridgeBatch(contracts, [badDeposit, badSwap], account);
+    expect(batch?.steps).toEqual([UNREADABLE, UNREADABLE]);
+    expect(batch?.alerts).toEqual([
+      `This screen cannot confirm where the deposit in step 1 sends the funds. ${RAW}`,
+      `This screen cannot read the swap in step 2. ${RAW}`,
+    ]);
+  });
+
+  it('when there are two of each, then each line names its steps', () => {
+    const batch = readBridgeBatch(contracts, [badDeposit, badSwap, badDeposit, badSwap], account);
+    expect(batch?.alerts).toEqual([
+      `This screen cannot confirm where the deposits in steps 1 and 3 send the funds. ${RAW}`,
+      `This screen cannot read the swaps in steps 2 and 4. ${RAW}`,
+    ]);
   });
 });
 
