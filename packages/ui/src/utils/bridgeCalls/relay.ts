@@ -53,7 +53,9 @@ export function readRelaySwap(
   return swapOf(contracts, call, account, before) ?? { kind: 'unreadable', what: 'deposit' };
 }
 
-// One token, taken by the approve right before it on the same chain for exactly the amount pulled.
+// One token, pulled for the exact amount in the call. Relay leaves the approve out when the allowance
+// already covers it, but an approve right before it must be on the same chain, for this proxy, and
+// for exactly the token and amount pulled.
 function swapOf(
   contracts: BridgeContracts,
   call: BridgeCall,
@@ -65,11 +67,17 @@ function swapOf(
   const [tokens, amounts, , refundTo, nftRecipient] = swap.args;
   if (tokens.length !== 1 || amounts.length !== 1) return undefined;
   if (!isAddressEqual(refundTo, account) || !isAddressEqual(nftRecipient, account)) return undefined;
+  const read: RelaySwap = {
+    kind: 'swap',
+    provider: 'relay',
+    send: tokenAmount(contracts, call.chainId, tokens[0], amounts[0]),
+  };
 
-  const approve = before?.chainId === call.chainId ? readBridgeApprove(contracts, before) : undefined;
-  if (approve?.kind !== 'approve' || !isAddressEqual(approve.spender, getAddress(call.to))) return undefined;
+  const approve = before && readBridgeApprove(contracts, before);
+  if (approve?.kind !== 'approve') return read;
+  if (before?.chainId !== call.chainId || !isAddressEqual(approve.spender, getAddress(call.to))) return undefined;
   if (!isAddressEqual(approve.token.address, tokens[0]) || approve.amount !== amounts[0]) return undefined;
-  return { kind: 'swap', provider: 'relay', send: tokenAmount(contracts, call.chainId, tokens[0], amounts[0]) };
+  return read;
 }
 
 function depositOf(contracts: BridgeContracts, call: BridgeCall): RelayDeposit | Inert | undefined {

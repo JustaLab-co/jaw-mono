@@ -20,8 +20,6 @@ const SWAP_HIDDEN =
 const UNPAIRED = 'This batch has an approval that no deposit uses. Check its token, amount and spender.';
 const DEPOSIT_2 =
   'This screen cannot confirm where the deposit in step 2 sends the funds. Check the raw details before you confirm.';
-const DEPOSIT_ONLY =
-  'This screen cannot confirm where this deposit sends the funds. Check the raw details before you confirm.';
 const CHECK = 'Check it before you confirm.';
 const UNREADABLE = { unreadable: true };
 
@@ -146,11 +144,12 @@ describe('given a same-chain Relay swap that breaks a rule', () => {
     expectUnreadable([RELAY_SWAP_APPROVE, { ...RELAY_SWAP, data: RELAY_SWAP.data!.slice(0, 600) }]);
   });
 
-  it('when no approve comes before it, then the swap is unreadable', () => {
+  it('when no approve comes before it, then it is a Relay swap that sends exactly 10 USDC', () => {
     const batch = readBridgeBatch(contracts, [RELAY_SWAP], account);
-    expect(batch?.transfer).toBeUndefined();
-    expect(batch?.steps).toEqual([UNREADABLE]);
-    expect(batch?.alerts).toEqual([DEPOSIT_ONLY]);
+    expect(batch?.transfer).toMatchObject({ provider: 'relay', title: 'Swap through Relay', send: tenUsdc });
+    expect(batch?.steps).toEqual([null]);
+    expect(batch?.alerts).toEqual([]);
+    expect(batch?.notices).toEqual([SWAP_HIDDEN]);
   });
 });
 
