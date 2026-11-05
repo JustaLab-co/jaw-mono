@@ -2,7 +2,15 @@ import { describe, expect, it } from 'vitest';
 import { decodeFunctionData, encodeFunctionData, parseAbi, type Address } from 'viem';
 import { readBridgeBatch } from './batch';
 import { BRIDGE_CHAINS } from './contracts';
-import { RELAY_SWAP, RELAY_SWAP_ACCOUNT, RELAY_SWAP_APPROVE, RELAY_USDC_DEPOSIT, RELAY_USDC_ORDER } from './fixtures';
+import {
+  RELAY_BRIDGE_SWAP,
+  RELAY_BRIDGE_SWAP_APPROVE,
+  RELAY_SWAP,
+  RELAY_SWAP_ACCOUNT,
+  RELAY_SWAP_APPROVE,
+  RELAY_USDC_DEPOSIT,
+  RELAY_USDC_ORDER,
+} from './fixtures';
 import { BridgeContracts } from './table';
 import type { BridgeCall } from './view';
 
@@ -14,9 +22,12 @@ const OLD_PROXY = '0xCcC88a9d1B4ED6b0EABA998850414b24f1c315bE';
 const BASE_USDC = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 const BASE_WETH = '0x4200000000000000000000000000000000000006';
 const OTHER = '0x1111111111111111111111111111111111111111';
+const SOLVER = '0xf70da97812CB96acDF810712Aa562db8dfA3dbEF';
 
 const SWAP_HIDDEN =
   'Relay does not say in this transaction what the swap pays out, so this screen cannot confirm what you get. Confirm only if you started this swap yourself.';
+const RELAY_HIDDEN =
+  'Relay keeps the destination chain and the recipient in an order outside this transaction. This screen cannot show them. Confirm only if you started this transfer yourself.';
 const UNPAIRED = 'This batch has an approval that no deposit uses. Check its token, amount and spender.';
 const SWAP_2 = 'This screen cannot read the swap in step 2. Check the raw details before you confirm.';
 const CHECK = 'Check it before you confirm.';
@@ -209,5 +220,41 @@ describe('given an approve to the Relay approval proxy', () => {
   it('when a Relay depository deposit follows it, then the approval is named as for a different contract', () => {
     const batch = readBridgeBatch(contracts, [RELAY_SWAP_APPROVE, RELAY_USDC_DEPOSIT], account);
     expect(batch?.notices).toContain('This approval is for a different contract than the deposit.');
+  });
+});
+
+describe('given the Relay quote for a cross-chain swap, 100 AERO on Base to ETH on Arbitrum', () => {
+  it('when it is read, then it is a Relay bridge that sends exactly 100 AERO and claims nothing on the other chain', () => {
+    const batch = readBridgeBatch(contracts, [RELAY_BRIDGE_SWAP_APPROVE, RELAY_BRIDGE_SWAP], account);
+    expect(batch?.transfer).toMatchObject({
+      provider: 'relay',
+      title: 'Bridge through Relay',
+      send: { chainId: 8453, amount: 100n * 10n ** 18n },
+      origin: { name: 'Base', nativeSymbol: 'ETH' },
+      details: [],
+    });
+    expect(batch?.transfer?.sameChain).toBeUndefined();
+    expect(batch?.transfer?.receive).toBeUndefined();
+    expect(batch?.steps).toEqual([null, null]);
+    expect(batch?.alerts).toEqual([]);
+    expect(batch?.notices[0]).toBe(RELAY_HIDDEN);
+  });
+
+  it('when leftovers refund to a solver but mints go to the account, then the swap is unreadable', () => {
+    expectUnreadable([RELAY_SWAP_APPROVE, swapWith({ refundTo: SOLVER })]);
+  });
+
+  it('when both go to an address that is not a pinned solver, then the swap is unreadable', () => {
+    expectUnreadable([RELAY_SWAP_APPROVE, swapWith({ refundTo: OTHER, nftRecipient: OTHER })]);
+  });
+
+  it('when a same-chain swap names a pinned solver for both, then it is read as a bridge, not a swap', () => {
+    const batch = readBridgeBatch(
+      contracts,
+      [RELAY_SWAP_APPROVE, swapWith({ refundTo: SOLVER, nftRecipient: SOLVER })],
+      account
+    );
+    expect(batch?.transfer?.title).toBe('Bridge through Relay');
+    expect(batch?.transfer?.sameChain).toBeUndefined();
   });
 });

@@ -151,19 +151,13 @@ function relayTransfer(
 }
 
 function relaySwapTransfer(contracts: BridgeContracts, swap: RelaySwap): TransferRead {
-  const notices = [RELAY_SWAP_HIDDEN];
+  const notices = [swap.crossChain ? RELAY_HIDDEN : RELAY_SWAP_HIDDEN];
   if (!swap.send.token.known) notices.push(tokenNotice(swap.send.token));
-  return {
-    transfer: {
-      provider: 'relay',
-      title: 'Swap through Relay',
-      send: swap.send,
-      origin: labelOf(contracts, swap.send.chainId),
-      sameChain: true,
-      details: [],
-    },
-    notices,
-  };
+  const origin = labelOf(contracts, swap.send.chainId);
+  const transfer: BridgeTransfer = swap.crossChain
+    ? { provider: 'relay', title: 'Bridge through Relay', send: swap.send, origin, details: [] }
+    : { provider: 'relay', title: 'Swap through Relay', send: swap.send, origin, sameChain: true, details: [] };
+  return { transfer, notices };
 }
 
 // Only a plain Across deposit can name a chain the table lacks, and what it pays out is never native.

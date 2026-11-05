@@ -33,14 +33,18 @@ export function readRelayCall(
   return depositOf(contracts, call) ?? { kind: 'unreadable', what: 'deposit' };
 }
 
-/** A same-chain swap through Relay's approval proxy. What it pulls is read; what it pays out is not in the call. */
-export type RelaySwap = { kind: 'swap'; provider: 'relay'; send: TokenAmount };
+/**
+ * A swap through Relay's approval proxy. What it pulls is read; what it pays out is not in the call.
+ * `crossChain` is set when a pinned solver takes the output here to pay out on a chain the call does
+ * not name.
+ */
+export type RelaySwap = { kind: 'swap'; provider: 'relay'; send: TokenAmount; crossChain?: true };
 
 /**
  * The proxy pulls exactly `tokens` and `amounts` from the account into Relay's router, which runs
  * the inner calls with only those funds and returns only leftover native token to `refundTo`.
  * ERC-20 leftovers move through the inner calls, which are not read, so the summary claims nothing
- * about them.
+ * about them. A same-chain swap refunds to the account; a cross-chain one to one of Relay's solvers.
  */
 export function readRelaySwap(
   contracts: BridgeContracts,
@@ -67,11 +71,15 @@ function swapOf(
   if (!swap || callValue(call.value) !== 0n) return undefined;
   const [tokens, amounts, , refundTo, nftRecipient] = swap.args;
   if (tokens.length !== 1 || amounts.length !== 1) return undefined;
-  if (!isAddressEqual(refundTo, account) || !isAddressEqual(nftRecipient, account)) return undefined;
+  if (!isAddressEqual(refundTo, nftRecipient)) return undefined;
+  const solvers = contracts.chain(call.chainId)?.relay?.solvers ?? [];
+  const crossChain = solvers.some((solver) => isAddressEqual(solver, refundTo));
+  if (!crossChain && !isAddressEqual(refundTo, account)) return undefined;
   const read: RelaySwap = {
     kind: 'swap',
     provider: 'relay',
     send: tokenAmount(contracts, call.chainId, tokens[0], amounts[0]),
+    ...(crossChain && { crossChain: true }),
   };
 
   const approve = before && readBridgeApprove(contracts, before);
