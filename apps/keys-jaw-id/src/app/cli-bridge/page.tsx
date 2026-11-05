@@ -87,10 +87,11 @@ function CLIBridgeContent() {
   const sdkRef = useRef<ReturnType<typeof JAW.create> | null>(null);
   /** What `sdkRef` was built from, so a second init can tell whether it still fits. */
   const sdkSignatureRef = useRef<string | null>(null);
-  /** The first name a client gave. A dialog may be open under it, so a later init cannot rename the page. */
-  const appNameRef = useRef<string | null>(null);
-  /** The logo that came with that first name, kept with it so a later init cannot swap one without the other. */
-  const appLogoRef = useRef<{ url?: string } | null>(null);
+  /**
+   * The name and logo the first init gave. A dialog may be open under them, so a later init can
+   * neither rename the page nor swap or add a logo.
+   */
+  const appIdentityRef = useRef<{ name: string; logoUrl?: string } | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const sharedSecretRef = useRef<CryptoKey | null>(null);
   /**
@@ -227,8 +228,10 @@ function CLIBridgeContent() {
                   }
                   setState('connected');
                   const { chainId, ens, paymaster, client } = parsed;
-                  const name = (appNameRef.current ??= resolveBridgeAppName(parsed.appName));
-                  const appLogoUrl = (appLogoRef.current ??= { url: parsed.appLogoUrl }).url;
+                  const { name, logoUrl: appLogoUrl } = (appIdentityRef.current ??= {
+                    name: resolveBridgeAppName(parsed.appName),
+                    logoUrl: parsed.appLogoUrl,
+                  });
                   setAppName(name);
 
                   // A CLI that brought its own key keeps it, so anyone who wants
@@ -386,8 +389,7 @@ function CLIBridgeContent() {
     return () => {
       cancelled = true;
       clearTimeout(unanswered);
-      appNameRef.current = null;
-      appLogoRef.current = null;
+      appIdentityRef.current = null;
       setAppName(DEFAULT_BRIDGE_APP_NAME);
       if (beforeUnloadHandler) {
         window.removeEventListener('beforeunload', beforeUnloadHandler);

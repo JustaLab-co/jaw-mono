@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseInit, parseRequest } from './bridge-frames';
+import { MAX_APP_LOGO_URL_LENGTH, parseInit, parseRequest } from './bridge-frames';
 
 const chains = [1, 8453, 84532];
 
@@ -160,6 +160,16 @@ describe('parseInit appLogoUrl', () => {
     });
   });
 
+  it('keeps an address of exactly the cap and drops one a character longer', () => {
+    const atCap = `https://mcp.jaw.id/${'a'.repeat(MAX_APP_LOGO_URL_LENGTH - 'https://mcp.jaw.id/'.length)}`;
+    expect(atCap).toHaveLength(MAX_APP_LOGO_URL_LENGTH);
+    expect(parseInit({ type: 'init', chainId: 1, appLogoUrl: atCap }, chains)).toEqual({
+      chainId: 1,
+      appLogoUrl: atCap,
+    });
+    expect(parseInit({ type: 'init', chainId: 1, appLogoUrl: `${atCap}a` }, chains)).toEqual({ chainId: 1 });
+  });
+
   it.each([
     ['a number', 7],
     ['an empty string', ''],
@@ -167,7 +177,6 @@ describe('parseInit appLogoUrl', () => {
     ['a data uri', 'data:image/png;base64,iVBORw0KGgo='],
     ['a javascript uri', 'javascript:alert(1)'],
     ['a relative path', '/logos/claude.svg'],
-    ['an address too long', `https://mcp.jaw.id/${'a'.repeat(2048)}`],
     ['null', null],
   ])('drops %s without refusing the init', (_, appLogoUrl) => {
     const result = parseInit({ type: 'init', chainId: 1, appLogoUrl }, chains);

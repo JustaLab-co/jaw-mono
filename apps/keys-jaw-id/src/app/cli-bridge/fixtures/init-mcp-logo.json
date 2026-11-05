@@ -1,9 +1,9 @@
 {
-  "sentBy": ["@jaw-mono/mcp images that name a known client's logo"],
+  "sentBy": ["@jaw-mono/mcp images built after jaw-agent #85, for a client whose logo they know"],
   "clients": [
     {
       "family": "mcp",
-      "versions": "images that name a known client's logo",
+      "versions": "images built after jaw-agent #85",
       "current": true
     }
   ],
