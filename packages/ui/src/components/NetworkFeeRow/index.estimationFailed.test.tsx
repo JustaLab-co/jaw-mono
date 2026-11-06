@@ -66,5 +66,36 @@ describe('NetworkFeeRow estimation-failed', () => {
     expect(retry.disabled).toBe(true);
     act(() => retry.click());
     expect(onRetryEstimation).not.toHaveBeenCalled();
+    expect(el.textContent).toContain('Fee estimation failed');
+  });
+
+  it('holds Retry while a retry the user started re-estimates the fee in ETH', () => {
+    const onRetryEstimation = vi.fn();
+    const el = mount({ onRetryEstimation });
+    act(() => [...el.querySelectorAll('button')].find((b) => b.textContent === 'Retry')!.click());
+    act(() => root!.render(row({ onRetryEstimation, gasFeeLoading: true })));
+    const retry = [...el.querySelectorAll('button')].find((b) => b.textContent === 'Retrying…')!;
+    expect(retry.disabled).toBe(true);
+    act(() => retry.click());
+    expect(onRetryEstimation).toHaveBeenCalledTimes(1);
+    expect(el.textContent).toContain('Fee estimation failed');
+  });
+
+  it('shows Estimating... for an ETH re-estimate the user did not start', () => {
+    const el = mount({ onRetryEstimation: vi.fn(), gasFeeLoading: true });
+    expect(el.textContent).toContain('Estimating...');
+    expect(el.textContent).not.toContain('Retrying…');
+    expect(el.textContent).not.toContain('Fee estimation failed');
+  });
+
+  it('shows Estimating... for a later ETH re-estimate once a user retry settles', () => {
+    const onRetryEstimation = vi.fn();
+    const el = mount({ onRetryEstimation });
+    act(() => [...el.querySelectorAll('button')].find((b) => b.textContent === 'Retry')!.click());
+    act(() => root!.render(row({ onRetryEstimation, gasFeeLoading: true })));
+    act(() => root!.render(row({ onRetryEstimation })));
+    act(() => root!.render(row({ onRetryEstimation, gasFeeLoading: true })));
+    expect(el.textContent).toContain('Estimating...');
+    expect(el.textContent).not.toContain('Retrying…');
   });
 });

@@ -9,7 +9,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createElement, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { act } from 'react';
-import type { Address } from 'viem';
+import { RpcRequestError, type Address } from 'viem';
+import { getUserOperationError } from 'viem/account-abstraction';
 import fc from 'fast-check';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -37,6 +38,13 @@ const TRANSFER_CALLDATA = ('0xa9059cbb' +
   RECIPIENT.slice(2).padStart(64, '0') +
   (1_000_000).toString(16).padStart(64, '0')) as `0x${string}`;
 const CALLS: TransactionCall[] = [{ to: USDC, value: 0n, data: TRANSFER_CALLDATA }];
+
+/** A bundler JSON-RPC error as viem's `prepareUserOperation` throws it. */
+const bundlerError = (code: number, message: string) =>
+  getUserOperationError(new RpcRequestError({ body: {}, error: { code, message }, url: 'https://bundler.test' }), {
+    callData: '0x',
+    sender: RECIPIENT,
+  } as Parameters<typeof getUserOperationError>[1]);
 
 const makeAccount = (calculateGasCost: () => Promise<string>): Account =>
   ({
@@ -720,7 +728,7 @@ describe('useGasEstimation fee-token outcome per ERC-20 result', () => {
 
   // Retrying the same calls can't undo a revert, so it reads as will-fail with or without ETH.
   it.each([0n, 5n])('a fee estimation that reverts reads as will-fail with %s wei of ETH', async (wei) => {
-    erc20Mock.mockRejectedValue(new Error('execution reverted: Across quote expired'));
+    erc20Mock.mockRejectedValue(bundlerError(-32521, 'execution reverted: Across quote expired'));
     await mount(
       makeAccount(async () => {
         throw new Error("AA21 didn't pay prefund");
@@ -730,6 +738,50 @@ describe('useGasEstimation fee-token outcome per ERC-20 result', () => {
 
     expect(usdcNow()).toMatchObject({ gasCostFormatted: 'Estimation failed', estimationReverted: true });
     expect(blockNow()).toBe('will-fail');
+  });
+
+  it('never records the reason a reverting contract gave', async () => {
+    erc20Mock.mockRejectedValue(bundlerError(-32521, 'execution reverted: top up at example.xyz'));
+    await mount(
+      makeAccount(async () => {
+        throw new Error("AA21 didn't pay prefund");
+      }),
+      [nativeEth(0n), token({})]
+    );
+
+    expect(usdcNow().estimationFailure).toBeDefined();
+    expect(usdcNow().estimationFailure).not.toContain('example.xyz');
+  });
+
+  // The row only shows when the asset simulation passed, so the text must not blame the calls.
+  it('records a call revert as a failed bundler estimate', async () => {
+    erc20Mock.mockRejectedValue(bundlerError(-32521, 'execution reverted: Across quote expired'));
+    await mount(
+      makeAccount(async () => {
+        throw new Error("AA21 didn't pay prefund");
+      }),
+      [nativeEth(0n), token({})]
+    );
+
+    expect(usdcNow().estimationFailure).toBe("The bundler's estimate of this transaction reverted.");
+  });
+
+  // A USDC-only account whose fee path fails: the calls may be fine, so a retry can help.
+  it.each([
+    ['the paymaster validation reverts (AA33)', () => bundlerError(-32500, 'AA33 reverted 0x')],
+    ['the account validation reverts (AA23)', () => bundlerError(-32500, 'AA23 reverted (or OOG)')],
+    ['the token quote reverts', () => new Error('pimlico_getTokenQuotes error: execution reverted')],
+  ])('stays retryable when %s', async (_label, error) => {
+    erc20Mock.mockRejectedValue(error());
+    await mount(
+      makeAccount(async () => {
+        throw new Error("AA21 didn't pay prefund");
+      }),
+      [nativeEth(0n), token({})]
+    );
+
+    expect(usdcNow().estimationReverted).toBe(false);
+    expect(blockNow()).toBe('estimation-failed');
   });
 
   it('a fee estimation that fails without a revert stays retryable', async () => {

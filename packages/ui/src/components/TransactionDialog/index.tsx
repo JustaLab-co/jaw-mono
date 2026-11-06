@@ -45,6 +45,7 @@ export const TransactionDialog = ({
   assetsOut,
   assetsIn,
   assetPreviewError,
+  assetPreviewSimulated,
   assetPreviewWillRevert,
   assetPreviewRevertCause,
   onBehalfOf,
@@ -105,17 +106,20 @@ export const TransactionDialog = ({
   });
   const displayWalletAddress = getDisplayAddress(wallet.name, walletAddress);
 
+  // A permissioned execution is still "permissioned" while the granter is in flight, and after a
+  // lookup that failed — the extra row and the delegation badge must not flicker in and out.
+  const isPermissioned = !!onBehalfOf || !!onBehalfOfLoading || !!permissionProblem;
+
+  // Under a permission the preview simulates the raw calls from the granter, but the fee estimation
+  // runs them through the permissions manager, which can reject what the granter alone would not.
   const { blockReason, hasSelectablePaymentOption, feeEstimationFailure } = resolveFeeBlock({
     feeTokens,
     gasEstimationError,
     sponsored,
     isPayingWithErc20: !!isPayingWithErc20,
     revertCause: assetPreviewRevertCause,
+    callsSimulated: !!assetPreviewSimulated && !isPermissioned,
   });
-
-  // A permissioned execution is still "permissioned" while the granter is in flight, and after a
-  // lookup that failed — the extra row and the delegation badge must not flicker in and out.
-  const isPermissioned = !!onBehalfOf || !!onBehalfOfLoading || !!permissionProblem;
 
   // A failed lookup is uncertainty about the lookup, not a certain revert — it warns below but
   // must not dead-end the dialog the way a genuinely broken permission does.

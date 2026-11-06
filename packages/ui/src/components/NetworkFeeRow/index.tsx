@@ -1,6 +1,6 @@
 'use client';
 
-import type { ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Info } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip';
 import { FeeTokenSelector, type FeeTokenOption } from '../FeeTokenSelector';
@@ -85,8 +85,41 @@ export function NetworkFeeRow({
   // the block. Suppressed only when nothing can pay, where the choice would change nothing.
   const showSelector = showFeeTokenSelector && !sponsored && !(blockReason && !hasSelectablePaymentOption);
 
+  const running = gasFeeLoading || estimatingTokenCosts;
+  const [retryStarted, setRetryStarted] = useState(false);
+  useEffect(() => {
+    if (!running) setRetryStarted(false);
+  }, [running]);
+
   const feeValue = (() => {
-    if (gasFeeLoading && !isPayingWithErc20) {
+    const estimatingEth = gasFeeLoading && !isPayingWithErc20;
+
+    // A retry the user started keeps the warning on screen and only the button changes.
+    if (blockReason === 'estimation-failed' && (retryStarted || !estimatingEth)) {
+      return (
+        <div className="flex flex-col items-start gap-1">
+          <InlineWarning
+            text="Fee estimation failed"
+            detail={`The network fee couldn't be estimated, so this transaction can't be submitted yet. ${estimationFailureDetail ?? ''}`.trim()}
+          />
+          {onRetryEstimation && (
+            <button
+              type="button"
+              onClick={() => {
+                setRetryStarted(true);
+                onRetryEstimation();
+              }}
+              disabled={disabled || running}
+              className="text-muted-foreground text-body-xs font-mono underline disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {running ? 'Retrying…' : 'Retry'}
+            </button>
+          )}
+        </div>
+      );
+    }
+
+    if (estimatingEth) {
       return <p className="text-muted-foreground text-body-sm font-mono">Estimating...</p>;
     }
 
@@ -104,28 +137,6 @@ export function NetworkFeeRow({
     }
     if (blockReason === 'will-fail') {
       return <InlineWarning text="Transaction will fail" detail={willFailDetail} />;
-    }
-
-    if (blockReason === 'estimation-failed') {
-      const retrying = gasFeeLoading || estimatingTokenCosts;
-      return (
-        <div className="flex flex-col items-start gap-1">
-          <InlineWarning
-            text="Fee estimation failed"
-            detail={`The network fee couldn't be estimated, so this transaction can't be submitted yet. ${estimationFailureDetail ?? ''}`.trim()}
-          />
-          {onRetryEstimation && (
-            <button
-              type="button"
-              onClick={onRetryEstimation}
-              disabled={disabled || retrying}
-              className="text-muted-foreground text-body-xs font-mono underline disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {retrying ? 'Retrying…' : 'Retry'}
-            </button>
-          )}
-        </div>
-      );
     }
 
     if (sponsored) {
