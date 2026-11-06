@@ -328,6 +328,24 @@ describe('resolveTokenUnits', () => {
     ).rejects.toThrow();
   });
 
+  it('keeps the rows, unnamed, when the request fails and it only asked for symbols', async () => {
+    const { client } = stubClient(() => 'revert', new Error('429 Too Many Requests'));
+    const changes = [change(MKR, -(2n * 10n ** 18n), { decimals: 18 })];
+
+    const units = await resolveTokenUnits(client, changes, BLOCK, BATCH);
+
+    expect(mapAssetChanges(units.changes, units.erc721)).toEqual([
+      expect.objectContaining({ address: MKR, symbol: undefined, amountFormatted: '2', direction: 'out' }),
+    ]);
+  });
+
+  it('still rejects when the failed request also asked for decimals', async () => {
+    const { client } = stubClient(() => 'revert', new Error('429 Too Many Requests'));
+    const changes = [change(MKR, -1n, { decimals: 18 }), change(ZERO_DEC, 42n, { symbol: 'ZERO' })];
+
+    await expect(resolveTokenUnits(client, changes, BLOCK, BATCH)).rejects.toThrow();
+  });
+
   it('keeps the rest of the batch when one token answers with junk', async () => {
     // The other direction of the same guard: a per-call failure is local to its call, so a
     // hostile token cannot empty the preview for the assets beside it.

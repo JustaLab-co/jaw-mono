@@ -226,6 +226,7 @@ export async function resolveTokenUnits(
   const decimalsData = encodeFunctionData({ abi: erc20DecimalsAbi, functionName: 'decimals' });
   // Raw calldata rather than `simulateBlocks`' `abi` shortcut: that shortcut decodes inside the
   // action, where a throw escapes as a node error and takes every other probe with it.
+  // A failed request with no decimals asked leaves the rows as they are, only unnamed.
   const [, block] = await simulateBlocks(client, {
     blockNumber,
     blocks: [
@@ -244,7 +245,11 @@ export async function resolveTokenUnits(
         ],
       },
     ],
+  }).catch((e: unknown) => {
+    if (suspects.length > 0) throw e;
+    return [];
   });
+  if (!block && suspects.length === 0) return { changes: [...changes], erc721: new Set() };
   // Every other "no answer" here is a contract's own, and is read as one (see `probeAnswer`). A
   // node that returns fewer blocks than it was asked for is not that, so it must not read as a
   // batch of silent tokens — it rejects, and the caller shows its fallback.
