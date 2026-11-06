@@ -1,0 +1,22 @@
+# Integrations
+
+JAW plugs into the stack you already use. Every integration gives your users the same passkey smart account, so you can start with one and add another later.
+
+| Integration                                       | Package         | Platform           | Best for                                     |
+| ------------------------------------------------- | --------------- | ------------------ | -------------------------------------------- |
+| [Wagmi](/wagmi)                                   | `@jaw.id/wagmi` | Web, React         | Apps already built on wagmi hooks            |
+| [Reown AppKit](/guides/reown-appkit)              | `@jaw.id/wagmi` | Web, React         | Offering passkey login next to other wallets |
+| [EIP-1193 Provider](/api-reference)               | `@jaw.id/core`  | Web, any framework | Non-React apps and other wallet libraries    |
+| [Account class](/account)                         | `@jaw.id/core`  | Web and server     | Headless flows with your own UI              |
+| [React Native (Expo)](/guides/react-native)       | `@jaw.id/core`  | iOS, Android       | Native apps with platform passkey prompts    |
+| [UI components](/configuration/mode/app-specific) | `@jaw.id/ui`    | Web, React         | AppSpecific mode with ready-made dialogs     |
+
+## Which One
+
+- Use **Wagmi** if your app already uses wagmi. You get JAW hooks such as [`useGrantPermissions`](/wagmi/useGrantPermissions) on top of the standard ones.
+- Use **Reown AppKit** if you want JAW as one option in a multi-wallet modal.
+- Use the **provider** if you are not on React. Any library that accepts an EIP-1193 provider works with it.
+- Use the **Account class** when you don't want wallet dialogs at all, as in [Embed Stablecoin Payments](/guides/embed-stablecoin-payments).
+- Use **React Native** for native mobile apps. The wagmi connector and the built-in dialogs are web only.
+
+Not sure yet? Read [Choose Your Setup](/setup).

@@ -1,0 +1,27 @@
+# Troubleshooting
+
+## Browser Support
+
+In CrossPlatform mode JAW opens `keys.jaw.id` as an embedded dialog and falls back to a popup when the browser can't run it safely. Chromium-based browsers (Chrome, Edge, Brave) get the embedded dialog with no setup.
+
+Safari and Firefox can't verify that the embedded dialog is visible, so JAW uses a popup there to prevent clickjacking. To get the embedded dialog on those browsers, message us on [Telegram](https://t.me/+RsFLPfky7-YxZjVk) and we'll add your domain to the trusted allow-list.
+
+The full fallback matrix is in [`transportMode`](/configuration/transportMode#automatic-popup-fallback).
+
+## Common Issues
+
+| Symptom                                                                           | Cause                                                          | Fix                                                                               |
+| --------------------------------------------------------------------------------- | -------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| A popup opens instead of the embedded dialog on `http://localhost`                | The embedded dialog needs an HTTPS origin                      | Serve your dev app over HTTPS, for example `https://localhost`                    |
+| On an allow-listed site, Safari still opens a popup when a user creates a passkey | Safari can't create passkeys inside a cross-origin iframe      | Expected. Sign-in after that stays in the dialog                                  |
+| On an allow-listed site, a returning Safari user has to tap their passkey again   | Safari partitions iframe storage per embedding site            | Expected. One tap reconnects them                                                 |
+| You want the popup everywhere                                                     | `transportMode` defaults to `'auto'`                           | Set `transportMode: 'popup'`. See [`transportMode`](/configuration/transportMode) |
+| `AA21 didn't pay prefund` on the first transaction with the `Account` class       | The account has no native token and no paymaster is configured | Configure [`paymasters`](/configuration/paymasters) or fund the address           |
+
+## React Native
+
+Native builds have their own failure modes (polyfills, AASA, asset links, storage). See [React Native troubleshooting](/guides/react-native#troubleshooting).
+
+## Still Stuck
+
+Ask in [Telegram](https://t.me/+RsFLPfky7-YxZjVk) or open an issue on [GitHub](https://github.com/JustaLab-co/jaw-mono/issues).

@@ -1,0 +1,50 @@
+# Choose Your Setup
+
+Four decisions shape a JAW integration. Make them before you write code, because two of them decide which packages you install.
+
+## 1. Where Passkeys Live
+
+This is set with [`mode`](/configuration/mode) and decides whether a user's account works across apps.
+
+|                                | CrossPlatform (default)                            | AppSpecific                                                        |
+| ------------------------------ | -------------------------------------------------- | ------------------------------------------------------------------ |
+| Passkey ceremony runs on       | `keys.jaw.id`, in an embedded dialog or popup      | Your own domain                                                    |
+| Same account in other JAW apps | Yes                                                | No                                                                 |
+| UI                             | JAW's, themed with [`theme`](/configuration/theme) | Yours, through a `uiHandler`                                       |
+| Extra setup                    | None                                               | `@jaw.id/ui` or a [custom UI handler](/advanced/custom-ui-handler) |
+
+Start with CrossPlatform unless you need users to never leave your page or you are building a white-label product. Details in [CrossPlatform](/configuration/mode/cross-platform) and [AppSpecific](/configuration/mode/app-specific).
+
+## 2. How You Integrate
+
+| Your app                       | Use                                                 | Start with                                  |
+| ------------------------------ | --------------------------------------------------- | ------------------------------------------- |
+| React with wagmi               | `@jaw.id/wagmi`                                     | [Wagmi](/wagmi)                             |
+| React with Reown AppKit        | `@jaw.id/wagmi` next to your other wallets          | [Reown AppKit](/guides/reown-appkit)        |
+| Any web app, no React          | `@jaw.id/core` provider (EIP-1193)                  | [Provider RPC](/api-reference)              |
+| Your own UI, no wallet dialogs | `@jaw.id/core` `Account` class                      | [Account](/account)                         |
+| iOS or Android                 | `@jaw.id/core` `Account` class with native passkeys | [React Native (Expo)](/guides/react-native) |
+
+The full list is in [Integrations](/integrations).
+
+## 3. Who Pays Gas
+
+| Option                        | Who pays | What you configure                                          |
+| ----------------------------- | -------- | ----------------------------------------------------------- |
+| Native token                  | The user | Nothing                                                     |
+| Stablecoins (USDC and others) | The user | Nothing. The user picks the token in the transaction dialog |
+| Full sponsorship              | You      | [`paymasters`](/configuration/paymasters)                   |
+
+See [Gas Sponsoring](/guides/gas-sponsoring) for the sponsorship setup.
+
+## 4. New Account or Existing Address
+
+New users get a new smart account when they create a passkey. If your users already have an EOA with history and balances they want to keep, upgrade it in place with [EIP-7702](/guides/eip7702-upgrade).
+
+## Optional: Usernames
+
+Give every account an ENS subname such as `alice.yourapp.eth` with the [`ens`](/configuration/ens) option. See [Onchain Identity](/guides/onchain-identity).
+
+## Next
+
+Follow the [Quickstart](/guides/quickstart) with the choices above.

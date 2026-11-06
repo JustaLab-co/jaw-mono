@@ -129,7 +129,7 @@ const hash = await account.sendTransaction({
     description:
       'Getting started with JAW smart accounts - setup, tutorials, and common use cases, including React Native (Expo) apps.',
     dirs: ['guides'],
-    includes: ['index.mdx', 'supported-networks.mdx'],
+    includes: ['index.mdx', 'setup.mdx', 'integrations.mdx', 'supported-networks.mdx', 'troubleshooting.mdx'],
     packageName: '@jaw.id/wagmi (React) or @jaw.id/core (vanilla JS, React Native)',
     installCommand: 'npm install @jaw.id/wagmi wagmi @tanstack/react-query',
     quickExample: `// 1. Get API key at https://dashboard.jaw.id
