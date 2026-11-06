@@ -48,12 +48,21 @@ export function classifyRevert(error: unknown): RevertCause {
 /** viem's names for a call revert, from an RPC node or a bundler's estimation. */
 const CALL_REVERT_ERRORS = ['ExecutionRevertedError', 'ContractFunctionRevertedError'];
 
+/** JSON-RPC codes for a call revert, from an RPC node (3) or a bundler's estimation (-32521). */
+const CALL_REVERT_CODES = [3, -32521];
+
 /**
  * True when the error says the calls reverted. Read from viem's typed errors along the cause
- * chain, so a revert in the fee path (paymaster or account validation, the token quote) stays
- * retryable.
+ * chain, or from the code of a raw JSON-RPC error, so a revert in the fee path (paymaster or
+ * account validation, the token quote) stays retryable.
  */
 export function isRevert(error: unknown): boolean {
+  // Only the error itself: viem keeps the raw RPC error as the cause of its RpcRequestError,
+  // under a fee-path error too.
+  if (typeof error === 'object' && error !== null && !(error instanceof Error)) {
+    const { code } = error as { code?: unknown };
+    return typeof code === 'number' && CALL_REVERT_CODES.includes(code);
+  }
   const seen = new Set<Error>();
   for (let e = error; e instanceof Error && !seen.has(e); e = e.cause) {
     seen.add(e);
