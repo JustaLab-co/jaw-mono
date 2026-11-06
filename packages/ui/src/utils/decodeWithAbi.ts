@@ -1,4 +1,13 @@
-import { decodeFunctionData, encodeFunctionData, toFunctionSelector, type Abi, type AbiFunction, type Hex } from 'viem';
+import {
+  decodeAbiParameters,
+  decodeFunctionData,
+  encodeAbiParameters,
+  toFunctionSelector,
+  type Abi,
+  type AbiFunction,
+  type AbiParameter,
+  type Hex,
+} from 'viem';
 import { formatAbiParams } from 'viem/utils';
 
 export interface DecodedParam {
@@ -53,10 +62,20 @@ function functionsBySelector(abi: Abi): Map<string, AbiFunction> {
   return bySelector;
 }
 
-/** The calldata the decoded args re-encode to, or null when one does not fit its type. */
-function reencode(item: AbiFunction, args: readonly unknown[] | undefined): Hex | null {
+// `string` and `bytes` share one encoding. Read as bytes, a string holding invalid UTF-8 re-encodes to
+// its own bytes and not to the U+FFFD it is shown as.
+function asBytes(param: AbiParameter): AbiParameter {
+  if ('components' in param) return { ...param, components: param.components.map(asBytes) };
+  return { ...param, type: param.type.replace(/^string/, 'bytes') } as AbiParameter;
+}
+
+/** The calldata its own decode re-encodes to, or null when a decoded value does not fit its type. */
+function reencode(item: AbiFunction, data: Hex): Hex | null {
+  const params = item.inputs.map(asBytes);
+  // With no params, viem would reject a suffix shorter than a word.
+  const values = params.length > 0 ? decodeAbiParameters(params, `0x${data.slice(10)}`) : [];
   try {
-    return encodeFunctionData({ abi: [item], functionName: item.name, args });
+    return `${data.slice(0, 10)}${encodeAbiParameters(params, values).slice(2)}` as Hex;
   } catch {
     // viem reads a whole word for any integer, so dirty high bits decode past the type's range.
     return null;
@@ -80,7 +99,7 @@ export function decodeWithAbi(abi: Abi, data: Hex): DecodedCalldata | null {
 
   try {
     const { args } = decodeFunctionData({ abi: [item], data });
-    const canonical = reencode(item, args);
+    const canonical = reencode(item, data);
     const isCanonical = canonical !== null && data.toLowerCase().startsWith(canonical.toLowerCase());
     const tail = isCanonical ? data.slice(canonical.length) : '';
     const extraBytes = canonical && !isCanonical ? (data.length - canonical.length) / 2 : 0;

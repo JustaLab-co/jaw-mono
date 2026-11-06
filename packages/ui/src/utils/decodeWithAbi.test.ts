@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { encodeFunctionData, parseAbi, toFunctionSelector, type Abi, type Hex } from 'viem';
+import {
+  encodeAbiParameters,
+  encodeFunctionData,
+  parseAbi,
+  parseAbiParameters,
+  toFunctionSelector,
+  type Abi,
+  type Hex,
+} from 'viem';
 import { decodeWithAbi } from './decodeWithAbi';
 
 const abi4 = parseAbi(['function depositErc20(address depositor, address token, uint256 amount, bytes32 id)']);
@@ -129,6 +137,20 @@ describe('decodeWithAbi', () => {
   it('does not mark canonical calldata as non-canonical', () => {
     expect(decodeWithAbi(abi4, data)?.nonCanonical).toBeUndefined();
     expect(decodeWithAbi(abi4, `${data}8021` as Hex)?.nonCanonical).toBeUndefined();
+  });
+
+  it('does not mark canonical calldata as non-canonical when its strings hold invalid UTF-8', () => {
+    const sig = 'function f(string s, string[] t, (uint256 n, string u) v)';
+    // The same words as the string arguments, since `bytes` and `string` share one encoding.
+    const body = encodeAbiParameters(parseAbiParameters('bytes, bytes[], (uint256, bytes)'), [
+      '0xfffe',
+      ['0xfffe'],
+      [1n, '0xfffe'],
+    ]);
+    const decoded = decodeWithAbi(parseAbi([sig]), `${toFunctionSelector(sig)}${body.slice(2)}8021` as Hex);
+    expect(decoded?.params[0].value).toBe('��');
+    expect(decoded?.nonCanonical).toBeUndefined();
+    expect(decoded?.trailing).toBe('0x8021');
   });
 
   it('marks every decode that does not re-encode to the calldata, over random bodies', () => {
