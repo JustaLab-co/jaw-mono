@@ -15,6 +15,7 @@ import {
     zeroAddress,
     type AbiParameter,
     type Address,
+    toFunctionSelector,
     type Hex,
 } from 'viem';
 import type { SmartAccount } from 'viem/account-abstraction';
@@ -308,5 +309,49 @@ describe('a call the grant screen could misname', () => {
         'execute((address target,uint256 value,bytes data)[] calls)',
     ])('still grants a signature written another way that hashes as shown: %s', (functionSignature) => {
         expect(build({ functionSignature })).not.toThrow();
+    });
+    // A name searched offline to hash to a token function's selector would read as harmless on the
+    // screen while granting that function, so a signature that hashes to one must be its own name.
+    it.each([
+        ['alone', {}],
+        ['with the selector it hashes to', { selector: '0xa22cb465' }],
+    ])('is refused when an unrelated name hashes to setApprovalForAll, %s', (_label, call) => {
+        expect(build({ ...call, functionSignature: 'niceFunctionHerePlzClick943230089(address,bool)' })).toThrow(
+            expect.objectContaining({
+                code: -32602,
+                message: expect.stringContaining('permissions.calls[0].functionSignature'),
+            })
+        );
+    });
+
+    it.each([
+        ['setApprovalForAll(address,bool)', 'setApprovalForAll(address operator, bool approved)'],
+        ['approve(address,uint256)', 'approve(address spender, uint256 amount)'],
+        ['transfer(address,uint256)', 'transfer(address to, uint256 amount)'],
+        ['transferFrom(address,address,uint256)', 'transferFrom(address from, address to, uint256 amount)'],
+        ['safeTransferFrom(address,address,uint256)', 'safeTransferFrom(address from, address to, uint256 id)'],
+        [
+            'safeTransferFrom(address,address,uint256,bytes)',
+            'safeTransferFrom(address from, address to, uint256 id, bytes data)',
+        ],
+        [
+            'safeTransferFrom(address,address,uint256,uint256,bytes)',
+            'safeTransferFrom(address from, address to, uint256 id, uint256 amount, bytes data)',
+        ],
+        [
+            'safeBatchTransferFrom(address,address,uint256[],uint256[],bytes)',
+            'safeBatchTransferFrom(address from, address to, uint256[] ids, uint256[] amounts, bytes data)',
+        ],
+        ['increaseAllowance(address,uint256)', 'increaseAllowance(address spender, uint256 added)'],
+        [
+            'approve(address,address,uint160,uint48)',
+            'approve(address token, address spender, uint160 amount, uint48 expiration)',
+        ],
+    ])('still grants the token function %s, with or without parameter names', (plain, named) => {
+        const selector = toFunctionSelector(plain);
+        for (const functionSignature of [plain, named]) {
+            expect(build({ functionSignature })).not.toThrow();
+            expect(build({ selector, functionSignature })).not.toThrow();
+        }
     });
 });

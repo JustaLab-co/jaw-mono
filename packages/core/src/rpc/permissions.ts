@@ -6,6 +6,7 @@ import {
     getAddress,
     parseAbiItem,
     toFunctionSelector,
+    toFunctionSignature,
     type AbiFunction,
     zeroAddress as ZERO_ADDRESS,
 } from 'viem';
@@ -333,18 +334,39 @@ function hasTextAfterParameters(signature: string): boolean {
 }
 
 /**
- * The selector of the function a signature shows, hashed from its canonical form, so a character
- * the screen does not show (a zero-width space, a look-alike letter, a tab) or a type written short
- * (uint for uint256) does not count. Undefined when the signature does not parse as one function.
+ * The function a signature shows, as its name and parameter types with no parameter names, so a
+ * character the screen does not show (a zero-width space, a look-alike letter, a tab) or a type
+ * written short (uint for uint256) does not count. Undefined when it does not parse as one function.
  */
-function canonicalSelector(signature: string): Hex | undefined {
+function canonicalSignature(signature: string): string | undefined {
     try {
         const item = parseAbiItem(`function ${signature.trim().replace(/^function\s+/, '')}`) as AbiFunction;
-        return item.type === 'function' ? toFunctionSelector(item) : undefined;
+        return item.type === 'function' ? toFunctionSignature(item) : undefined;
     } catch {
         return undefined;
     }
 }
+
+/**
+ * The token functions worth faking, by selector. A dapp can search names offline (about 2^32
+ * hashes) for an innocent-looking one that hashes to one of these, and the grant screen shows the
+ * name as sent, so a signature that hashes to one of them must be that function.
+ */
+const TOKEN_FUNCTIONS: ReadonlyMap<Hex, string> = new Map(
+    [
+        'setApprovalForAll(address,bool)',
+        'approve(address,uint256)',
+        'transfer(address,uint256)',
+        'transferFrom(address,address,uint256)',
+        'safeTransferFrom(address,address,uint256)',
+        'safeTransferFrom(address,address,uint256,bytes)',
+        'safeTransferFrom(address,address,uint256,uint256,bytes)',
+        'safeBatchTransferFrom(address,address,uint256[],uint256[],bytes)',
+        'increaseAllowance(address,uint256)',
+        // Permit2
+        'approve(address,address,uint160,uint48)',
+    ].map((signature) => [toFunctionSelector(signature), signature])
+);
 
 /**
  * The selector a call permission grants, from its selector, its functionSignature or both.
@@ -353,8 +375,8 @@ function canonicalSelector(signature: string): Hex | undefined {
  * selector, so anything the screen could misname is refused with -32602: a signature that is not
  * a string or does not parse, one with text after its parameters (the hash stops there, the screen
  * does not), one that hashes differently from the function it shows, one that disagrees with the
- * selector, and one that hashes to a wildcard selector, which the screen would show as a single
- * function.
+ * selector, one that hashes to a wildcard selector, which the screen would show as a single
+ * function, and one that hashes to a well-known token function under another name.
  */
 function resolveCallSelector(call: unknown, index: number): Hex {
     const field = `permissions.calls[${index}]`;
@@ -397,7 +419,8 @@ function resolveCallSelector(call: unknown, index: number): Hex {
             `${GRANT_METHOD}: ${field}.functionSignature must be a function signature such as transfer(address,uint256), got ${describeValue(functionSignature)}`
         );
     }
-    if (canonicalSelector(functionSignature) !== computed) {
+    const canonical = canonicalSignature(functionSignature);
+    if (!canonical || toFunctionSelector(canonical) !== computed) {
         throw standardErrors.rpc.invalidParams(
             `${GRANT_METHOD}: ${field}.functionSignature ${describeValue(functionSignature)} hashes to ${computed}, not to the function it shows; write it as it is hashed, such as transfer(address,uint256)`
         );
@@ -405,6 +428,12 @@ function resolveCallSelector(call: unknown, index: number): Hex {
     if (WILDCARD_SELECTORS.has(computed)) {
         throw standardErrors.rpc.invalidParams(
             `${GRANT_METHOD}: ${field}.functionSignature ${describeValue(functionSignature)} hashes to ${computed}, which the permission manager reads as more than one function`
+        );
+    }
+    const token = TOKEN_FUNCTIONS.get(computed);
+    if (token && canonical !== token) {
+        throw standardErrors.rpc.invalidParams(
+            `${GRANT_METHOD}: ${field}.functionSignature ${describeValue(functionSignature)} hashes to ${computed}, the selector of ${token}; name that function as ${token}`
         );
     }
     if (hasSelector && computed !== (selector as string).toLowerCase()) {
