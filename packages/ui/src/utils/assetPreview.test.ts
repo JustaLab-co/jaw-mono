@@ -123,6 +123,19 @@ describe('mapAssetChanges', () => {
     expect(delta).toMatchObject({ address: USDC, symbol: undefined, amountFormatted: '1', direction: 'out' });
   });
 
+  it.each([
+    ['a zero-width space', 'USDC\u{200b}'],
+    ['a long run of control characters', '\u0001'.repeat(200)],
+  ])('leaves a token whose symbol has %s unnamed', (_, symbol) => {
+    const [delta] = mapAssetChanges([change(USDC, -1_000_000n, { decimals: 6, symbol })]);
+    expect(delta).toMatchObject({ address: USDC, symbol: undefined, amountFormatted: '1', direction: 'out' });
+  });
+
+  it('trims the padding off a symbol', () => {
+    const [delta] = mapAssetChanges([change(USDC, -1_000_000n, { decimals: 6, symbol: ' USDC ' })]);
+    expect(delta.symbol).toBe('USDC');
+  });
+
   it('treats the native pseudo-address as native whatever viem reports', () => {
     const [delta] = mapAssetChanges([change(ethAddress.toUpperCase().replace('0X', '0x'), 1n)]);
 
@@ -500,6 +513,7 @@ describe('resolveTokenUnits', () => {
   it.each([
     ['empty', ''],
     ['blank', '   '],
+    ['not printable text', 'MKR\u{200b}'],
   ])('asks a token whose symbol is %s for it again', async (_, symbol) => {
     const { client } = stubClient((selector) => (selector === SYMBOL ? stringToHex('MKR', { size: 32 }) : 'revert'));
 

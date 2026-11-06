@@ -26,11 +26,16 @@ function decode(data: Hex): string {
   }
 }
 
+/** The symbol trimmed, when it is short printable text. */
+export function cleanSymbol(symbol: string | undefined): string | undefined {
+  const trimmed = symbol?.trim();
+  return trimmed && PRINTABLE.test(trimmed) ? trimmed : undefined;
+}
+
 /** The symbol in a `symbol()` answer, string or bytes32, when it is short printable text. */
 export function decodeSymbol(data: Hex): string | undefined {
   try {
-    const symbol = decode(data).trim();
-    return PRINTABLE.test(symbol) ? symbol : undefined;
+    return cleanSymbol(decode(data));
   } catch {
     return undefined;
   }

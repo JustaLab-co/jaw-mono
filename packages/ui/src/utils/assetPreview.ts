@@ -12,7 +12,7 @@ import { type TransactionCall } from '@jaw.id/core';
 import { getJawPublicClient } from './publicClient';
 import { subscriptDecimal } from './displayFormat';
 import { classifyRevert, type RevertCause } from './transactionFailure';
-import { SYMBOL_CALLDATA, decodeSymbol } from './tokenSymbol';
+import { SYMBOL_CALLDATA, cleanSymbol, decodeSymbol } from './tokenSymbol';
 
 export interface RawAssetChange {
   token: { address: string; decimals?: number; symbol?: string };
@@ -66,7 +66,7 @@ export function mapAssetChanges(
 
     const isNative = c.token.address.toLowerCase() === ethAddress;
     const isNft = erc721.has(c.token.address.toLowerCase());
-    const symbol = isNative ? (c.token.symbol ?? 'ETH') : c.token.symbol;
+    const symbol = isNative ? (c.token.symbol ?? 'ETH') : cleanSymbol(c.token.symbol);
     const reported = c.token.decimals;
     const usable = reported !== undefined && Number.isInteger(reported) && reported >= 0 && reported <= MAX_DECIMALS;
     const decimals = isNative ? 18 : isNft ? 0 : usable ? reported : 0;
@@ -213,7 +213,7 @@ export async function resolveTokenUnits(
       (c.token.decimals === undefined || c.token.decimals === 1)
   );
   const unnamed = changes.filter(
-    (c) => c.value.diff !== 0n && c.token.address.toLowerCase() !== ethAddress && !c.token.symbol?.trim()
+    (c) => c.value.diff !== 0n && c.token.address.toLowerCase() !== ethAddress && !cleanSymbol(c.token.symbol)
   );
   if (suspects.length === 0 && unnamed.length === 0) return { changes: [...changes], erc721: new Set() };
 
