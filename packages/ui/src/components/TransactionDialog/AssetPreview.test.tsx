@@ -8,10 +8,14 @@ const prices = vi.hoisted(() => ({ fetch: vi.fn<(symbol: string) => Promise<numb
 vi.mock('../../utils/tokenPrice', () => ({ fetchTokenPrice: prices.fetch }));
 
 import { AssetPreview } from './AssetPreview';
-import type { AssetDelta } from '../../utils/assetPreview';
+import { mapAssetChanges, type AssetDelta } from '../../utils/assetPreview';
 import type { BridgeTransfer } from '../../utils/bridgeCalls/transfer';
 
 const WARNING = 'Could not simulate this transaction';
+
+// Rows as the simulation builds them, so the symbol is cleaned the way it is in the app.
+const simulatedRows = (address: string, diff: bigint, decimals: number, symbol?: string) =>
+  mapAssetChanges([{ token: { address, decimals, symbol }, value: { pre: 0n, post: diff, diff } }]);
 
 const usdcOut: AssetDelta = {
   address: '0x036cbd53842c5426634e7929541ec2318f3dcf7e',
@@ -325,7 +329,8 @@ describe('AssetPreview bridge send side when the simulation could not read the t
     ['an empty symbol', ''],
     ['a blank symbol', '   '],
   ])('names a row the simulation left with %s by the symbol the bridge read', (_, symbol) => {
-    const out = html({ assetsOut: [{ ...simulated, symbol }], bridge });
+    const assetsOut = simulatedRows(simulated.address, simulated.diff, simulated.decimals, symbol);
+    const out = html({ assetsOut, bridge });
     expect(out).toContain('MKR');
   });
 
@@ -364,9 +369,10 @@ describe('AssetPreview simulated rows with unusable decimals', () => {
     ['no symbol', undefined],
     ['an empty symbol', ''],
     ['a blank symbol', '   '],
+    ['a symbol with a zero-width space', 'USDC\u{200b}'],
   ])('labels a token with %s by its short address and asks for no price', async (_, symbol) => {
     prices.fetch.mockResolvedValue(1);
-    await mount({ assetsOut: [{ ...usdcOut, symbol }] });
+    await mount({ assetsOut: simulatedRows(usdcOut.address, usdcOut.diff, usdcOut.decimals, symbol) });
     await settle();
     expect(host.textContent).toContain('You send');
     expect(host.querySelector('.text-symbol')?.textContent).toBe('0x036c...cf7e');

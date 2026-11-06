@@ -36,11 +36,9 @@ type ChainBadge = { name: string; icon?: string };
 /** Rows shown before the "+N" overflow toggle kicks in. */
 const COLLAPSED_ROWS = 2;
 
-const hasSymbol = (delta: AssetDelta) => Boolean(delta.symbol?.trim());
-
 // A token with no readable symbol is labelled by its short address, as the bridge rows do.
 function symbolFor(delta: AssetDelta, nativeSymbol: string): string {
-  return delta.isNative ? nativeSymbol : delta.symbol?.trim() || formatAddress(delta.address);
+  return delta.isNative ? nativeSymbol : (delta.symbol ?? formatAddress(delta.address));
 }
 
 function RowNote({ children }: { children: ReactNode }) {
@@ -262,7 +260,7 @@ const sentDeltas = ({ amount, token }: TokenAmount): AssetDelta[] =>
 // The simulation reads the token on its own and can miss what the bridge's read got, as with a
 // bytes32 symbol. The bridge's read then names and scales the simulated amount.
 function withBridgeRead(delta: AssetDelta, { token }: TokenAmount): AssetDelta {
-  if (hasSymbol(delta) && !delta.baseUnits) return delta;
+  if (delta.symbol && !delta.baseUnits) return delta;
   if (!token.known && !token.unverified) return delta;
   if (delta.address.toLowerCase() !== token.address.toLowerCase()) return delta;
   const magnitude = delta.diff < 0n ? -delta.diff : delta.diff;
@@ -403,8 +401,7 @@ export const AssetPreview = ({
   const shown = bridgeOut ? bridgeOut : [...assetsOut, ...assetsIn];
   // An unverified symbol is the token's own word, and a base units row has no price to scale, so
   // neither keys a price. A token with no symbol has nothing to key on.
-  const trusted = (list: AssetDelta[]) =>
-    list.filter((d) => !d.unverified && !d.baseUnits && (d.isNative || hasSymbol(d)));
+  const trusted = (list: AssetDelta[]) => list.filter((d) => !d.unverified && !d.baseUnits && (d.isNative || d.symbol));
   const symbols = [
     ...trusted(shown).map((d) => symbolFor(d, nativeSymbol)),
     ...trusted(bridgeIn).map((d) => d.symbol ?? ''),
