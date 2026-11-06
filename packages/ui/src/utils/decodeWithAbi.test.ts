@@ -209,6 +209,20 @@ describe('decodeWithAbi', () => {
     ]);
   });
 
+  it('shows struct arguments as their component types in the signature and each param', () => {
+    const router = parseAbi([
+      'struct Fee { uint24 bps; }',
+      'struct Leg { address pool; Fee fee; }',
+      'function route(Leg[] legs, Leg last, uint256 amount)',
+    ]);
+    const leg = { pool: '0xfAbc9dDe6d43b39E087122A80f05E80615110b65', fee: { bps: 3000 } } as const;
+    const calldata = encodeFunctionData({ abi: router, functionName: 'route', args: [[leg], leg, 5n] });
+    const decoded = decodeWithAbi(router, calldata);
+    expect(decoded?.signature).toBe('route((address,(uint24))[], (address,(uint24)), uint256)');
+    expect(decoded?.params.map((p) => p.type)).toEqual(['(address,(uint24))[]', '(address,(uint24))', 'uint256']);
+    expect(toFunctionSelector(`route(${decoded?.params.map((p) => p.type).join(',')})`)).toBe(calldata.slice(0, 10));
+  });
+
   it.each([
     ['no name or inputs', { type: 'function', selector: '0x12345678', stateMutability: 'view' }],
     ['a name and no inputs', { type: 'function', name: 'mystery', selector: '0x12345678', stateMutability: 'view' }],

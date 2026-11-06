@@ -1,4 +1,5 @@
 import { decodeFunctionData, encodeFunctionData, toFunctionSelector, type Abi, type AbiFunction, type Hex } from 'viem';
+import { formatAbiParams } from 'viem/utils';
 
 export interface DecodedParam {
   name: string;
@@ -74,12 +75,14 @@ export function decodeWithAbi(abi: Abi, data: Hex): DecodedCalldata | null {
     const tail = isCanonical ? data.slice(canonical.length) : '';
     const extraBytes = isCanonical ? 0 : (data.length - canonical.length) / 2;
     const { inputs } = item;
+    // A struct shows as its component types, (address,uint256), the form the selector hashes.
+    const types = inputs.map((inp) => formatAbiParams([inp]));
     return {
       functionName: item.name,
-      signature: `${item.name}(${inputs.map((inp) => inp.type).join(', ')})`,
+      signature: `${item.name}(${types.join(', ')})`,
       params: (args ?? []).map((arg, i) => ({
         name: inputs[i].name || `param${i}`,
-        type: inputs[i].type,
+        type: types[i],
         value: formatParamValue(arg),
         ...(inputs[i].type === 'address' && typeof arg === 'string' ? { rawValue: arg } : {}),
       })),
