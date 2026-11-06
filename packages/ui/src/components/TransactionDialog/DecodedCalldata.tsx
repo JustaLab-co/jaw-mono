@@ -60,6 +60,22 @@ function flagPlacement(param: DecodedParam | undefined, flag: AllowanceFlag): 'r
   return isUnlimitedAmount(flag.amount) ? 'replace' : 'beside';
 }
 
+const TrailingBytes = ({ hex }: { hex: string }) => (
+  <div className="flex flex-col gap-1">
+    <span className="text-muted-foreground text-xs font-semibold">{(hex.length - 2) / 2} bytes not decoded</span>
+    <p className="text-foreground break-all font-mono text-xs leading-normal">{hex}</p>
+  </div>
+);
+
+const NonCanonicalNote = ({ extraBytes }: { extraBytes?: number }) => {
+  const extra = extraBytes ? `, and ${extraBytes} bytes longer than these arguments encode to` : '';
+  return (
+    <p className="text-warning text-xs leading-normal">
+      Not in canonical ABI encoding{extra}. The contract may read these values differently.
+    </p>
+  );
+};
+
 /**
  * ERC-8213 Calldata Digest, collapsed behind a disclosure like the raw calldata
  * view. Shown only for non-empty calldata; the spec omits the digest when
@@ -174,6 +190,8 @@ export const DecodedCalldataView = ({
                       <p className="text-foreground break-all font-mono text-xs leading-normal">{param.value}</p>
                     </div>
                   ))}
+                  {decoded.trailing && <TrailingBytes hex={decoded.trailing} />}
+                  {decoded.nonCanonical && <NonCanonicalNote extraBytes={decoded.extraBytes} />}
                 </div>
               </>
             ) : null}
@@ -257,6 +275,8 @@ export const DecodedCalldataView = ({
             </div>
           );
         })}
+        {decoded.trailing && <TrailingBytes hex={decoded.trailing} />}
+        {decoded.nonCanonical && <NonCanonicalNote extraBytes={decoded.extraBytes} />}
       </div>
 
       <details className="text-xs">

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { decodeFunctionData, type Abi, type Hex } from 'viem';
+import type { Abi, Hex } from 'viem';
 import { getPublicClient, jawRpcUrl } from '../utils/publicClient';
 import {
   applyFormat,
@@ -11,19 +11,9 @@ import {
   resolveCalldataDescriptor,
   type ClearSigningDisplay,
 } from '../utils/clearSigning';
+import { decodeWithAbi, type DecodedCalldata } from '../utils/decodeWithAbi';
 
-export interface DecodedParam {
-  name: string;
-  type: string;
-  value: string;
-  rawValue?: string;
-}
-
-export interface DecodedCalldata {
-  functionName: string;
-  signature: string;
-  params: DecodedParam[];
-}
+export type { DecodedCalldata, DecodedParam } from '../utils/decodeWithAbi';
 
 /**
  * Result of attempting to decode calldata.
@@ -82,30 +72,9 @@ async function fetchAbi(address: string, rpcUrl: string, chainId: number): Promi
   }
 }
 
-function formatParamValue(value: unknown): string {
-  if (typeof value === 'bigint') return value.toString();
-  if (Array.isArray(value)) return `[${value.map(formatParamValue).join(', ')}]`;
-  if (typeof value === 'object' && value !== null) return JSON.stringify(value);
-  return String(value);
-}
-
 async function rawDecode(to: string, data: string, rpcUrl: string, chainId: number): Promise<DecodedCalldata | null> {
   try {
-    const abi = await fetchAbi(to, rpcUrl, chainId);
-    const { functionName, args } = decodeFunctionData({ abi, data: data as Hex });
-    const abiItem = abi.find((item) => 'name' in item && item.name === functionName && item.type === 'function');
-    const inputs = abiItem && 'inputs' in abiItem ? (abiItem.inputs ?? []) : [];
-    const params: DecodedParam[] = (args ?? []).map((arg, i) => ({
-      name: inputs[i]?.name || `param${i}`,
-      type: inputs[i]?.type || 'unknown',
-      value: formatParamValue(arg),
-      ...(inputs[i]?.type === 'address' && typeof arg === 'string' ? { rawValue: arg } : {}),
-    }));
-    return {
-      functionName,
-      signature: `${functionName}(${inputs.map((inp) => inp.type).join(', ')})`,
-      params,
-    };
+    return decodeWithAbi(await fetchAbi(to, rpcUrl, chainId), data as Hex);
   } catch (err) {
     console.debug('[useDecodedCalldata] raw decode failed:', err);
     return null;
