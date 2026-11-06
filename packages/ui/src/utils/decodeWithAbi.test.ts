@@ -86,6 +86,22 @@ describe('decodeWithAbi', () => {
     expect(decodeWithAbi(f, `${calldata.slice(0, 10)}ff${calldata.slice(12)}` as Hex)).toBeNull();
   });
 
+  it.each([
+    [
+      'a uint128 word with a nonzero high byte',
+      'function f(uint128 a)',
+      `01${'00'.repeat(30)}05`,
+      (2n ** 248n + 5n).toString(),
+    ],
+    ['an int8 word that is not sign-extended', 'function f(int8 a)', `${'00'.repeat(31)}ff`, '255'],
+  ])('keeps the decode of %s and marks it non-canonical', (_, sig, word, value) => {
+    const decoded = decodeWithAbi(parseAbi([sig]), `${toFunctionSelector(sig)}${word}` as Hex);
+    expect(decoded?.params[0].value).toBe(value);
+    expect(decoded?.nonCanonical).toBe(true);
+    expect(decoded?.trailing).toBeUndefined();
+    expect(decoded?.extraBytes).toBeUndefined();
+  });
+
   it('reports no tail on a non-canonical decode, since the end of the arguments is unknown', () => {
     const dirty = `${data.slice(0, 10)}ff${data.slice(12)}8021802180218021` as Hex;
     const decoded = decodeWithAbi(abi4, dirty);

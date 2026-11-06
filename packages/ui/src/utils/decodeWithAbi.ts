@@ -53,14 +53,24 @@ function functionsBySelector(abi: Abi): Map<string, AbiFunction> {
   return bySelector;
 }
 
+/** The calldata the decoded args re-encode to, or null when one does not fit its type. */
+function reencode(item: AbiFunction, args: readonly unknown[] | undefined): Hex | null {
+  try {
+    return encodeFunctionData({ abi: [item], functionName: item.name, args });
+  } catch {
+    // viem reads a whole word for any integer, so dirty high bits decode past the type's range.
+    return null;
+  }
+}
+
 /**
  * Decodes calldata with the ABI entry whose selector it starts with. When the entry re-encodes to
  * the start of the calldata, the bytes after it are the suffix. When it does not, as with dirty high
- * bytes in an address word or nonzero padding after a bytesN value, the decode is kept and marked
- * non-canonical, since the contract may still run it. Dirty high bits in an integer word make viem
- * throw, so that call returns null, as does calldata with an odd number of hex digits. The signature
- * fits the bytes and hashes to the selector, which does not prove it is the contract's real one: the
- * ABI comes from an open lookup.
+ * bytes in an address or integer word or nonzero padding after a bytesN value, the decode is kept and
+ * marked non-canonical, since the contract may still run it. An integer type of 48 bits or less whose
+ * word reads past a safe JS integer makes viem throw, so that call returns null, as does calldata with
+ * an odd number of hex digits. The signature fits the bytes and hashes to the selector, which does not
+ * prove it is the contract's real one: the ABI comes from an open lookup.
  */
 export function decodeWithAbi(abi: Abi, data: Hex): DecodedCalldata | null {
   // viem pads an odd number of hex digits with a nibble, which shifts every word it decodes.
@@ -70,10 +80,10 @@ export function decodeWithAbi(abi: Abi, data: Hex): DecodedCalldata | null {
 
   try {
     const { args } = decodeFunctionData({ abi: [item], data });
-    const canonical = encodeFunctionData({ abi: [item], functionName: item.name, args });
-    const isCanonical = data.toLowerCase().startsWith(canonical.toLowerCase());
+    const canonical = reencode(item, args);
+    const isCanonical = canonical !== null && data.toLowerCase().startsWith(canonical.toLowerCase());
     const tail = isCanonical ? data.slice(canonical.length) : '';
-    const extraBytes = isCanonical ? 0 : (data.length - canonical.length) / 2;
+    const extraBytes = canonical && !isCanonical ? (data.length - canonical.length) / 2 : 0;
     const { inputs } = item;
     // A struct shows as its component types, (address,uint256), the form the selector hashes.
     const types = inputs.map((inp) => formatAbiParams([inp]));
