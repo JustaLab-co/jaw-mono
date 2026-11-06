@@ -217,4 +217,16 @@ describe('decodeWithAbi', () => {
     expect(decodeWithAbi([entry, ...abi4], data)?.signature).toBe('depositErc20(address, address, uint256, bytes32)');
     expect(decodeWithAbi([...abi4, entry], data)?.signature).toBe('depositErc20(address, address, uint256, bytes32)');
   });
+
+  it('skips an entry that cannot be hashed and still decodes with the called one after it', () => {
+    const broken = {
+      type: 'function',
+      name: 'broken',
+      inputs: [{ type: 'tuple', name: 'p', components: undefined }],
+      outputs: [],
+      stateMutability: 'view',
+    } as unknown as Abi[number];
+    expect(() => toFunctionSelector(broken as never)).toThrow();
+    expect(decodeWithAbi([broken, ...abi4], data)?.signature).toBe('depositErc20(address, address, uint256, bytes32)');
+  });
 });

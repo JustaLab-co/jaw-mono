@@ -1,4 +1,4 @@
-import { decodeFunctionData, encodeFunctionData, toFunctionSelector, type Abi, type Hex } from 'viem';
+import { decodeFunctionData, encodeFunctionData, toFunctionSelector, type Abi, type AbiFunction, type Hex } from 'viem';
 
 export interface DecodedParam {
   name: string;
@@ -30,6 +30,28 @@ function formatParamValue(value: unknown): string {
   return String(value);
 }
 
+const selectorMaps = new WeakMap<Abi, Map<string, AbiFunction>>();
+
+/** Each function's selector, built once per ABI. The first entry with a selector wins. */
+function functionsBySelector(abi: Abi): Map<string, AbiFunction> {
+  const cached = selectorMaps.get(abi);
+  if (cached) return cached;
+
+  const bySelector = new Map<string, AbiFunction>();
+  for (const entry of abi) {
+    // whatsabi leaves selectors it cannot resolve without a name or inputs, which cannot be hashed.
+    if (entry.type !== 'function' || !entry.name || !entry.inputs) continue;
+    try {
+      const selector = toFunctionSelector(entry);
+      if (!bySelector.has(selector)) bySelector.set(selector, entry);
+    } catch (err) {
+      console.debug('[decodeWithAbi] skipped an ABI entry that cannot be hashed:', err);
+    }
+  }
+  selectorMaps.set(abi, bySelector);
+  return bySelector;
+}
+
 /**
  * Decodes calldata with the ABI entry whose selector it starts with. When the entry re-encodes to
  * the start of the calldata, the bytes after it are the suffix. When it does not, as with dirty high
@@ -42,12 +64,8 @@ function formatParamValue(value: unknown): string {
 export function decodeWithAbi(abi: Abi, data: Hex): DecodedCalldata | null {
   // viem pads an odd number of hex digits with a nibble, which shifts every word it decodes.
   if (data.length % 2 !== 0) return null;
-  const selector = data.slice(0, 10).toLowerCase();
-  // whatsabi leaves selectors it cannot resolve without a name or inputs, which cannot be hashed.
-  const item = abi.find(
-    (entry) => entry.type === 'function' && entry.name && entry.inputs && toFunctionSelector(entry) === selector
-  );
-  if (item?.type !== 'function') return null;
+  const item = functionsBySelector(abi).get(data.slice(0, 10).toLowerCase());
+  if (!item) return null;
 
   try {
     const { args } = decodeFunctionData({ abi: [item], data });
