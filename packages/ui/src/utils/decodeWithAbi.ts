@@ -1,5 +1,26 @@
 import { decodeFunctionData, encodeFunctionData, toFunctionSelector, type Abi, type Hex } from 'viem';
-import type { DecodedCalldata } from '../hooks/useDecodedCalldata';
+
+export interface DecodedParam {
+  name: string;
+  type: string;
+  value: string;
+  rawValue?: string;
+}
+
+export interface DecodedCalldata {
+  functionName: string;
+  signature: string;
+  params: DecodedParam[];
+  /** Bytes after the last argument (a builder-code or referral suffix), when the call has any. */
+  trailing?: Hex;
+  /**
+   * The ABI decodes the calldata but does not re-encode to it. The shown values may differ from what
+   * the contract reads, and the suffix cannot be told apart.
+   */
+  nonCanonical?: boolean;
+  /** On a non-canonical decode, how many bytes the calldata runs past what its arguments re-encode to. */
+  extraBytes?: number;
+}
 
 function formatParamValue(value: unknown): string {
   if (typeof value === 'bigint') return value.toString();
