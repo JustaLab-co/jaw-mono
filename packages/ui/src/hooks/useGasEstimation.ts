@@ -144,8 +144,7 @@ const REVERTED_FAILURE = "The bundler's estimate of this transaction reverted.";
 function markEstimationFailed(tokens: FeeTokenOption[], error: unknown): FeeTokenOption[] {
   const balance = classifyRevert(error) === 'balance';
   const estimationReverted = !balance && isRevert(error);
-  let estimationFailure: string | undefined;
-  if (!balance) estimationFailure = estimationReverted ? REVERTED_FAILURE : describeFailure(error);
+  const estimationFailure = balance ? undefined : estimationReverted ? REVERTED_FAILURE : describeFailure(error);
   return tokens.map((token) => {
     if (token.isNative) return token;
     if (token.balance === 0n) return unpriced(token);
