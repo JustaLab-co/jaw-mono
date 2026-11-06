@@ -54,7 +54,9 @@ const CALL_REVERT_ERRORS = ['ExecutionRevertedError', 'ContractFunctionRevertedE
  * retryable.
  */
 export function isRevert(error: unknown): boolean {
-  for (let e = error; e instanceof Error; e = e.cause) {
+  const seen = new Set<Error>();
+  for (let e = error; e instanceof Error && !seen.has(e); e = e.cause) {
+    seen.add(e);
     if (CALL_REVERT_ERRORS.includes(e.name)) return true;
   }
   return false;

@@ -306,4 +306,15 @@ describe('isRevert', () => {
     expect(isRevert(new Error('The request took too long to respond.'))).toBe(false);
     expect(isRevert(undefined)).toBe(false);
   });
+
+  it('returns on a cause chain that loops back', () => {
+    const self = new Error('wrapper');
+    self.cause = self;
+    const a = new Error('a');
+    const b = new Error('b');
+    a.cause = b;
+    b.cause = a;
+    expect(isRevert(self)).toBe(false);
+    expect(isRevert(a)).toBe(false);
+  });
 });
