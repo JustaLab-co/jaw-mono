@@ -292,6 +292,14 @@ export async function resolveTokenUnits(
  * handing it to viem, so nothing here refetches it and every simulation starts from the same
  * base block.
  */
+/** The node declined to run the batch. Deterministic, so retrying cannot change it. */
+export class SimulationRefusedError extends Error {
+  constructor() {
+    super('eth_simulateV1 refused to execute the batch');
+    this.name = 'SimulationRefusedError';
+  }
+}
+
 export async function simulateAssetChanges({
   chainId,
   apiKey,
@@ -326,7 +334,7 @@ export async function simulateAssetChanges({
   // revert always burns at least the intrinsic gas. That leaves the outcome unknown, not a revert,
   // so it takes the same path as a simulation that could not run.
   if (failed && failed.gasUsed === 0n && failed.data === '0x') {
-    throw new Error('eth_simulateV1 refused to execute the batch');
+    throw new SimulationRefusedError();
   }
   if (failed) return { deltas: [], willRevert: true, revertCause: classifyRevert(failed.error) };
 

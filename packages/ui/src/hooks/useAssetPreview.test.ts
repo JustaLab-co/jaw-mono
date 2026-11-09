@@ -6,8 +6,12 @@ import type { Address } from 'viem';
 import type { TransactionCall } from '@jaw.id/core';
 
 const simulate = vi.fn();
-vi.mock('../utils/assetPreview', () => ({ simulateAssetChanges: (...args: unknown[]) => simulate(...args) }));
+vi.mock('../utils/assetPreview', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../utils/assetPreview')>()),
+  simulateAssetChanges: (...args: unknown[]) => simulate(...args),
+}));
 
+import { SimulationRefusedError } from '../utils/assetPreview';
 import { useAssetPreview, type UseAssetPreviewConfig, type UseAssetPreviewResult } from './useAssetPreview';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -17,7 +21,18 @@ const callTo = (to: string): TransactionCall => ({ to: to as Address, data: '0x'
 const CALLS = [callTo('0x2222222222222222222222222222222222222222')];
 const OTHER_CALLS = [callTo('0x3333333333333333333333333333333333333333')];
 const DELTA = { direction: 'out' as const, symbol: 'USDC' };
+const NEW_DELTA = { direction: 'in' as const, symbol: 'DAI' };
 const OK = { deltas: [DELTA], willRevert: false };
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
 
 let root: Root | null = null;
 let latest: UseAssetPreviewResult | null = null;
@@ -121,5 +136,69 @@ describe('useAssetPreview retry', () => {
 
     expect(simulate).toHaveBeenCalledTimes(1);
     expect(latest).toMatchObject({ error: false, willRevert: true });
+  });
+
+  it('does not retry when the node refuses the batch', async () => {
+    simulate.mockRejectedValue(new SimulationRefusedError());
+    await render(props());
+
+    expect(latest?.error).toBe(true);
+    await advance(60_000);
+    expect(simulate).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('useAssetPreview when the inputs change', () => {
+  it('ignores a late result from the previous calls', async () => {
+    const stale = deferred<typeof OK>();
+    simulate.mockReturnValueOnce(stale.promise).mockResolvedValue({ deltas: [NEW_DELTA], willRevert: false });
+    const rerender = await render(props());
+    await rerender(props(OTHER_CALLS));
+    expect(latest?.assetsIn).toEqual([NEW_DELTA]);
+
+    await act(async () => stale.resolve(OK));
+
+    expect(latest?.assetsOut).toEqual([]);
+    expect(latest?.assetsIn).toEqual([NEW_DELTA]);
+  });
+
+  it('ignores a late rejection from the previous calls', async () => {
+    const stale = deferred<typeof OK>();
+    simulate.mockReturnValueOnce(stale.promise).mockResolvedValue(OK);
+    const rerender = await render(props());
+    await rerender(props(OTHER_CALLS));
+
+    await act(async () => stale.reject(new Error('timeout')));
+    await advance(60_000);
+
+    expect(console.warn).not.toHaveBeenCalled();
+    expect(simulate).toHaveBeenCalledTimes(2);
+    expect(latest).toMatchObject({ error: false, assetsOut: [DELTA] });
+  });
+
+  it('clears the error', async () => {
+    simulate.mockRejectedValue(new Error('timeout'));
+    const rerender = await render(props());
+    await advance(13_000);
+    expect(latest?.error).toBe(true);
+
+    const pending = deferred<typeof OK>();
+    simulate.mockReturnValue(pending.promise);
+    await rerender(props(OTHER_CALLS));
+
+    expect(latest?.error).toBe(false);
+  });
+
+  it('drops the previous deltas while the new calls are simulated and retried', async () => {
+    simulate.mockResolvedValueOnce(OK).mockRejectedValueOnce(new Error('timeout'));
+    const rerender = await render(props());
+    expect(latest?.assetsOut).toEqual([DELTA]);
+
+    await rerender(props(OTHER_CALLS));
+    expect(latest?.assetsOut).toEqual([]);
+
+    simulate.mockResolvedValue({ deltas: [NEW_DELTA], willRevert: false });
+    await advance(3_000);
+    expect(latest).toMatchObject({ assetsOut: [], assetsIn: [NEW_DELTA] });
   });
 });

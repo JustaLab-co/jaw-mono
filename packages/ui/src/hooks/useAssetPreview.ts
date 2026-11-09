@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { Address } from 'viem';
 import type { TransactionCall } from '@jaw.id/core';
-import { simulateAssetChanges, type AssetDelta } from '../utils/assetPreview';
+import { simulateAssetChanges, SimulationRefusedError, type AssetDelta } from '../utils/assetPreview';
 import type { RevertCause } from '../utils/transactionFailure';
 
 // Waits before the 2nd and 3rd simulation. A slow uplink can time out the first attempt and clear by the next.
@@ -27,7 +27,7 @@ export interface UseAssetPreviewResult {
 
 /**
  * Simulate a batch and split the net balance changes into outgoing/incoming.
- * A rejected simulation is retried after `RETRY_DELAYS_MS`; only the last failure is swallowed into
+ * A rejected simulation is retried after `RETRY_DELAYS_MS`, unless the node refused the batch; only the last failure is swallowed into
  * `error`, so a failed/unsupported simulation never blocks signing.
  */
 export function useAssetPreview({
@@ -58,6 +58,8 @@ export function useAssetPreview({
 
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    setAssetsOut([]);
+    setAssetsIn([]);
     setError(false);
     setWillRevert(false);
     setRevertCause(undefined);
@@ -74,7 +76,7 @@ export function useAssetPreview({
         .catch((err) => {
           if (cancelled) return;
           console.warn('Asset preview simulation failed', err);
-          const delay = RETRY_DELAYS_MS[attempt];
+          const delay = err instanceof SimulationRefusedError ? undefined : RETRY_DELAYS_MS[attempt];
           if (delay !== undefined) {
             retryTimer = setTimeout(() => run(attempt + 1), delay);
             return;
