@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { Hex } from 'viem';
+import { entryPoint08Abi, entryPoint08Address, type SmartAccount } from 'viem/account-abstraction';
 import { setDappOrigin } from '../dappOrigin.js';
 import { JAW_PAYMASTER_URL } from '../constants.js';
 import {
@@ -8,11 +10,21 @@ import {
     calculateTokenEstimatesFromGas,
     computeEffectiveGasPrice,
     computeMeasuredDisplayGas,
+    Erc20EstimationError,
+    estimateErc20PaymasterCosts,
     fetchTokenQuotes,
     type TokenInfo,
     type TokenQuote,
     type UserOpGasFields,
 } from './erc20Paymaster.js';
+
+// The permission relay is reached through axios, which in node does not go
+// through fetch.
+const relayRequest = vi.fn();
+vi.mock('../api/axiosController.js', async () => {
+    const actual = await vi.importActual<typeof import('../api/axiosController.js')>('../api/axiosController.js');
+    return { ...actual, backendInstance: () => ({ request: relayRequest }) };
+});
 
 const TOKEN = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48' as const;
 const PAYMASTER = '0x888888888888Ec68A58AB8094Cc1AD20Ba3D2402' as const;
@@ -276,5 +288,187 @@ describe('fetchTokenQuotes and the calling dApp', () => {
         await expect(fetchTokenQuotes(`${JAW_PAYMASTER_URL}?chainId=8453`, 8453, ['0xabc'])).rejects.toThrow(
             'pimlico_getTokenQuotes failed with 500: {"statusCode":500,"message":"Internal server error"}'
         );
+    });
+});
+
+// Every request, from the quote to the bundler, goes through the stubbed fetch, so
+// viem's own error mapping runs on what a bundler answers.
+describe('estimateErc20PaymasterCosts failures', () => {
+    const PAYMASTER_URL = 'https://paymaster.test';
+    const chain = { id: 84532, rpcUrl: 'https://rpc.test' };
+    const tokens: TokenInfo[] = [{ address: TOKEN, symbol: 'USDC', decimals: 6, balance: 0n }];
+    const calls = [{ to: TOKEN }];
+
+    const account = {
+        address: '0x1111111111111111111111111111111111111111',
+        entryPoint: { address: entryPoint08Address, abi: entryPoint08Abi, version: '0.8' },
+        encodeCalls: async () => '0x',
+        getFactoryArgs: async () => ({ factory: undefined, factoryData: undefined }),
+        getNonce: async () => 0n,
+        getStubSignature: async () => '0x',
+    } as unknown as SmartAccount;
+
+    const QUOTES = {
+        quotes: [{ token: TOKEN, postOpGas: '0x4a38', exchangeRate: '0xde0b6b3a7640000', paymaster: PAYMASTER }],
+    };
+
+    const answers: Record<string, unknown> = {
+        eth_chainId: '0x14a34',
+        eth_maxPriorityFeePerGas: '0x1',
+        eth_getBlockByNumber: {
+            number: '0x1',
+            hash: `0x${'11'.repeat(32)}`,
+            timestamp: '0x1',
+            baseFeePerGas: '0x1',
+            transactions: [],
+        },
+        pm_getPaymasterStubData: {
+            paymaster: PAYMASTER,
+            paymasterData: '0x',
+            paymasterVerificationGasLimit: '0x10000',
+            paymasterPostOpGasLimit: '0x10000',
+            isFinal: true,
+        },
+    };
+
+    // The bundler answers eth_estimateUserOperationGas with `bundler`; every other
+    // method gets the canned answer above.
+    function stubNetwork(bundler: { code: number; message: string } | 'down', quotes: unknown = QUOTES) {
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(async (_url: string, init: { body: string }) => {
+                const { id, method } = JSON.parse(init.body);
+                if (method === 'pimlico_getTokenQuotes') {
+                    return new Response(JSON.stringify({ jsonrpc: '2.0', id, result: quotes }));
+                }
+                if (method === 'eth_estimateUserOperationGas') {
+                    if (bundler === 'down') throw new TypeError('fetch failed');
+                    return new Response(JSON.stringify({ jsonrpc: '2.0', id, error: bundler }));
+                }
+                return new Response(JSON.stringify({ jsonrpc: '2.0', id, result: answers[method] }));
+            })
+        );
+    }
+
+    function estimate(options?: { permissionId?: Hex }) {
+        return estimateErc20PaymasterCosts(account, calls, chain, PAYMASTER_URL, tokens, options);
+    }
+
+    async function failure(promise: Promise<unknown>): Promise<Erc20EstimationError> {
+        const error = await promise.then(
+            () => undefined,
+            (e: unknown) => e
+        );
+        expect(error).toBeInstanceOf(Erc20EstimationError);
+        return error as Erc20EstimationError;
+    }
+
+    afterEach(() => {
+        vi.unstubAllGlobals();
+        relayRequest.mockReset();
+    });
+
+    it('marks a quote the proxy refuses as the quote phase, keeping the original error', async () => {
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(async () => new Response('Internal server error', { status: 500 }))
+        );
+
+        const error = await failure(estimate());
+
+        expect(error.name).toBe('Erc20EstimationError');
+        expect(error.phase).toBe('quote');
+        expect(error.reason).toBe('unknown');
+        expect(error.message).toBe('pimlico_getTokenQuotes failed with 500: Internal server error');
+        expect(error.cause).toBeInstanceOf(Error);
+        expect((error.cause as Error).message).toBe(error.message);
+    });
+
+    it('marks a JSON-RPC error on the quote as the quote phase', async () => {
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(
+                async () =>
+                    new Response(
+                        JSON.stringify({ jsonrpc: '2.0', id: 1, error: { code: -32602, message: 'bad token' } })
+                    )
+            )
+        );
+
+        const error = await failure(estimate());
+
+        expect(error.phase).toBe('quote');
+        expect(error.message).toBe('pimlico_getTokenQuotes error: bad token');
+    });
+
+    it('marks an empty quote list as the quote phase', async () => {
+        stubNetwork({ code: -32521, message: 'unused' }, { quotes: [] });
+
+        const error = await failure(estimate());
+
+        expect(error.phase).toBe('quote');
+        expect(error.reason).toBe('unknown');
+        expect(error.message).toBe('No token quotes returned from paymaster');
+    });
+
+    it('reads a call revert from the bundler code', async () => {
+        stubNetwork({ code: -32521, message: 'execution reverted: 0x' });
+
+        const error = await failure(estimate());
+
+        expect(error.phase).toBe('userOp');
+        expect(error.reason).toBe('call-reverted');
+        expect(error.cause).toBeInstanceOf(Error);
+        expect(error.message).toBe((error.cause as Error).message);
+    });
+
+    it('keeps a call revert whose reason says AA33 a call revert', async () => {
+        stubNetwork({ code: -32521, message: 'execution reverted: AA33 reverted in the called contract' });
+
+        const error = await failure(estimate());
+
+        expect(error.phase).toBe('userOp');
+        expect(error.reason).toBe('call-reverted');
+    });
+
+    it('reads a paymaster validation failure from the bundler code', async () => {
+        stubNetwork({ code: -32501, message: 'AA33 reverted' });
+
+        expect((await failure(estimate())).reason).toBe('paymaster-validation');
+    });
+
+    it('reads an account validation failure from the bundler code', async () => {
+        stubNetwork({ code: -32500, message: 'AA23 reverted' });
+
+        expect((await failure(estimate())).reason).toBe('account-validation');
+    });
+
+    it('gives no reason for a bundler code outside the three it maps', async () => {
+        stubNetwork({ code: -32602, message: 'invalid params' });
+
+        const error = await failure(estimate());
+
+        expect(error.phase).toBe('userOp');
+        expect(error.reason).toBe('unknown');
+    });
+
+    it('gives no reason when the bundler cannot be reached', async () => {
+        stubNetwork('down');
+
+        const error = await failure(estimate());
+
+        expect(error.phase).toBe('userOp');
+        expect(error.reason).toBe('unknown');
+    }, 15_000);
+
+    it('marks a failed permission lookup as the permission phase', async () => {
+        stubNetwork({ code: -32521, message: 'unused' });
+        relayRequest.mockRejectedValue(new Error('permission not found'));
+
+        const error = await failure(estimate({ permissionId: `0x${'ab'.repeat(32)}` }));
+
+        expect(error.phase).toBe('permission');
+        expect(error.reason).toBe('unknown');
+        expect(error.cause).toBeDefined();
     });
 });
