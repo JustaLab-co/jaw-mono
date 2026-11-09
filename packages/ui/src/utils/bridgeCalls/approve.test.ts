@@ -50,6 +50,11 @@ describe('given the approve the MCP builds for a Relay USDC deposit on Base', ()
     });
   });
 
+  it('when the spender is the Relay approval proxy on Base, then it reads as Relay', () => {
+    const proxy = '0x5567954cD026CEbFE486062cb75848e0f1c12E58';
+    expect(readBridgeApprove(contracts, approve(proxy, '989680'))).toMatchObject({ provider: 'relay', spender: proxy });
+  });
+
   it('when the token address comes lowercase, then it still resolves to the pinned USDC', () => {
     expect(readBridgeApprove(contracts, { ...RELAY_USDC_APPROVE, to: BASE_USDC.toLowerCase() })).toMatchObject({
       token: usdc,
@@ -70,6 +75,11 @@ describe('given an approve whose spender is not a pinned bridge contract of its 
 
   it('when the shared Depository address is the spender on Linea, then it is not recognized', () => {
     expect(readBridgeApprove(contracts, { ...RELAY_USDC_APPROVE, chainId: 59144 })).toBeUndefined();
+  });
+
+  it('when the Base approval proxy is the spender on Linea, then it is not recognized', () => {
+    const proxy = '0x5567954cD026CEbFE486062cb75848e0f1c12E58';
+    expect(readBridgeApprove(contracts, { ...approve(proxy, '989680'), chainId: 59144 })).toBeUndefined();
   });
 
   it('when the call is not an allowance change, then it is not recognized', () => {

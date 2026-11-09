@@ -359,7 +359,7 @@ export const TransactionDialog = ({
 
             {bridge && <BridgeNotices messages={bridge.notices} />}
 
-            {transfer && (
+            {transfer && transfer.details.length > 0 && (
               <Accordion type="single" collapsible>
                 <BridgeDetails details={transfer.details} />
               </Accordion>

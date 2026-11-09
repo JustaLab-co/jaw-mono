@@ -3,7 +3,7 @@ import { groupNumber } from '../displayFormat';
 import { formatAddress } from '../formatAddress';
 import type { AcrossDeposit } from './across';
 import type { BridgeChain } from './contracts';
-import type { RelayDeposit } from './relay';
+import type { RelayDeposit, RelaySwap } from './relay';
 import type { OrderUnshown, RelayOrder } from './relayOrder';
 import type { BridgeContracts } from './table';
 import type { BridgeProvider, Received, Token, TokenAmount } from './view';
@@ -19,6 +19,8 @@ export type BridgeTransfer = {
   origin: ChainLabel;
   receive?: Received;
   destination?: ChainLabel;
+  /** Pays out on the chain it starts on, so the simulation sees what arrives. */
+  sameChain?: true;
   /** Set when what arrives goes to an address other than this account. */
   otherRecipient?: Address;
   details: Detail[];
@@ -38,15 +40,16 @@ const unknownChain = (id: number) =>
 const RELAY_HIDDEN =
   'Relay keeps the destination chain and the recipient in an order outside this transaction. This screen cannot show them. Confirm only if you started this transfer yourself.';
 
-export const transferOf = (
+export function transferOf(
   contracts: BridgeContracts,
-  deposit: AcrossDeposit | RelayDeposit,
+  deposit: AcrossDeposit | RelayDeposit | RelaySwap,
   account: Address,
   order?: RelayOrder | OrderUnshown
-): TransferRead =>
-  deposit.provider === 'across'
-    ? acrossTransfer(contracts, deposit, account)
-    : relayTransfer(contracts, deposit, account, order);
+): TransferRead {
+  if (deposit.kind === 'swap') return relaySwapTransfer(contracts, deposit);
+  if (deposit.provider === 'across') return acrossTransfer(contracts, deposit, account);
+  return relayTransfer(contracts, deposit, account, order);
+}
 
 function acrossTransfer(contracts: BridgeContracts, deposit: AcrossDeposit, account: Address): TransferRead {
   const { fee } = deposit;
@@ -140,6 +143,21 @@ function relayTransfer(
       destination,
       otherRecipient: isAddressEqual(order.recipient, account) ? undefined : getAddress(order.recipient),
       details: [accountDetail('Recipient', order.recipient, account), ...refundDetails, credited, orderDetail],
+    },
+    notices,
+  };
+}
+
+function relaySwapTransfer(contracts: BridgeContracts, swap: RelaySwap): TransferRead {
+  const notices = swap.send.token.known ? [] : [tokenNotice(swap.send.token)];
+  return {
+    transfer: {
+      provider: 'relay',
+      title: 'Swap through Relay',
+      send: swap.send,
+      origin: labelOf(contracts, swap.send.chainId),
+      sameChain: true,
+      details: [],
     },
     notices,
   };
