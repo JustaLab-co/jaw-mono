@@ -115,6 +115,8 @@ export interface AssetSimulationResult {
   willRevert: boolean;
   /** Set only when `willRevert` — why it reverted, as far as the revert reason reveals. */
   revertCause?: RevertCause;
+  /** The calls ran clean but their token amounts couldn't be read, so `deltas` is empty. */
+  unreadable?: boolean;
 }
 
 /** One entry of a `simulateBlocks` block, narrowed to what a probe reads. */
@@ -330,9 +332,11 @@ export async function simulateAssetChanges({
   }
   if (failed) return { deltas: [], willRevert: true, revertCause: classifyRevert(failed.error) };
 
-  const { changes, erc721 } = await resolveTokenUnits(client, assetChanges, blockNumber, {
+  // The clean run is a verdict on the calls even when the amounts it moved can't be read.
+  const units = await resolveTokenUnits(client, assetChanges, blockNumber, {
     account,
     calls: normalizedCalls,
-  });
-  return { deltas: mapAssetChanges(changes, erc721), willRevert: false };
+  }).catch(() => undefined);
+  if (!units) return { deltas: [], willRevert: false, unreadable: true };
+  return { deltas: mapAssetChanges(units.changes, units.erc721), willRevert: false };
 }

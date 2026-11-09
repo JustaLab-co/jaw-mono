@@ -2,8 +2,8 @@
 // Why a transaction can't go through, and which of the two causes to report.
 // ----------------------------------------------------------------------------
 // Two detectors feed one conclusion: the asset simulation's revert reason, and the gas
-// estimator's error. Both are read as strings because that is all viem and the bundler
-// expose without an extra RPC round trip.
+// estimator's error. classifyRevert reads the message string, and isRevert reads viem's typed
+// error names along the cause chain.
 // ============================================================================
 
 /**
@@ -45,12 +45,30 @@ export function classifyRevert(error: unknown): RevertCause {
   return BALANCE_REVERT_PATTERNS.some((p) => haystack.includes(p)) ? 'balance' : 'other';
 }
 
+/** viem's names for a call revert, from an RPC node or a bundler's estimation. */
+const CALL_REVERT_ERRORS = ['ExecutionRevertedError', 'ContractFunctionRevertedError'];
+
+/** JSON-RPC codes for a call revert, from an RPC node (3) or a bundler's estimation (-32521). */
+const CALL_REVERT_CODES = [3, -32521];
+
 /**
- * True when the error says the calls reverted. viem and the bundler both name the revert ahead of
- * the contract's reason, so a contract can't word its reason to avoid this.
+ * True when the error says the calls reverted. Read from viem's typed errors along the cause
+ * chain, or from the code of a raw JSON-RPC error, so a revert in the fee path (paymaster or
+ * account validation, the token quote) stays retryable.
  */
 export function isRevert(error: unknown): boolean {
-  return messageOf(error).toLowerCase().includes('revert');
+  // Only the error itself: viem keeps the raw RPC error as the cause of its RpcRequestError,
+  // under a fee-path error too.
+  if (typeof error === 'object' && error !== null && !(error instanceof Error)) {
+    const { code } = error as { code?: unknown };
+    return typeof code === 'number' && CALL_REVERT_CODES.includes(code);
+  }
+  const seen = new Set<Error>();
+  for (let e = error; e instanceof Error && !seen.has(e); e = e.cause) {
+    seen.add(e);
+    if (CALL_REVERT_ERRORS.includes(e.name)) return true;
+  }
+  return false;
 }
 
 /**
@@ -116,15 +134,22 @@ interface FeeTokenFacts {
  */
 export function resolveFeeBlock({
   feeTokens,
+  callsSimulated = false,
   ...input
 }: Omit<BlockReasonInput, 'hasSelectablePaymentOption' | 'feeEstimationFailure'> & {
   feeTokens?: FeeTokenFacts[];
+  /**
+   * The asset simulation answered on the same path the fee estimation runs, so its `revertCause`
+   * is the verdict on the calls.
+   */
+  callsSimulated?: boolean;
 }) {
   const hasSelectablePaymentOption = !feeTokens?.length || feeTokens.some((t) => t.isSelectable);
   const failed = feeTokens?.find((t) => t.estimationFailure);
   const feeEstimationFailure = failed?.estimationFailure;
-  // A reverting fee estimation proves the calls revert even where no asset simulation ran.
-  const revertCause = input.revertCause ?? (failed?.estimationReverted ? 'other' : undefined);
+  // Where no asset simulation answered, a reverting fee estimation is the only sign the calls revert.
+  const estimationRevert = !callsSimulated && failed?.estimationReverted ? 'other' : undefined;
+  const revertCause = input.revertCause ?? estimationRevert;
   const blockReason = resolveBlockReason({ ...input, revertCause, hasSelectablePaymentOption, feeEstimationFailure });
   return { blockReason, hasSelectablePaymentOption, feeEstimationFailure };
 }

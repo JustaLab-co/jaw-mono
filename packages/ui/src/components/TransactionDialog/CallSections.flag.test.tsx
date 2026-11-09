@@ -140,3 +140,48 @@ describe('allowance flag on a collapsed call', () => {
     expect(header()).not.toContain('Unlimited');
   });
 });
+
+const dirtySpender = (approve: string) => `${approve.slice(0, 10)}ff${approve.slice(12)}`;
+
+describe.each([
+  ['a calldata suffix', (approve: string) => `${approve}8021802180218021`, false],
+  ['an unresolved selector ahead of it in the ABI', (approve: string) => approve, true],
+  ['dirty high bytes in the spender word', dirtySpender, false],
+])('unlimited approval with %s', (_, build, unresolvedFirst) => {
+  it('still shows the decoded call and the Unlimited flag on the signing screen', async () => {
+    const { encodeFunctionData, maxUint256, parseAbi } = await import('viem');
+    const { decodeWithAbi } = await import('../../utils/decodeWithAbi');
+    const { allowanceFlag } = await import('../../utils/allowances');
+    const abi = parseAbi(['function approve(address spender, uint256 amount)']);
+    const approve = encodeFunctionData({
+      abi,
+      functionName: 'approve',
+      args: ['0x1111111111111111111111111111111111111111', maxUint256],
+    });
+    const data = build(approve) as `0x${string}`;
+    const unresolved = { type: 'function', selector: '0x12345678', stateMutability: 'view' };
+    const decoded = decodeWithAbi((unresolvedFirst ? [unresolved, ...abi] : abi) as typeof abi, data);
+    lookup = { clearSigned: null, isLoading: false, decoded };
+    const flag = allowanceFlag({ to: TOKEN, data });
+
+    act(() => {
+      root.render(
+        createElement(
+          Accordion,
+          { type: 'single', collapsible: true },
+          createElement(SingleCallData, {
+            to: TOKEN,
+            data,
+            decode: lookup,
+            chainId: 8453,
+            mainnetRpcUrl: 'https://rpc.test/mainnet',
+            allowanceFlag: flag,
+          })
+        )
+      );
+    });
+
+    expect(header()).toContain('approve');
+    expect(header()).toContain('Unlimited');
+  });
+});

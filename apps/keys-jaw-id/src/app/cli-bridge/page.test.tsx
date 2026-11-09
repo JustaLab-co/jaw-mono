@@ -88,6 +88,44 @@ describe('cli-bridge page app name', () => {
     expect(created.appNames).toEqual(['Claude', 'Claude']);
   });
 
+  it('hands the SDK the logo the client sent with its name', async () => {
+    const ws = await start();
+    await init(ws, { appName: 'Claude', appLogoUrl: 'https://mcp.jaw.id/logos/claude.svg' });
+
+    expect(created.configs.map((c) => c.appLogoUrl)).toEqual(['https://mcp.jaw.id/logos/claude.svg']);
+  });
+
+  it('a second init cannot swap the logo', async () => {
+    const ws = await start();
+    await init(ws, { appName: 'Claude', appLogoUrl: 'https://mcp.jaw.id/logos/claude.svg' });
+    await init(ws, { appName: 'Mallory', appLogoUrl: 'https://evil.example/claude.svg', chainId: 8453 });
+
+    expect(created.configs.map((c) => c.appLogoUrl)).toEqual([
+      'https://mcp.jaw.id/logos/claude.svg',
+      'https://mcp.jaw.id/logos/claude.svg',
+    ]);
+  });
+
+  it('a second init cannot add a logo the first one did not send', async () => {
+    const ws = await start();
+    await init(ws, { appName: 'Cursor' });
+    await init(ws, { appName: 'Cursor', appLogoUrl: 'https://evil.example/claude.svg', chainId: 8453 });
+
+    expect(created.configs.map((c) => c.appLogoUrl)).toEqual([undefined, undefined]);
+  });
+
+  it('a new session on the same page drops the logo of the one before', async () => {
+    const first = await start();
+    await init(first, { appName: 'Claude', appLogoUrl: 'https://mcp.jaw.id/logos/claude.svg' });
+
+    created.session = 's2';
+    await act(async () => root.render(<CLIBridgePage />));
+    const second = await connect(2, cliKeys);
+    await init(second, { appName: 'Claude' });
+
+    expect(created.configs.map((c) => c.appLogoUrl)).toEqual(['https://mcp.jaw.id/logos/claude.svg', undefined]);
+  });
+
   it('the missing-key error names the client by its cleaned name', async () => {
     vi.stubGlobal('fetch', async () => ({ ok: false }));
     const ws = await start();

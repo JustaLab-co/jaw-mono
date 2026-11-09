@@ -17,6 +17,7 @@ vi.mock('../../hooks/useReverseIdentity', () => ({
 
 import { SiweDialog } from './index';
 import type { SiweDialogProps } from './types';
+import { MAX_REQUEST_CODE_LENGTH } from './requestCode';
 
 const VALID_SIWE =
   'app.example wants you to sign in with your Ethereum account:\n' +
@@ -93,5 +94,78 @@ describe('SiweDialog — parse failure surfaced, not silent (blocker 3)', () => 
     const html = await render(props({ message: VALID_SIWE }));
     expect(html).toContain('Sign In'); // the review screen is up (guards against a trivial empty render)
     expect(html).not.toContain("couldn't read the full sign-in request");
+  });
+});
+
+describe('SiweDialog — request code', () => {
+  const HINT = 'Check it matches the code on the page that sent you here.';
+  const withRequestId = (id: string) => VALID_SIWE + `\nRequest ID: ${id}`;
+  const labelled = (label: string) => [...document.querySelectorAll('span')].find((s) => s.textContent === label);
+  /** The element showing the code, found by its label rather than anywhere in the raw message. */
+  const codeShown = () => labelled('Request code')?.nextElementSibling;
+  /** The plain field row a request id falls back to. */
+  const idRow = () => labelled('Request ID')?.parentElement?.textContent;
+
+  it('shows the request id as a large code when the message carries one', async () => {
+    await render(props({ message: withRequestId('K7MXQ4') }));
+    expect(codeShown()?.textContent).toBe('K7MXQ4');
+    expect(codeShown()?.className).toContain('text-title');
+    expect(codeShown()?.className).toContain('tracking-widest');
+    expect(idRow()).toBeUndefined();
+  });
+
+  it('asks for a match only when the caller opts in', async () => {
+    const html = await render(props({ message: withRequestId('K7MXQ4'), requestCodeHint: true }));
+    expect(html).toContain(HINT);
+  });
+
+  it('does not ask for a match by default, as in app-specific mode where there is no other page', async () => {
+    const html = await render(props({ message: withRequestId('K7MXQ4') }));
+    expect(codeShown()?.textContent).toBe('K7MXQ4');
+    expect(html).not.toContain(HINT);
+  });
+
+  it('does not ask for a match on a cross-domain request, where the sending page wrote the code', async () => {
+    const html = await render(
+      props({ message: withRequestId('K7MXQ4'), requestCodeHint: true, warningMessage: 'Different site.' })
+    );
+    expect(codeShown()?.textContent).toBe('K7MXQ4');
+    expect(html).not.toContain(HINT);
+  });
+
+  it('shows no request code for a sign-in without one', async () => {
+    const html = await render(props({ message: VALID_SIWE, requestCodeHint: true }));
+    expect(html).toContain('Sign In');
+    expect(codeShown()).toBeUndefined();
+    expect(idRow()).toBeUndefined();
+    expect(html).not.toContain('Check it matches');
+  });
+
+  it(`shows an id of exactly ${MAX_REQUEST_CODE_LENGTH} characters as the code`, async () => {
+    const id = 'A'.repeat(MAX_REQUEST_CODE_LENGTH);
+    await render(props({ message: withRequestId(id) }));
+    expect(codeShown()?.textContent).toBe(id);
+    expect(codeShown()?.className).toContain('text-title');
+  });
+
+  it.each([
+    ['one character too long', 'A'.repeat(MAX_REQUEST_CODE_LENGTH + 1)],
+    ['a UUID', '0f8fad5b-d9cb-469f-a165-70867728950e'],
+    ['text with spaces', 'JAW VERIFIED ✓'],
+    ['a space alone', 'K7MX Q4'],
+    ['a symbol', 'K7MX#Q4'],
+  ])('shows %s as a plain Request ID row, not as the code', async (_case, id) => {
+    const html = await render(props({ message: withRequestId(id), requestCodeHint: true }));
+    expect(html).toContain('Sign In');
+    expect(codeShown()).toBeUndefined();
+    expect(idRow()).toBe(`Request ID${id}`);
+    expect(html).not.toContain(HINT);
+  });
+
+  it('treats a whitespace-only id as absent', async () => {
+    const html = await render(props({ message: withRequestId('   '), requestCodeHint: true }));
+    expect(html).toContain('Sign In');
+    expect(codeShown()).toBeUndefined();
+    expect(idRow()).toBeUndefined();
   });
 });
