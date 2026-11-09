@@ -163,7 +163,7 @@ export interface ResolvedTokenUnits {
 }
 
 /**
- * Repair the token metadata viem could not pin down, for the two shapes where it renders wrong.
+ * Repair the token metadata viem could not pin down, for the three shapes where it renders wrong.
  *
  * viem infers `decimals` as `Number(decimals() ?? 1)` when either `decimals()` or `tokenURI(0)`
  * answers, and `undefined` when both revert. That misses:
