@@ -11,7 +11,6 @@ import { NetworkFeeRow, type NetworkFeeRowProps } from './index';
 const row = (over: Partial<NetworkFeeRowProps> = {}) => (
   <NetworkFeeRow
     blockReason="estimation-failed"
-    estimationFailureDetail="execution reverted"
     nativeSymbol="ETH"
     nativeTokenPrice={0}
     hasSelectablePaymentOption={false}
@@ -62,17 +61,27 @@ describe('NetworkFeeRow estimation-failed', () => {
   ])('holds Retry while %s', (_label, over) => {
     const onRetryEstimation = vi.fn();
     const el = mount({ onRetryEstimation, ...over });
-    const retry = [...el.querySelectorAll('button')].find((b) => b.textContent === 'Retrying…')!;
+    const retry = [...el.querySelectorAll('button')].find((b) => b.textContent === 'Retry')!;
     expect(retry.disabled).toBe(true);
     act(() => retry.click());
     expect(onRetryEstimation).not.toHaveBeenCalled();
     expect(el.textContent).toContain('Fee estimation failed');
   });
 
+  /** A retry whose estimation run ends when the test says so. */
+  function pendingRetry() {
+    let finish!: () => void;
+    const onRetryEstimation = vi.fn(() => new Promise<void>((resolve) => (finish = resolve)));
+    return { onRetryEstimation, finish: () => act(async () => finish()) };
+  }
+
+  const click = (el: HTMLElement, label: string) =>
+    act(() => [...el.querySelectorAll('button')].find((b) => b.textContent === label)!.click());
+
   it('holds Retry while a retry the user started re-estimates the fee in ETH', () => {
-    const onRetryEstimation = vi.fn();
+    const { onRetryEstimation } = pendingRetry();
     const el = mount({ onRetryEstimation });
-    act(() => [...el.querySelectorAll('button')].find((b) => b.textContent === 'Retry')!.click());
+    click(el, 'Retry');
     act(() => root!.render(row({ onRetryEstimation, gasFeeLoading: true })));
     const retry = [...el.querySelectorAll('button')].find((b) => b.textContent === 'Retrying…')!;
     expect(retry.disabled).toBe(true);
@@ -88,14 +97,25 @@ describe('NetworkFeeRow estimation-failed', () => {
     expect(el.textContent).not.toContain('Fee estimation failed');
   });
 
-  it('shows Estimating... for a later ETH re-estimate once a user retry settles', () => {
-    const onRetryEstimation = vi.fn();
+  it('shows Estimating... for a later ETH re-estimate once a user retry settles', async () => {
+    const { onRetryEstimation, finish } = pendingRetry();
     const el = mount({ onRetryEstimation });
-    act(() => [...el.querySelectorAll('button')].find((b) => b.textContent === 'Retry')!.click());
+    click(el, 'Retry');
     act(() => root!.render(row({ onRetryEstimation, gasFeeLoading: true })));
+    await finish();
     act(() => root!.render(row({ onRetryEstimation })));
     act(() => root!.render(row({ onRetryEstimation, gasFeeLoading: true })));
     expect(el.textContent).toContain('Estimating...');
+    expect(el.textContent).not.toContain('Retrying…');
+  });
+
+  it('does not keep Retrying… after a retry that ran nothing', async () => {
+    const { onRetryEstimation, finish } = pendingRetry();
+    const el = mount({ onRetryEstimation });
+    click(el, 'Retry');
+    expect(el.textContent).toContain('Retrying…');
+    await finish();
+    act(() => root!.render(row({ onRetryEstimation, estimatingTokenCosts: true })));
     expect(el.textContent).not.toContain('Retrying…');
   });
 });

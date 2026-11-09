@@ -31,7 +31,7 @@ export interface TransactionDialogProps {
   gasFeeLoading: boolean;
   gasEstimationError: string;
   /** Re-runs fee estimation; offered when estimation failed rather than the balance falling short. */
-  onRetryEstimation?: () => void;
+  onRetryEstimation?: () => void | Promise<void>;
   /** A fee-token estimation is running; Retry waits for it. */
   estimatingTokenCosts?: boolean;
   sponsored: boolean;

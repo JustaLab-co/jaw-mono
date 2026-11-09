@@ -316,6 +316,31 @@ describe('useGasEstimation fee-token selection', () => {
     expect(hook.isPayingWithErc20).toBe(true);
   });
 
+  it('keeps the last error while a retry runs, and resolves refetch when the run ends', async () => {
+    erc20Mock.mockRejectedValue(new Error('pimlico_getTokenQuotes error'));
+    let ethCalls = 0;
+    let finishEth!: () => void;
+    const account = makeAccount(() => {
+      ethCalls++;
+      if (ethCalls === 1) return Promise.reject(new Error("AA21 didn't pay prefund"));
+      return new Promise<string>((_, reject) => (finishEth = () => reject(new Error("AA21 didn't pay prefund"))));
+    });
+    await mount(account, [nativeEth(5n), token({})]);
+    expect(hook.gasEstimationError).toBe('Insufficient funds');
+
+    let settled = false;
+    await act(async () => {
+      void hook.refetch().then(() => (settled = true));
+    });
+    expect(hook.gasEstimationError).toBe('Insufficient funds');
+    expect(settled).toBe(false);
+
+    await act(async () => finishEth());
+    await flush();
+    expect(settled).toBe(true);
+    expect(hook.gasEstimationError).toBe('Insufficient funds');
+  });
+
   it("re-estimation failure keeps the user's own ERC-20 choice", async () => {
     erc20Mock.mockResolvedValue([usdcEstimate, usdtEstimate]);
     await mount(
@@ -962,7 +987,9 @@ describe('useGasEstimation fee-token outcome per ERC-20 result', () => {
         root!.render(createElement(Probe, { account: ethOk(), initialTokens: [nativeEth(0n), token({})] }));
       });
       await flush();
-      await act(async () => hook.refetch());
+      await act(async () => {
+        void hook.refetch();
+      });
       await flush();
 
       // The retry settles first, then the round it replaced.

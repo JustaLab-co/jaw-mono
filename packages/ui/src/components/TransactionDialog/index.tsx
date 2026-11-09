@@ -112,7 +112,7 @@ export const TransactionDialog = ({
 
   // Under a permission the preview simulates the raw calls from the granter, but the fee estimation
   // runs them through the permissions manager, which can reject what the granter alone would not.
-  const { blockReason, hasSelectablePaymentOption, feeEstimationFailure } = resolveFeeBlock({
+  const { blockReason, hasSelectablePaymentOption } = resolveFeeBlock({
     feeTokens,
     gasEstimationError,
     sponsored,
@@ -434,7 +434,6 @@ export const TransactionDialog = ({
               showFeeTokenSelector={showFeeTokenSelector}
               isPayingWithErc20={isPayingWithErc20}
               hasSelectablePaymentOption={hasSelectablePaymentOption}
-              estimationFailureDetail={feeEstimationFailure}
               onRetryEstimation={onRetryEstimation}
               estimatingTokenCosts={estimatingTokenCosts}
               disabled={isProcessing}

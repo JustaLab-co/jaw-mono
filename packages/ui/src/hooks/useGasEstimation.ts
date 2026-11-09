@@ -314,9 +314,9 @@ export function useGasEstimation({
     // value. But a changed key means the fee on screen was measured for a *different* userOp: the
     // permission dialogs' first pass runs against a dummy call before the real one is built, and
     // that number must read as loading rather than pass as final.
+    // The last error stays until this run replaces it, so a retry keeps the block it is retrying.
     if (ethEstimatedForRef.current !== ethInputsKey) setGasFeeLoading(true);
     setEstimatingTokenCosts(true);
-    setGasEstimationError('');
 
     try {
       // Use refs to avoid infinite loops (these values shouldn't trigger re-estimation)
@@ -480,7 +480,7 @@ export function useGasEstimation({
   /** Explicit refetch discards the reuse key so the ETH leg is genuinely re-measured. */
   const forceRefetch = useCallback(() => {
     ethEstimatedForRef.current = '';
-    void estimateGas();
+    return estimateGas();
   }, [estimateGas]);
 
   // -------------------------------------------------------------------------
