@@ -27,7 +27,7 @@ export type RelayContracts = {
   depository: Address;
   protocolChain: string;
   erc20Routers: readonly Address[];
-  approvalProxies?: readonly Address[];
+  approvalProxies: readonly Address[];
   solvers: readonly Address[];
   testnet?: true;
 };

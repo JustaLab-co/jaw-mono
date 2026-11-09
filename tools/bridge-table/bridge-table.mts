@@ -125,7 +125,7 @@ for (const [id, entry] of Object.entries(BRIDGE_CHAINS)) {
       ...new Set(versions.flatMap((c) => (c?.[key] ? [c[key].toLowerCase()] : []))),
     ];
     compareSet(chainId, 'relay.erc20Routers', entry.relay.erc20Routers, listed('erc20Router'));
-    compareSet(chainId, 'relay.approvalProxies', entry.relay.approvalProxies ?? [], listed('approvalProxy'));
+    compareSet(chainId, 'relay.approvalProxies', entry.relay.approvalProxies, listed('approvalProxy'));
     compareSet(chainId, 'relay.solvers', entry.relay.solvers, live?.solverAddresses ?? []);
   }
 }
