@@ -6,7 +6,7 @@
 //   bun tools/bridge-table/bridge-table.mts      Exits 1 on any difference.
 import { BRIDGE_CHAINS } from '../../packages/ui/src/utils/bridgeCalls/contracts.ts';
 
-type RelayRouters = { erc20Router?: string };
+type RelayRouters = { erc20Router?: string; approvalProxy?: string };
 type RelayChain = {
   id: number;
   solverAddresses?: string[];
@@ -120,9 +120,12 @@ for (const [id, entry] of Object.entries(BRIDGE_CHAINS)) {
     const live = relay.find((chain) => chain.id === chainId);
     compare(chainId, 'relay.depository', entry.relay.depository, live?.protocol?.v2?.depository);
     compare(chainId, 'relay.protocolChain', entry.relay.protocolChain, live?.protocol?.v2?.chainId);
-    const routers = [live?.contracts, live?.contracts?.v3, live?.contracts?.['v3.2']].map((c) => c?.erc20Router);
-    const listedRouters = new Set(routers.flatMap((r) => (r ? [r.toLowerCase()] : [])));
-    compareSet(chainId, 'relay.erc20Routers', entry.relay.erc20Routers, [...listedRouters]);
+    const versions = [live?.contracts, live?.contracts?.v3, live?.contracts?.['v3.2']];
+    const listed = (key: keyof RelayRouters) => [
+      ...new Set(versions.flatMap((c) => (c?.[key] ? [c[key].toLowerCase()] : []))),
+    ];
+    compareSet(chainId, 'relay.erc20Routers', entry.relay.erc20Routers, listed('erc20Router'));
+    compareSet(chainId, 'relay.approvalProxies', entry.relay.approvalProxies ?? [], listed('approvalProxy'));
     compareSet(chainId, 'relay.solvers', entry.relay.solvers, live?.solverAddresses ?? []);
   }
 }
