@@ -407,9 +407,10 @@ export const AssetPreview = ({
     (!error && assetsOut.length > 0 ? assetsOut.map((d) => withBridgeRead(d, bridge.send)) : sentDeltas(bridge.send));
   let bridgeIn: AssetDelta[] = [];
   if (bridge?.receive) bridgeIn = receivedDeltas(bridge.receive);
-  // Named here so the native row is priced like the bridge rows, which carry their symbol.
+  // The native row is named here so it is priced like the bridge rows. A simulated token's symbol is
+  // its own word, so it keys no price.
   else if (bridge?.sameChain && !error)
-    bridgeIn = assetsIn.map((d) => (d.isNative ? { ...d, symbol: nativeSymbol } : d));
+    bridgeIn = assetsIn.map((d) => (d.isNative ? { ...d, symbol: nativeSymbol } : { ...d, unverified: true }));
   const shown = bridgeOut ? bridgeOut : [...assetsOut, ...assetsIn];
   // An unverified symbol is the token's own word, and a base units row has no price to scale, so
   // neither keys a price. A token with no symbol has nothing to key on.

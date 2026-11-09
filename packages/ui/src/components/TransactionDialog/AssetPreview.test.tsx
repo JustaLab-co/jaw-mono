@@ -432,6 +432,21 @@ describe('AssetPreview bridge views and the simulated receive side', () => {
     expect(host.textContent).toContain('$20.00');
   });
 
+  it('a same-chain swap does not price a simulated token by the symbol it reports', async () => {
+    prices.fetch.mockResolvedValue(1);
+    const fakeUsdcIn: AssetDelta = {
+      ...usdcOut,
+      address: '0x2222222222222222222222222222222222222222',
+      diff: 5_000_000n,
+      direction: 'in',
+    };
+    await mount({ assetsOut: [usdcOut], assetsIn: [fakeUsdcIn], bridge: sameChainSwap });
+    await settle();
+    const side = getSide(host.textContent!);
+    expect(side).toContain('+5');
+    expect(side).not.toContain('$');
+  });
+
   it('a same-chain swap under a permission says Receives, never you', () => {
     const out = html({ assetsOut: [usdcOut], assetsIn: [ethIn], bridge: sameChainSwap, onBehalf: true });
     expect(out).toContain('Receives');
