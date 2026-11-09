@@ -363,8 +363,12 @@ const TOKEN_FUNCTIONS: ReadonlyMap<Hex, string> = new Map(
         'safeTransferFrom(address,address,uint256,uint256,bytes)',
         'safeBatchTransferFrom(address,address,uint256[],uint256[],bytes)',
         'increaseAllowance(address,uint256)',
+        'increaseApproval(address,uint256)',
+        'approveAndCall(address,uint256)',
+        'approveAndCall(address,uint256,bytes)',
         // Permit2
         'approve(address,address,uint160,uint48)',
+        'transferFrom(address,address,uint160,address)',
     ].map((signature) => [toFunctionSelector(signature), signature])
 );
 

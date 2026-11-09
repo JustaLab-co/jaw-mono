@@ -343,9 +343,19 @@ describe('a call the grant screen could misname', () => {
             'safeBatchTransferFrom(address from, address to, uint256[] ids, uint256[] amounts, bytes data)',
         ],
         ['increaseAllowance(address,uint256)', 'increaseAllowance(address spender, uint256 added)'],
+        ['increaseApproval(address,uint256)', 'increaseApproval(address spender, uint256 added)'],
+        ['approveAndCall(address,uint256)', 'approveAndCall(address spender, uint256 amount)'],
+        [
+            'approveAndCall(address,uint256,bytes)',
+            'approveAndCall(address spender, uint256 amount, bytes data)',
+        ],
         [
             'approve(address,address,uint160,uint48)',
             'approve(address token, address spender, uint160 amount, uint48 expiration)',
+        ],
+        [
+            'transferFrom(address,address,uint160,address)',
+            'transferFrom(address from, address to, uint160 amount, address token)',
         ],
     ])('still grants the token function %s, with or without parameter names', (plain, named) => {
         const selector = toFunctionSelector(plain);
