@@ -1,3 +1,32 @@
+## 1.12.2 (2026-11-09)
+
+### 🩹 Fixes
+
+- **ui:** leave simulated swap tokens unpriced ([df635c32](https://github.com/JustaLab-co/jaw-mono/commit/df635c32))
+- **ui:** read only the same-chain shape of relay proxy calls ([0d61b31d](https://github.com/JustaLab-co/jaw-mono/commit/0d61b31d))
+- **ui:** drop live relay approval proxies instead of rejecting ([bd79a9c1](https://github.com/JustaLab-co/jaw-mono/commit/bd79a9c1))
+- **ui:** accept symbol characters past ascii in token symbols ([aa28823b](https://github.com/JustaLab-co/jaw-mono/commit/aa28823b))
+- **ui:** keep bridge tokens outside the pinned table unverified ([074bd617](https://github.com/JustaLab-co/jaw-mono/commit/074bd617))
+- **ui:** apply the printable rule to every token symbol ([c9fc373f](https://github.com/JustaLab-co/jaw-mono/commit/c9fc373f))
+- **ui:** keep preview when only the symbol probe fails ([d48289de](https://github.com/JustaLab-co/jaw-mono/commit/d48289de))
+- **ui:** fall back to bytes32 symbol only on decode errors ([d30fbafe](https://github.com/JustaLab-co/jaw-mono/commit/d30fbafe))
+- **ui:** read cross-chain relay proxy swaps as a bridge ([1647e172](https://github.com/JustaLab-co/jaw-mono/commit/1647e172))
+- **ui:** drop the refund detail from relay swaps ([3ac1c4c5](https://github.com/JustaLab-co/jaw-mono/commit/3ac1c4c5))
+- **ui:** name an unreadable relay proxy call as a swap ([581c331c](https://github.com/JustaLab-co/jaw-mono/commit/581c331c))
+- **ui:** read a relay swap without an approve before it ([6689b8b7](https://github.com/JustaLab-co/jaw-mono/commit/6689b8b7))
+- **ui:** show simulated receive on unchecked same-chain bridge views ([881701bc](https://github.com/JustaLab-co/jaw-mono/commit/881701bc))
+- **ui:** read relay approval proxy swaps on the signing screen ([53fb7ecd](https://github.com/JustaLab-co/jaw-mono/commit/53fb7ecd))
+- **ui:** accept relay approval proxies in the live bridge table ([fd6e385f](https://github.com/JustaLab-co/jaw-mono/commit/fd6e385f))
+- **ui:** name blank and bytes32 symbol tokens on signing screen ([563c0319](https://github.com/JustaLab-co/jaw-mono/commit/563c0319))
+
+### 🧱 Updated Dependencies
+
+- Updated @jaw.id/core to 1.10.4
+
+### ❤️ Thank You
+
+- Mariano Aguero @mariano-aguero
+
 ## 1.12.1 (2026-11-09)
 
 ### 🩹 Fixes
