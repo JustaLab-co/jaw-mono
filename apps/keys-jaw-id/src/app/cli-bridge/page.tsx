@@ -7,6 +7,8 @@ import { ReactUIHandler } from '@jaw.id/ui';
 import { ANSWERS_KEPT, MAX_FRAME_BYTES, parseInit, parseRequest } from '../../lib/bridge-frames';
 import { keyProof, readLink, type BridgeLink } from '../../lib/bridge-proof';
 import { resolveBridgeApiKey } from '../../lib/cli-api-key';
+import { txUrl } from '../../lib/explorer';
+import { sendFromAnswer, sendFromStatus, type Send } from '../../lib/send-status';
 import { DEFAULT_BRIDGE_APP_NAME, resolveBridgeAppName } from '../../lib/bridge-app-name';
 import {
   generateKeyPair,
@@ -99,6 +101,16 @@ function CLIBridgeContent() {
    * refusals and errors included: a client that wants to try again sends a new id.
    */
   const answersRef = useRef(new Map<string, { request: string; reply: Promise<RpcResponse> }>());
+  /**
+   * The latest send this session answered. `shutdown` reads the ref in the same tick, so the tab
+   * stays open for it; the state is the same value for rendering.
+   */
+  const sendRef = useRef<Send | null>(null);
+  const [send, setSend] = useState<Send | null>(null);
+  const trackSend = useCallback((next: Send | null) => {
+    sendRef.current = next;
+    setSend(next);
+  }, []);
 
   // A tab another tab replaced connects to nothing, even if its address still names a session.
   const replaced = searchParams.get('replaced') === '1';
@@ -122,24 +134,51 @@ function CLIBridgeContent() {
 
   // A client that lost its connection asks again under the same id, so it
   // gets the answer already given instead of a second dialog.
-  const handleRpcRequest = useCallback(async (id: string, method: string, rawParams: unknown) => {
-    const sdk = sdkRef.current;
-    const secret = sharedSecretRef.current;
-    const ws = wsRef.current;
-    if (!sdk || !secret || !ws) return;
+  const handleRpcRequest = useCallback(
+    async (id: string, method: string, rawParams: unknown) => {
+      const sdk = sdkRef.current;
+      const secret = sharedSecretRef.current;
+      const ws = wsRef.current;
+      if (!sdk || !secret || !ws) return;
 
-    const params = Array.isArray(rawParams) ? rawParams : rawParams !== undefined ? [rawParams] : [];
-    const request = canonical({ method, params });
-    let given = answersRef.current.get(id);
-    if (!given) {
-      given = { request, reply: ask(sdk, id, method, params) };
-      answersRef.current.set(id, given);
-      if (answersRef.current.size > ANSWERS_KEPT) answersRef.current.delete(answersRef.current.keys().next().value!);
-      setLastMethod(method);
-    }
-    const reply = given.request === request ? await given.reply : idReused(id);
-    ws.send(JSON.stringify(await encryptAndSerialize(secret, reply)));
-  }, []);
+      const params = Array.isArray(rawParams) ? rawParams : rawParams !== undefined ? [rawParams] : [];
+      const request = canonical({ method, params });
+      let given = answersRef.current.get(id);
+      if (!given) {
+        const reply = ask(sdk, id, method, params).then((answer) => {
+          const started = method === 'wallet_sendCalls' && answer.success ? sendFromAnswer(answer.data) : undefined;
+          if (started) trackSend(started);
+          return answer;
+        });
+        given = { request, reply };
+        answersRef.current.set(id, given);
+        if (answersRef.current.size > ANSWERS_KEPT) answersRef.current.delete(answersRef.current.keys().next().value!);
+        setLastMethod(method);
+      }
+      const reply = given.request === request ? await given.reply : idReused(id);
+      ws.send(JSON.stringify(await encryptAndSerialize(secret, reply)));
+    },
+    [trackSend]
+  );
+
+  // The wallet keeps the receipt waiter alive only while it is asked, so the page asks until the send ends.
+  const sendId = send?.phase === 'submitted' ? send.id : null;
+  useEffect(() => {
+    if (!sendId) return;
+    const stopAt = Date.now() + SEND_POLL_LIMIT_MS;
+    const timer = setInterval(async () => {
+      const current = sendRef.current;
+      if (current?.id !== sendId) return;
+      if (Date.now() > stopAt) return trackSend({ ...current, phase: 'stalled' });
+      try {
+        const status = await sdkRef.current?.provider.request({ method: 'wallet_getCallsStatus', params: [sendId] });
+        if (sendRef.current?.id === sendId) trackSend(sendFromStatus(current, status));
+      } catch (err) {
+        console.error('[cli-bridge] Failed to read the send status:', err);
+      }
+    }, SEND_POLL_MS);
+    return () => clearInterval(timer);
+  }, [sendId, trackSend]);
 
   useEffect(() => {
     if (!sessionId || !relayUrl || !cliPublicKeyHex) return;
@@ -149,6 +188,7 @@ function CLIBridgeContent() {
     let cancelled = false;
     let unanswered: ReturnType<typeof setTimeout> | undefined;
     answersRef.current = new Map();
+    trackSend(null);
     let clientPosted = false;
 
     (async () => {
@@ -321,6 +361,8 @@ function CLIBridgeContent() {
                 }
 
                 case 'shutdown':
+                  // A send keeps the tab open so the owner can watch it land.
+                  if (sendRef.current) break;
                   // Direct close is intentional: /cli-bridge is never embedded
                   // (its route keeps frame-ancestors 'none' / X-Frame-Options DENY).
                   // eslint-disable-next-line no-restricted-properties
@@ -398,7 +440,7 @@ function CLIBridgeContent() {
         ws.close();
       }
     };
-  }, [sessionId, relayUrl, cliPublicKeyHex, handleRpcRequest]);
+  }, [sessionId, relayUrl, cliPublicKeyHex, handleRpcRequest, trackSend]);
 
   if (replaced) {
     return (
@@ -439,6 +481,8 @@ function CLIBridgeContent() {
         <img src="/jaw-logo.png" alt="JAW" className="mx-auto mb-4 block h-12 w-12 opacity-80" />
         <h1 className="text-foreground mb-4 text-xl font-semibold">{appName}</h1>
 
+        {send && <SendPanel send={send} />}
+
         {state === 'connecting' && (
           <p className="text-muted-foreground mb-4 text-sm leading-relaxed">Connecting to relay...</p>
         )}
@@ -459,19 +503,55 @@ function CLIBridgeContent() {
           </>
         )}
 
-        {state === 'disconnected' && (
+        {state === 'disconnected' && !send && (
           <p className="text-muted-foreground mt-2 text-sm leading-relaxed">
             {appName} disconnected. You can close this tab.
           </p>
         )}
 
-        {state === 'error' && (
+        {state === 'error' && !send && (
           <>
             <p className="text-destructive text-base font-semibold">Error</p>
             <p className="text-muted-foreground mt-2 text-sm leading-relaxed">{error}</p>
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+const SEND_POLL_MS = 2_000;
+const SEND_POLL_LIMIT_MS = 10 * 60_000;
+
+function SendPanel({ send }: { send: Send }) {
+  const { phase, id } = send;
+  const txHash = 'txHash' in send ? send.txHash : undefined;
+  const link = txHash && txUrl(send.chainId, txHash);
+  const title = {
+    submitted: 'Submitted',
+    stalled: 'Still pending',
+    confirmed: 'Confirmed',
+    failed: 'Failed',
+  }[phase];
+  return (
+    <div className="mb-4" role="status">
+      <p
+        className={`${phase === 'failed' ? 'text-destructive' : phase === 'confirmed' ? 'text-success' : 'text-foreground'} text-base font-semibold`}
+      >
+        {title}
+      </p>
+      {phase === 'failed' && !txHash && (
+        <p className="text-muted-foreground mt-2 text-sm leading-relaxed">It never landed on chain.</p>
+      )}
+      {txHash && (
+        <p className="text-muted-foreground bg-muted mt-2 break-all rounded p-2 font-mono text-xs">{txHash}</p>
+      )}
+      {link && (
+        <a className="text-foreground mt-2 block text-sm underline" href={link} target="_blank" rel="noreferrer">
+          View on explorer
+        </a>
+      )}
+      {!txHash && <p className="text-muted-foreground mt-2 break-all font-mono text-xs">Operation {id}</p>}
     </div>
   );
 }

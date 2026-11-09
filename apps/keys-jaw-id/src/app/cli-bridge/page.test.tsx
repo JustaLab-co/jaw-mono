@@ -857,3 +857,171 @@ describe('cli-bridge page reports its client', () => {
     );
   });
 });
+
+describe('cli-bridge page after a send', () => {
+  const sendCalls = { method: 'wallet_sendCalls', params: [{ calls: [] }] };
+  const txHash = '0x' + 'ab'.repeat(32);
+  const receipt = { transactionHash: txHash };
+
+  /** Answers wallet_sendCalls with an operation id, then each status in turn (the last repeats). */
+  function sends(...statuses: unknown[]) {
+    const rest = [...statuses];
+    created.request = async ({ method }) => {
+      if (method === 'wallet_sendCalls') return { id: '0x1', chainId: 84532 };
+      if (method === 'wallet_getCallsStatus') return rest.length > 1 ? rest.shift() : rest[0];
+      return null;
+    };
+  }
+
+  async function sent(ws: FakeSocket) {
+    await deliver(ws, { type: 'rpc_request', id: 's1', ...sendCalls });
+    await vi.waitFor(() => expect(host.textContent).toContain('Submitted'));
+  }
+
+  async function tick(ms = 2000) {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+  }
+
+  let close: ReturnType<typeof vi.fn>;
+  beforeEach(() => {
+    close = vi.fn();
+    vi.stubGlobal('close', close);
+  });
+
+  it('keeps the tab open on shutdown and shows the send as submitted', async () => {
+    sends({ status: 100 });
+    const ws = await start();
+    await init(ws, {});
+    await sent(ws);
+
+    await deliver(ws, { type: 'shutdown' });
+    await act(async () => ws.onclose!({ code: 1000 }));
+
+    expect(close).not.toHaveBeenCalled();
+    expect(host.textContent).toContain('Submitted');
+    expect(host.textContent).not.toContain('disconnected');
+  });
+
+  it('answers the send with the same frame as before', async () => {
+    sends({ status: 100 });
+    const ws = await start();
+    await init(ws, {});
+    await sent(ws);
+
+    await vi.waitFor(async () =>
+      expect(await answers(ws, 's1')).toEqual([
+        { type: 'rpc_response', id: 's1', success: true, data: { id: '0x1', chainId: 84532 } },
+      ])
+    );
+  });
+
+  it.each([
+    ['connect', { method: 'eth_requestAccounts', params: [] }],
+    ['sign', { method: 'personal_sign', params: ['0x00', '0xabc'] }],
+    ['grant', { method: 'wallet_grantPermissions', params: [{}] }],
+  ])('closes the tab on shutdown after %s', async (_, request) => {
+    created.request = async () => ['0xabc'];
+    const ws = await start();
+    await init(ws, {});
+    await deliver(ws, { type: 'rpc_request', id: 'q1', ...request });
+    await vi.waitFor(async () => expect(await answers(ws, 'q1')).toHaveLength(1));
+
+    await deliver(ws, { type: 'shutdown' });
+
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it('closes the tab on shutdown after a refused send', async () => {
+    created.request = async () => {
+      throw Object.assign(new Error('User rejected'), { code: 4001 });
+    };
+    const ws = await start();
+    await init(ws, {});
+    await deliver(ws, { type: 'rpc_request', id: 's1', ...sendCalls });
+    await vi.waitFor(async () => expect(await answers(ws, 's1')).toHaveLength(1));
+
+    await deliver(ws, { type: 'shutdown' });
+
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  describe('polling', () => {
+    beforeEach(() => vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] }));
+    afterEach(() => vi.useRealTimers());
+
+    it('goes from submitted to confirmed with the hash and the explorer link', async () => {
+      sends({ status: 100 }, { status: 200, receipts: [receipt] });
+      const ws = await start();
+      await init(ws, {});
+      await sent(ws);
+
+      await tick();
+      expect(host.textContent).toContain('Submitted');
+      await tick();
+
+      expect(host.textContent).toContain('Confirmed');
+      expect(host.textContent).toContain(txHash);
+      expect(host.querySelector('a')!.getAttribute('href')).toBe(`https://sepolia.basescan.org/tx/${txHash}`);
+    });
+
+    it('shows a revert as failed with the hash and the link', async () => {
+      sends({ status: 500, receipts: [receipt] });
+      const ws = await start();
+      await init(ws, {});
+      await sent(ws);
+
+      await tick();
+
+      expect(host.textContent).toContain('Failed');
+      expect(host.textContent).toContain(txHash);
+      expect(host.querySelector('a')).not.toBeNull();
+    });
+
+    it('shows a send that never landed as failed with no link', async () => {
+      sends({ status: 400 });
+      const ws = await start();
+      await init(ws, {});
+      await sent(ws);
+
+      await tick();
+
+      expect(host.textContent).toContain('Failed');
+      expect(host.textContent).toContain('It never landed on chain.');
+      expect(host.querySelector('a')).toBeNull();
+    });
+
+    it('stops after ten minutes and says it is still pending, with the id', async () => {
+      const status = vi.fn(async () => ({ status: 100 }));
+      created.request = async ({ method }) =>
+        method === 'wallet_sendCalls' ? { id: '0x1', chainId: 84532 } : status();
+      const ws = await start();
+      await init(ws, {});
+      await sent(ws);
+
+      await tick(10 * 60_000 + 4000);
+      const polls = status.mock.calls.length;
+      await tick(60_000);
+
+      expect(host.textContent).toContain('Still pending');
+      expect(host.textContent).toContain('0x1');
+      expect(status).toHaveBeenCalledTimes(polls);
+    });
+
+    it('keeps the panel after the socket closes and still answers later requests', async () => {
+      sends({ status: 200, receipts: [receipt] });
+      const ws = await start();
+      await init(ws, {});
+      await sent(ws);
+      await tick();
+
+      await act(async () => ws.onclose!({ code: 1000 }));
+      expect(host.textContent).toContain('Confirmed');
+
+      created.request = async () => '0x14a34';
+      await deliver(ws, { type: 'rpc_request', id: 'c1', method: 'eth_chainId', params: [] });
+      await vi.waitFor(async () => expect(await answers(ws, 'c1')).toHaveLength(1));
+    });
+  });
+});
