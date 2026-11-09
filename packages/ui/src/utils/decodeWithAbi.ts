@@ -120,7 +120,7 @@ export function decodeWithAbi(abi: Abi, data: Hex): DecodedCalldata | null {
       ...(extraBytes > 0 ? { extraBytes } : {}),
     };
   } catch (err) {
-    console.debug('[useDecodedCalldata] raw decode failed:', err);
+    console.debug('[decodeWithAbi] decode failed:', err);
     return null;
   }
 }
