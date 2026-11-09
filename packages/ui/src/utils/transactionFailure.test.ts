@@ -264,6 +264,27 @@ describe('resolveFeeBlock', () => {
     expect(resolveFeeBlock({ ...base, feeTokens }).blockReason).toBe('will-fail');
     expect(resolveFeeBlock({ ...base, feeTokens, revertCause: 'balance' }).blockReason).toBe('funds');
   });
+
+  describe('while the fee is still estimating', () => {
+    const unpayable = [{ isSelectable: false }];
+
+    it.fails('holds back the funds block', () => {
+      const fee = resolveFeeBlock({ ...base, feeTokens: unpayable, pending: true });
+      expect(fee).toMatchObject({ blockReason: null, hasSelectablePaymentOption: false });
+    });
+
+    it('still reports the funds block once it settles', () => {
+      expect(resolveFeeBlock({ ...base, feeTokens: unpayable, pending: false }).blockReason).toBe('funds');
+    });
+
+    it.fails('keeps the estimation failure it already knows', () => {
+      const feeTokens = [{ isSelectable: false, estimationFailure: 'reverted' }];
+      expect(resolveFeeBlock({ ...base, feeTokens, pending: true })).toMatchObject({
+        blockReason: null,
+        feeEstimationFailure: 'reverted',
+      });
+    });
+  });
 });
 
 describe('isRevert', () => {
