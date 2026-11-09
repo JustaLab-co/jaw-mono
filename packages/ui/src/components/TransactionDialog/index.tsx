@@ -45,6 +45,7 @@ export const TransactionDialog = ({
   assetsOut,
   assetsIn,
   assetPreviewError,
+  assetPreviewLoading,
   assetPreviewSimulated,
   assetPreviewWillRevert,
   assetPreviewRevertCause,
@@ -129,6 +130,10 @@ export const TransactionDialog = ({
   // the banner already explains precisely. Name the cause once, at the top.
   const feeBlockReason = permissionBlocks ? null : blockReason;
 
+  // A reverted estimation waits for the preview's verdict on the calls, so the row doesn't read
+  // "will fail" and then turn into a retry when the preview lands.
+  const verdictPending = !isPermissioned && !!assetPreviewLoading && !!feeTokens?.some((t) => t.estimationReverted);
+
   const { contracts: bridgeContracts, settled: bridgeSettled } = useBridgeContracts(apiKey);
 
   // An ERC-20 fee can't be confirmed until its worst-case ceiling has settled, nor when the
@@ -167,6 +172,7 @@ export const TransactionDialog = ({
   const canConfirm =
     !isProcessing &&
     !gasFeeLoading &&
+    !verdictPending &&
     !blockReason &&
     !erc20CannotPay &&
     !permissionBlocks &&
@@ -413,14 +419,14 @@ export const TransactionDialog = ({
           {/* Pinned fee row + actions */}
           <div className="border-border/40 flex-none space-y-2 border-t px-6 pb-5 pt-3">
             <NetworkFeeRow
-              blockReason={feeBlockReason}
+              blockReason={verdictPending ? null : feeBlockReason}
               fundsShortfallDetail={
                 assetPreviewRevertCause === 'balance'
                   ? "This account doesn't hold enough of the asset this transaction spends."
                   : undefined
               }
               gasFee={gasFee}
-              gasFeeLoading={gasFeeLoading}
+              gasFeeLoading={gasFeeLoading || verdictPending}
               sponsored={sponsored}
               nativeSymbol={nativeSymbol}
               nativeTokenPrice={nativeTokenPrice}

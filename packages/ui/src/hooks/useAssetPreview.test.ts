@@ -61,4 +61,32 @@ describe('useAssetPreview simulated', () => {
     await mount(undefined);
     expect(result.simulated).toBe(false);
   });
+
+  it('is set when the calls ran clean but their amounts could not be read', async () => {
+    simulate.mockResolvedValueOnce({ deltas: [], willRevert: false, unreadable: true });
+    await mount(ACCOUNT);
+    expect(result).toMatchObject({ simulated: true, willRevert: false, error: true });
+  });
+});
+
+describe('useAssetPreview loading', () => {
+  it('is set while the simulation runs and cleared once it answers or fails', async () => {
+    simulate.mockReturnValueOnce(new Promise(() => undefined));
+    await mount(ACCOUNT);
+    expect(result.loading).toBe(true);
+
+    act(() => root?.unmount());
+    simulate.mockResolvedValueOnce({ deltas: [], willRevert: false });
+    await mount(ACCOUNT);
+    expect(result.loading).toBe(false);
+
+    act(() => root?.unmount());
+    simulate.mockRejectedValueOnce(new Error('eth_simulateV1 not supported'));
+    await mount(ACCOUNT);
+    expect(result.loading).toBe(false);
+
+    act(() => root?.unmount());
+    await mount(undefined);
+    expect(result.loading).toBe(false);
+  });
 });

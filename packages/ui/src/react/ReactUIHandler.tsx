@@ -1525,6 +1525,7 @@ function TransactionDialogWrapper({
     assetsOut,
     assetsIn,
     error: assetPreviewError,
+    loading: assetPreviewLoading,
     simulated: assetPreviewSimulated,
     willRevert: assetPreviewWillRevert,
     revertCause: assetPreviewRevertCause,
@@ -1793,6 +1794,7 @@ function TransactionDialogWrapper({
       assetsOut={assetsOut}
       assetsIn={assetsIn}
       assetPreviewError={assetPreviewError}
+      assetPreviewLoading={assetPreviewLoading}
       assetPreviewSimulated={assetPreviewSimulated}
       assetPreviewWillRevert={assetPreviewWillRevert}
       assetPreviewRevertCause={assetPreviewRevertCause}
@@ -1901,6 +1903,7 @@ function SendTransactionDialogWrapper({
     assetsOut,
     assetsIn,
     error: assetPreviewError,
+    loading: assetPreviewLoading,
     simulated: assetPreviewSimulated,
     willRevert: assetPreviewWillRevert,
     revertCause: assetPreviewRevertCause,
@@ -2158,6 +2161,7 @@ function SendTransactionDialogWrapper({
       assetsOut={assetsOut}
       assetsIn={assetsIn}
       assetPreviewError={assetPreviewError}
+      assetPreviewLoading={assetPreviewLoading}
       assetPreviewSimulated={assetPreviewSimulated}
       assetPreviewWillRevert={assetPreviewWillRevert}
       assetPreviewRevertCause={assetPreviewRevertCause}

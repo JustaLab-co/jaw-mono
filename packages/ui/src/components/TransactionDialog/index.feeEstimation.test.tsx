@@ -152,6 +152,18 @@ describe('TransactionDialog fee estimation failure', () => {
     expect(html).not.toContain('Retry');
   });
 
+  it('waits for the simulation before naming a reverted fee estimation', () => {
+    const reverted = usdc({
+      gasCostFormatted: 'Estimation failed',
+      estimationFailure: 'reverted',
+      estimationReverted: true,
+    });
+    const html = render([eth(0n), reverted], () => undefined, false, { assetPreviewLoading: true });
+    expect(html).toContain('Estimating...');
+    expect(html).not.toContain('Transaction will fail');
+    expect(html).not.toContain('Fee estimation failed');
+  });
+
   it('still says insufficient funds when ETH and USDC are both empty', () => {
     const html = render([eth(0n), usdc({ balance: 0n, balanceFormatted: '0' })]);
     expect(html).toContain('Insufficient funds');

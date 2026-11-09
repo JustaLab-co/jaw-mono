@@ -40,6 +40,8 @@ export interface TransactionDialogProps {
   assetsOut?: AssetDelta[];
   assetsIn?: AssetDelta[];
   assetPreviewError?: boolean;
+  /** The asset simulation is running, so it has no verdict on the calls yet. */
+  assetPreviewLoading?: boolean;
   /** The asset simulation answered, so `assetPreviewWillRevert` and its cause are its verdict. */
   assetPreviewSimulated?: boolean;
   assetPreviewWillRevert?: boolean;
