@@ -122,6 +122,7 @@ export const SiweModal = ({
       siweStatus={siweStatus}
       canSign={canSign}
       warningMessage={warningMessage}
+      requestCodeHint
     />
   );
 };

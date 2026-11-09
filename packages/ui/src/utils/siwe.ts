@@ -71,16 +71,18 @@ const toIsoString = (d: Date | undefined): string | undefined =>
   d instanceof Date && !Number.isNaN(d.getTime()) ? d.toISOString() : undefined;
 
 /**
- * The five required EIP-4361 fields, anchored per line. Fresh per call — a `/g` regex
- * carries `lastIndex`. Counted rather than first-matched: viem's own suffix match is
- * unanchored, so a block embedded in the statement would shadow the real one.
+ * The five required EIP-4361 fields. Fresh per call — a `/g` regex carries `lastIndex`.
+ * Counted rather than first-matched: viem's own suffix match is unanchored, so a block
+ * embedded in the statement would shadow the real one. Unanchored at the start for the
+ * same reason: a block that begins mid-line (`Connect. URI: ...`) is still the first one
+ * viem reads, so it has to count as a second block and fail the parse.
  *
  * A single literal space is deliberate: viem's parser — which extracts the values — requires
  * canonical `URI: `, so admitting more here would locate a block whose fields viem still
  * cannot read. Detection (`isSiweMessage`) is looser on purpose, and the gap that opens is
  * closed by `getSiweOriginWarning` working without a parse rather than by loosening this.
  */
-const requiredFieldBlock = () => /^URI: .+\nVersion: .+\nChain ID: .+\nNonce: .+\nIssued At: .+$/gm;
+const requiredFieldBlock = () => /URI: .+\nVersion: .+\nChain ID: .+\nNonce: .+\nIssued At: .+$/gm;
 
 /**
  * Statement region — between the address line and the field block. viem captures a
