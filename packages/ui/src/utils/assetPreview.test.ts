@@ -131,6 +131,11 @@ describe('mapAssetChanges', () => {
     expect(delta).toMatchObject({ address: USDC, symbol: undefined, amountFormatted: '1', direction: 'out' });
   });
 
+  it('keeps a symbol with a character past ASCII', () => {
+    const [delta] = mapAssetChanges([change(USDC, -1_000_000n, { decimals: 6, symbol: 'USD₮0' })]);
+    expect(delta.symbol).toBe('USD₮0');
+  });
+
   it('trims the padding off a symbol', () => {
     const [delta] = mapAssetChanges([change(USDC, -1_000_000n, { decimals: 6, symbol: ' USDC ' })]);
     expect(delta.symbol).toBe('USDC');

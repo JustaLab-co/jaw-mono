@@ -13,6 +13,14 @@ describe('decodeSymbol', () => {
     expect(decodeSymbol(stringToHex('MKR', { size: 32 }))).toBe('MKR');
   });
 
+  it('reads a symbol with a character past ASCII', () => {
+    expect(decodeSymbol(encodeAbiParameters([{ type: 'string' }], ['USD₮0']))).toBe('USD₮0');
+  });
+
+  it('leaves a bytes32 word that is not UTF-8 unnamed', () => {
+    expect(decodeSymbol(concat(['0xff', stringToHex('MKR', { size: 31 })]))).toBeUndefined();
+  });
+
   it.each([
     ['a string whose length runs past the data', concat([word(0x20), word(0x1000)])],
     ['a string offset that points past the data', word(0x40)],
