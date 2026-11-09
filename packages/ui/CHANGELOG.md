@@ -1,3 +1,32 @@
+## 1.12.1 (2026-11-09)
+
+### 🩹 Fixes
+
+- **ui:** hold a reverted fee estimate until the preview answers ([8feb96b3](https://github.com/JustaLab-co/jaw-mono/commit/8feb96b3))
+- **ui:** tie retrying to the user's retry run ([fbd6de37](https://github.com/JustaLab-co/jaw-mono/commit/fbd6de37))
+- **ui:** drop encoding note, show extra bytes beside clear-signed ([e11c7e6f](https://github.com/JustaLab-co/jaw-mono/commit/e11c7e6f))
+- **ui:** show retrying only for a retry the user started ([d687bf23](https://github.com/JustaLab-co/jaw-mono/commit/d687bf23))
+- **ui:** read raw json-rpc revert codes in isRevert ([0e40240c](https://github.com/JustaLab-co/jaw-mono/commit/0e40240c))
+- **ui:** stop revert cause walk on a looping chain ([fa5728f2](https://github.com/JustaLab-co/jaw-mono/commit/fa5728f2))
+- **ui:** read strings as bytes when checking canonical encoding ([809c1b7d](https://github.com/JustaLab-co/jaw-mono/commit/809c1b7d))
+- **ui:** keep decodes whose integer words have dirty high bits ([7c88dec9](https://github.com/JustaLab-co/jaw-mono/commit/7c88dec9))
+- **ui:** show struct arguments as their tuple types ([fb014f8d](https://github.com/JustaLab-co/jaw-mono/commit/fb014f8d))
+- **ui:** map selectors once per abi and skip unhashable entries ([fd44b796](https://github.com/JustaLab-co/jaw-mono/commit/fd44b796))
+- **ui:** count bytes past a non-canonical decode in the note ([f31428f3](https://github.com/JustaLab-co/jaw-mono/commit/f31428f3))
+- **ui:** reject odd-length calldata before decoding ([a03149dd](https://github.com/JustaLab-co/jaw-mono/commit/a03149dd))
+- **ui:** keep non-canonical decodes and warn about encoding ([4fd1c415](https://github.com/JustaLab-co/jaw-mono/commit/4fd1c415))
+- **ui:** word reverted fee estimate as a bundler failure ([f518a084](https://github.com/JustaLab-co/jaw-mono/commit/f518a084))
+- **ui:** trust estimation revert over preview for permissioned calls ([084ee92d](https://github.com/JustaLab-co/jaw-mono/commit/084ee92d))
+- **ui:** keep fee-path reverts retryable in fee estimation ([f37d9fcb](https://github.com/JustaLab-co/jaw-mono/commit/f37d9fcb))
+- **ui:** stringify bigint fields in decoded struct arguments ([cfa2b07a](https://github.com/JustaLab-co/jaw-mono/commit/cfa2b07a))
+- **ui:** skip unresolved abi entries when matching selector ([acafedc7](https://github.com/JustaLab-co/jaw-mono/commit/acafedc7))
+- **ui:** match abi by selector and keep suffixed calls decoded ([7f91817c](https://github.com/JustaLab-co/jaw-mono/commit/7f91817c))
+- **ui:** decode calldata with the overload the selector names ([ea8695a9](https://github.com/JustaLab-co/jaw-mono/commit/ea8695a9))
+
+### ❤️ Thank You
+
+- Mariano Aguero @mariano-aguero
+
 ## 1.12.0 (2026-11-05)
 
 ### 🚀 Features
