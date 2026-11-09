@@ -72,4 +72,11 @@ export interface OnboardingDialogProps {
   lastAuthenticatedCredentialId?: string | null;
   supportedChains?: Array<{ id: number }>;
   subnameTextRecords?: SubnameTextRecordCapabilityRequest;
+
+  /** Address the request is for. Preselected when stored here, and named on the screen. */
+  expectedAccount?: string;
+  /** The account the user ended on when it is not the expected one. Shows the screen naming both. */
+  mismatchedAccount?: { address: string; name?: string };
+  /** "Use another passkey" on the mismatch screen: back to the sign-in view. */
+  onRetryAccount?: () => void;
 }
