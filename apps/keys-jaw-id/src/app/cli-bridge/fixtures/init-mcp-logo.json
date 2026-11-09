@@ -1,0 +1,25 @@
+{
+  "sentBy": ["@jaw-mono/mcp images built after jaw-agent #85, for a client whose logo they know"],
+  "clients": [
+    {
+      "family": "mcp",
+      "versions": "images built after jaw-agent #85",
+      "current": true
+    }
+  ],
+  "frame": {
+    "type": "init",
+    "chainId": 84532,
+    "appName": "Claude (via JAW MCP)",
+    "appLogoUrl": "https://mcp.jaw.id/logos/claude.png",
+    "client": "jaw-mcp/a1b2c3d"
+  },
+  "expect": {
+    "appName": "Claude (via JAW MCP)",
+    "appLogoUrl": "https://mcp.jaw.id/logos/claude.png",
+    "defaultChainId": 84532,
+    "apiKey": "workspace-key",
+    "readyApiKey": "workspace-key",
+    "client": "jaw-mcp/a1b2c3d"
+  }
+}

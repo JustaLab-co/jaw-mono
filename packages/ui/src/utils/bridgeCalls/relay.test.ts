@@ -20,7 +20,7 @@ const DEPOSITORY = '0x4cD00E387622C35bDDB9b4c962C136462338BC31';
 const BASE_USDC = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 const USDBC = '0xd9aAEc86B65D86f6A7B5B1b0c42FFA531710b6CA';
 const OTHER = '0x1111111111111111111111111111111111111111';
-const UNREADABLE = { kind: 'unreadable', provider: 'relay' };
+const UNREADABLE = { kind: 'unreadable', what: 'deposit' };
 
 const word = (hex: string) => hex.replace(/^0x/, '').toLowerCase().padStart(64, '0');
 /** Replaces the 32-byte argument at `index` of the calldata. */
@@ -65,7 +65,6 @@ describe('given a Relay depositNative on the pinned Base Depository', () => {
         ],
       },
       notices: [RELAY_HIDDEN],
-      outsideTable: false,
     });
   });
 
@@ -104,9 +103,9 @@ describe('given a Relay depositNative on the pinned Base Depository', () => {
     expect(relayTransfer({ ...PROD_RELAY_DEPOSIT, data: PROD_RELAY_DEPOSIT.data + '00' })).toEqual(UNREADABLE);
   });
 
-  it('when the value is 0, then it is unreadable', () => {
-    expect(relayTransfer({ ...PROD_RELAY_DEPOSIT, value: '0' })).toEqual(UNREADABLE);
-    expect(relayTransfer({ ...PROD_RELAY_DEPOSIT, value: undefined })).toEqual(UNREADABLE);
+  it('when the value is 0, then it moves nothing, since the depository only records a deposit of zero', () => {
+    expect(relayTransfer({ ...PROD_RELAY_DEPOSIT, value: '0' })).toEqual({ kind: 'inert' });
+    expect(relayTransfer({ ...PROD_RELAY_DEPOSIT, value: undefined })).toEqual({ kind: 'inert' });
   });
 
   it('when the value is not a number, then it is unreadable', () => {
@@ -132,7 +131,6 @@ describe('given a Relay depositErc20 on the pinned Base Depository', () => {
         ],
       },
       notices: [RELAY_HIDDEN],
-      outsideTable: false,
     });
   });
 

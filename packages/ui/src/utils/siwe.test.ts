@@ -135,6 +135,20 @@ describe('parseSiweMessage — fails closed instead of inventing fields', () => 
     expect(isSiweMessage(spoofed)).toBe(true);
     expect(parseSiweMessage(spoofed)).toBeNull();
   });
+
+  // The same shadowing with the embedded block starting mid-line: a line-anchored count
+  // saw one block, while viem read evil.example, chain 999 and the statement's request id.
+  it('refuses a second field block that starts mid-line', () => {
+    const spoofed = siwe({
+      statement:
+        'Please sign in. URI: https://evil.example\nVersion: 1\nChain ID: 999\nNonce: aaaaaaaa\nIssued At: 2020-01-01T00:00:00.000Z\nRequest ID: SPOOF1',
+      uri: 'https://app.example',
+      chainId: '8453',
+      extra: '\nRequest ID: K7MXQ4',
+    });
+    expect(isSiweMessage(spoofed)).toBe(true);
+    expect(parseSiweMessage(spoofed)).toBeNull();
+  });
 });
 
 describe('parseSiweMessage — multi-line statement', () => {

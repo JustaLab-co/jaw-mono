@@ -8,6 +8,7 @@ import {
   hexToBytes,
   isAddress,
   isAddressEqual,
+  pad,
   parseAbi,
   parseAbiParameters,
   size,
@@ -18,7 +19,15 @@ import {
 } from 'viem';
 import { JAW_FEE_RECIPIENT, type AcrossContracts } from './contracts';
 import type { BridgeContracts } from './table';
-import { pinnedToken, tokenAmount, type BridgeCall, type Received, type TokenAmount, type Unreadable } from './view';
+import {
+  pinnedToken,
+  tokenAmount,
+  type BridgeCall,
+  type Inert,
+  type Received,
+  type TokenAmount,
+  type Unreadable,
+} from './view';
 
 const DEPOSIT_ABI = parseAbi([
   'function deposit(bytes32 depositor, bytes32 recipient, bytes32 inputToken, bytes32 outputToken, uint256 inputAmount, uint256 outputAmount, uint256 destinationChainId, bytes32 exclusiveRelayer, uint32 quoteTimestamp, uint32 fillDeadline, uint32 exclusivityParameter, bytes message)',
@@ -64,8 +73,8 @@ const WITHDRAW_ALL = encodeFunctionData({
   functionName: 'withdraw',
   args: [0n],
 });
-// Across appends an optional integrator tag and its own tag after the ABI payload.
-const TAG_SUFFIX = /^(1dc0de[0-9a-f]{4})?73c0de$/;
+// Solidity ignores calldata after the arguments, where Across and other front ends append their tags.
+const WHOLE_BYTES = /^(?:[0-9a-f]{2})*$/;
 const EVM_WORD = /^0x0{24}[0-9a-f]{40}$/;
 
 export type AcrossFee = { amount: TokenAmount; recipient: Address; jaw: boolean };
@@ -98,36 +107,49 @@ type Fields = {
   message: Hex;
 };
 
-class TableMiss extends Error {}
-
-/** A table entry the call needs. Without it the call is unreadable, and a newer table might have it. */
+/** A table entry the call needs. Without it the call is unreadable. */
 function required<T>(entry: T | undefined): T {
-  if (entry === undefined) throw new TableMiss();
+  if (entry === undefined) throw new Error('not in the table');
   return entry;
 }
 
-const unreadable = (outsideTable = false): Unreadable => ({
-  kind: 'unreadable',
-  provider: 'across',
-  ...(outsideTable && { outsideTable: true as const }),
-});
+const UNREADABLE: Unreadable = { kind: 'unreadable', what: 'deposit' };
 
-/** Undefined when the call is not to a pinned Across contract; unreadable when it is and breaks a rule. */
-export function readAcrossCall(contracts: BridgeContracts, call: BridgeCall): AcrossDeposit | Unreadable | undefined {
+/**
+ * Undefined when the call is not to a pinned Across contract; inert when it can only revert; unreadable
+ * when it breaks a rule.
+ */
+export function readAcrossCall(
+  contracts: BridgeContracts,
+  call: BridgeCall
+): AcrossDeposit | Inert | Unreadable | undefined {
   const across = contracts.chain(call.chainId)?.across;
   if (!across || !isAddress(call.to, { strict: false })) return undefined;
   const toPool = isAddressEqual(call.to, across.spokePool);
   if (!toPool && !isAddressEqual(call.to, across.periphery)) return undefined;
   try {
+    if (toPool && revertsOnPool(call, across)) return { kind: 'inert' };
     const fields = fieldsOf(contracts, call, across, toPool);
-    if (!fields) return unreadable();
-    const destination = contracts.chain(fields.destinationChainId)?.across;
-    if (!destination) return unreadable(true);
-    return depositOf(contracts, call.chainId, fields, destination) ?? unreadable();
-  } catch (error) {
-    return unreadable(error instanceof TableMiss);
+    return (fields && depositOf(contracts, call.chainId, fields)) ?? UNREADABLE;
+  } catch {
+    return UNREADABLE;
   }
 }
+
+// The SpokePool has no depositNative or swapAndBridge, and its deposit takes a value only as the
+// whole input amount in its wrapped native token (SpokePool._depositV3). Any other selector fails to
+// decode and stays unreadable, and so does a value when the table pins no wrapped native token.
+function revertsOnPool(call: BridgeCall, across: AcrossContracts): boolean {
+  const decoded = decodeFunctionData({ abi: DEPOSIT_ABI, data: (call.data ?? '0x').toLowerCase() as Hex });
+  if (decoded.functionName !== 'deposit') return true;
+  const { 2: inputToken, 4: inputAmount } = decoded.args;
+  const value = BigInt(call.value ?? 0);
+  if (value === 0n || !across.wrappedNative) return false;
+  return !wrapsValue(inputToken, inputAmount, value, across.wrappedNative);
+}
+
+const wrapsValue = (inputToken: Hex, inputAmount: bigint, value: bigint, wrapped: Address) =>
+  value === inputAmount && inputToken === pad(wrapped, { size: 32 }).toLowerCase();
 
 function fieldsOf(
   contracts: BridgeContracts,
@@ -139,17 +161,19 @@ function fieldsOf(
   const data = call.data.toLowerCase() as Hex;
   const decoded = decodeFunctionData({ abi: DEPOSIT_ABI, data });
   const payload = encodeFunctionData({ abi: DEPOSIT_ABI, ...decoded });
-  if (!data.startsWith(payload) || !TAG_SUFFIX.test(data.slice(payload.length))) return undefined;
+  if (!data.startsWith(payload) || !WHOLE_BYTES.test(data.slice(payload.length))) return undefined;
   const value = BigInt(call.value ?? 0);
 
   if (decoded.functionName === 'deposit') {
-    if (!toPool || value !== 0n) return undefined;
+    if (!toPool) return undefined;
     const [depositor, recipient, inputToken, outputToken, inputAmount, outputAmount, destinationChainId] = decoded.args;
     const { 9: fillDeadline, 11: message } = decoded.args;
+    const native = value !== 0n;
+    if (native && !wrapsValue(inputToken, inputAmount, value, required(origin.wrappedNative))) return undefined;
     return {
       depositor: addressOf(depositor),
       recipient: addressOf(recipient),
-      sendToken: tokenWord(inputToken),
+      sendToken: native ? zeroAddress : tokenWord(inputToken),
       sendAmount: inputAmount,
       outputToken: tokenWord(outputToken),
       outputAmount,
@@ -212,14 +236,10 @@ function floorCoversOutput(contracts: BridgeContracts, chainId: number, deposit:
   return floor * 10n ** BigInt(output.decimals) >= deposit.outputAmount * 10n ** BigInt(input.decimals);
 }
 
-function depositOf(
-  contracts: BridgeContracts,
-  chainId: number,
-  fields: Fields,
-  destination: AcrossContracts
-): AcrossDeposit | undefined {
+function depositOf(contracts: BridgeContracts, chainId: number, fields: Fields): AcrossDeposit | undefined {
   const { destinationChainId, outputAmount } = fields;
-  const payout = payoutOf(fields, destination);
+  const destination = contracts.chain(destinationChainId)?.across;
+  const payout = destination ? payoutOf(fields, destination) : plainPayout(contracts, fields);
   if (!payout) return undefined;
   // A swap payout's minimum is in the bought token and already net of its fee.
   if (payout.minimum === undefined && payout.fee && payout.fee.amount > outputAmount) return undefined;
@@ -259,6 +279,17 @@ function payoutOf(
     swapPayout(program, outputToken, outputAmount, across) ??
     lifiPayout(program, outputToken, outputAmount, across)
   );
+}
+
+// With no Across contracts for the destination there is no handler to read a message for, so only a
+// plain deposit reads. Tokens left in a handler with no instructions are anyone's to take, so a pinned
+// handler as the recipient stays unreadable, and so does a chain id the title could not show exactly.
+function plainPayout(contracts: BridgeContracts, fields: Fields): Payout | undefined {
+  const { recipient, outputToken, message, destinationChainId } = fields;
+  if (message !== '0x' || !Number.isSafeInteger(destinationChainId)) return undefined;
+  const handlers = Object.values(contracts.chains).flatMap(({ across }) => (across ? [across.multicallHandler] : []));
+  if (handlers.some((handler) => isAddressEqual(handler, recipient))) return undefined;
+  return { recipient, received: outputToken };
 }
 
 function addressOf(word: Hex): Address {
