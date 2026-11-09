@@ -118,12 +118,12 @@ describe('TransactionDialog fee estimation failure', () => {
   describe('while the fee is still estimating', () => {
     const unpayable = [eth(0n), usdc({ balance: 100_000n, balanceFormatted: '0.1' })];
 
-    it('keeps Confirm disabled and does not read Insufficient Funds while gas loads', () => {
+    it('does not read Insufficient Funds while gas loads', () => {
       const html = render(unpayable, undefined, false, true);
       expect(html).not.toContain('Insufficient Funds');
     });
 
-    it('does the same while the fee-token costs load', () => {
+    it('does not read Insufficient Funds while the fee-token costs load', () => {
       const html = render(unpayable, undefined, true, false);
       expect(html).not.toContain('Insufficient Funds');
     });

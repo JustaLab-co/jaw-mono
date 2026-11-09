@@ -95,6 +95,13 @@ describe('PermissionDialog Grant while the fee is estimating', () => {
     expect(grant.disabled).toBe(true);
   });
 
+  it('does not call the shortfall final while the fee-token costs load', async () => {
+    const grant = await renderGrant({ estimatingTokenCosts: true });
+
+    expect(grant.textContent).not.toBe('Insufficient Funds');
+    expect(grant.disabled).toBe(true);
+  });
+
   it('reads Insufficient Funds once the shortfall is settled', async () => {
     const grant = await renderGrant({});
 

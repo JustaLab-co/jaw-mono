@@ -270,6 +270,14 @@ export async function resolveTokenUnits(
   };
 }
 
+/** The node declined to run the batch. Deterministic, so retrying cannot change it. */
+export class SimulationRefusedError extends Error {
+  constructor() {
+    super('eth_simulateV1 refused to execute the batch');
+    this.name = 'SimulationRefusedError';
+  }
+}
+
 /**
  * Simulate the batch against current chain state and return the net per-asset balance
  * changes for `account`. Throws on simulation failure — the caller owns the fallback.
@@ -292,14 +300,6 @@ export async function resolveTokenUnits(
  * handing it to viem, so nothing here refetches it and every simulation starts from the same
  * base block.
  */
-/** The node declined to run the batch. Deterministic, so retrying cannot change it. */
-export class SimulationRefusedError extends Error {
-  constructor() {
-    super('eth_simulateV1 refused to execute the batch');
-    this.name = 'SimulationRefusedError';
-  }
-}
-
 export async function simulateAssetChanges({
   chainId,
   apiKey,

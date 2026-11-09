@@ -285,6 +285,12 @@ describe('resolveFeeBlock', () => {
       });
     });
 
+    it('keeps reporting a failed estimation while pending', () => {
+      const feeTokens = [{ isSelectable: true }];
+      const fee = resolveFeeBlock({ ...base, feeTokens, gasEstimationError: 'boom', pending: true });
+      expect(fee.blockReason).toBe('will-fail');
+    });
+
     it('keeps reporting a balance shortfall the simulation saw', () => {
       const fee = resolveFeeBlock({ ...base, feeTokens: unpayable, pending: true, revertCause: 'balance' });
       expect(fee.blockReason).toBe('funds');

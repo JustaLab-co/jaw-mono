@@ -11,7 +11,13 @@ import {
   type Hex,
 } from 'viem';
 import { base } from 'viem/chains';
-import { formatAssetAmount, mapAssetChanges, resolveTokenUnits, type RawAssetChange } from './assetPreview';
+import {
+  formatAssetAmount,
+  mapAssetChanges,
+  resolveTokenUnits,
+  SimulationRefusedError,
+  type RawAssetChange,
+} from './assetPreview';
 
 const publicClient = vi.hoisted(() => ({ current: undefined as unknown }));
 vi.mock('./publicClient', () => ({
@@ -613,9 +619,9 @@ describe('simulateAssetChanges', () => {
 
     // Nothing executed, so nothing is known about whether the batch lands. Reading this as a
     // revert put "likely to fail" on every transaction from a deployed account on ADI.
-    await expect(simulateAssetChanges({ chainId: base.id, account: ACCOUNT, calls })).rejects.toThrow(
-      /refused to execute/
-    );
+    const refused = simulateAssetChanges({ chainId: base.id, account: ACCOUNT, calls });
+    await expect(refused).rejects.toBeInstanceOf(SimulationRefusedError);
+    await expect(refused).rejects.toThrow(/refused to execute/);
   });
 });
 
