@@ -349,43 +349,40 @@ describe('DecodedCalldataView suffix', () => {
 });
 
 describe('DecodedCalldataView non-canonical encoding', () => {
-  it('keeps the decoded call and the Unlimited flag, and warns about the encoding', () => {
+  const clearSignedApprove = (decoded: DecodeResult['decoded']): DecodeResult => ({
+    ...approveDecode,
+    decoded,
+    clearSigned: {
+      intent: 'Approve',
+      rows: [{ label: 'Spender', value: SPENDER, rawValue: SPENDER, kind: 'address' }],
+    },
+  });
+  const outsideDetails = () => text().replace(container.querySelector('details')?.textContent ?? '', '');
+
+  it('keeps the decoded call and the Unlimited flag, with no encoding note', () => {
     const decoded = { ...approveDecode.decoded!, nonCanonical: true };
     show({ ...approveDecode, decoded }, { label: 'Unlimited', argIndex: 1, amount: maxUint256 });
     expect(text()).toContain('approve(address, uint256)');
     expect(text()).toContain('Unlimited');
-    expect(text()).toContain('Not in canonical ABI encoding');
+    expect(text()).not.toContain('canonical');
+    expect(text()).not.toContain('not decoded');
   });
 
   it('says how many bytes the calldata runs past the decoded arguments', () => {
     const decoded = { ...approveDecode.decoded!, nonCanonical: true, extraBytes: 4 };
     show({ ...approveDecode, decoded }, null);
-    expect(text()).toContain(
-      'Not in canonical ABI encoding, and 4 bytes longer than these arguments encode to. The contract may read'
-    );
+    expect(text()).toContain('4 bytes not decoded');
   });
 
-  it('says the extra byte count under the raw details of a clear-signed view too', () => {
-    const decode: DecodeResult = {
-      ...approveDecode,
-      decoded: { ...approveDecode.decoded!, nonCanonical: true, extraBytes: 4 },
-      clearSigned: {
-        intent: 'Approve',
-        rows: [{ label: 'Spender', value: SPENDER, rawValue: SPENDER, kind: 'address' }],
-      },
-    };
-    show(decode, null);
-    expect(text()).toContain('and 4 bytes longer than these arguments encode to');
+  it('shows the extra bytes next to a clear-signed view, outside the raw details', () => {
+    show(clearSignedApprove({ ...approveDecode.decoded!, nonCanonical: true, extraBytes: 4 }), null);
+    expect(outsideDetails()).toContain('4 bytes not decoded');
   });
 
-  it('keeps the note as it was when the calldata has no extra bytes', () => {
-    const decoded = { ...approveDecode.decoded!, nonCanonical: true };
-    show({ ...approveDecode, decoded }, null);
-    expect(text()).toContain('Not in canonical ABI encoding. The contract may read these values differently.');
-  });
-
-  it('shows no encoding warning for canonical calldata', () => {
-    show(approveDecode, null);
-    expect(text()).not.toContain('canonical');
+  it('shows a suffix next to a clear-signed view, outside the raw details', () => {
+    show(clearSignedApprove({ ...approveDecode.decoded!, trailing: '0x8021802180218021' }), null);
+    expect(outsideDetails()).toContain('8 bytes not decoded');
+    expect(outsideDetails()).toContain('0x8021802180218021');
+    expect(count('not decoded')).toBe(1);
   });
 });

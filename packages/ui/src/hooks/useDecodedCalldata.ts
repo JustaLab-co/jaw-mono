@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { Abi, Hex } from 'viem';
+import type { Abi, AbiFunction, Hex } from 'viem';
 import { getPublicClient, jawRpcUrl } from '../utils/publicClient';
 import {
   applyFormat,
@@ -86,12 +86,12 @@ async function clearSignedDecode(
   data: string,
   chainId: number,
   apiKey: string | undefined
-): Promise<ClearSigningDisplay | null> {
+): Promise<{ display: ClearSigningDisplay | null; abiItem: AbiFunction } | null> {
   const match = await resolveCalldataDescriptor(getDefaultDescriptorSource(), chainId, to, data);
   if (!match) return null;
   const decoded = decodeCalldataWithSignature(match.formatKey, data);
   if (!decoded) return null;
-  return applyFormat(match.descriptor, match.format, {
+  const display = await applyFormat(match.descriptor, match.format, {
     args: decoded.args,
     tx: { to: to.toLowerCase(), chainId },
     chainId,
@@ -99,6 +99,7 @@ async function clearSignedDecode(
     nativeDecimals: getNativeDecimals(chainId),
     resolveToken: createTokenResolver(chainId, apiKey),
   });
+  return { display, abiItem: decoded.abiItem };
 }
 
 const EMPTY: DecodeResult = { clearSigned: null, decoded: null, isLoading: false };
@@ -133,8 +134,10 @@ export function useDecodedCalldata(
       }),
       rawDecode(to, data, rpcUrl, chainId),
     ])
-      .then(([clearSigned, decoded]) => {
-        if (!cancelled) setResult({ clearSigned, decoded, isLoading: false });
+      .then(([clear, raw]) => {
+        // When whatsabi cannot read the call, the descriptor's signature still finds bytes after the arguments.
+        const decoded = raw ?? (clear ? decodeWithAbi([clear.abiItem], data as Hex) : null);
+        if (!cancelled) setResult({ clearSigned: clear?.display ?? null, decoded, isLoading: false });
       })
       .catch((err) => {
         console.debug('[useDecodedCalldata] decode failed:', err);
