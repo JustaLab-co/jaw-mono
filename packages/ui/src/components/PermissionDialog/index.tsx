@@ -106,11 +106,13 @@ export const PermissionDialog = ({
     return () => el.removeEventListener('wheel', onWheel);
   }, [isProcessing]);
 
+  const feePending = !!gasFeeLoading || !!estimatingTokenCosts;
   const { blockReason, hasSelectablePaymentOption, feeEstimationFailure } = resolveFeeBlock({
     feeTokens,
     gasEstimationError,
     sponsored,
     isPayingWithErc20: !!isPayingWithErc20,
+    pending: feePending,
   });
 
   // Same shape as the transaction screen: a certain revert (or a permission we couldn't load)
@@ -140,7 +142,7 @@ export const PermissionDialog = ({
     !isResolvingAddresses &&
     // A grant that sends funds is not confirmable before the screen has shown how much.
     !(isGrant && prefundLoading) &&
-    !gasFeeLoading &&
+    !feePending &&
     !blockReason &&
     !missingCalls &&
     !revocationBlocks &&

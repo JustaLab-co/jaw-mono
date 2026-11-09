@@ -105,11 +105,13 @@ export const TransactionDialog = ({
   });
   const displayWalletAddress = getDisplayAddress(wallet.name, walletAddress);
 
+  const feePending = !!gasFeeLoading || !!estimatingTokenCosts;
   const { blockReason, hasSelectablePaymentOption, feeEstimationFailure } = resolveFeeBlock({
     feeTokens,
     gasEstimationError,
     sponsored,
     isPayingWithErc20: !!isPayingWithErc20,
+    pending: feePending,
     revertCause: assetPreviewRevertCause,
   });
 
@@ -161,13 +163,7 @@ export const TransactionDialog = ({
     apiKey
   );
   const canConfirm =
-    !isProcessing &&
-    !gasFeeLoading &&
-    !blockReason &&
-    !erc20CannotPay &&
-    !permissionBlocks &&
-    bridgeSettled &&
-    tokensRead;
+    !isProcessing && !feePending && !blockReason && !erc20CannotPay && !permissionBlocks && bridgeSettled && tokensRead;
   const transfer = bridge?.transfer;
   const title =
     transfer?.title ?? (isNativeSend ? "You're Sending" : (callTitle(singleCallDecode) ?? 'Review Transaction'));

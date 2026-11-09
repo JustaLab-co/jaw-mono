@@ -34,7 +34,12 @@ const usdc = (over: Partial<FeeTokenOption> = {}): FeeTokenOption => ({
   ...over,
 });
 
-const render = (feeTokens: FeeTokenOption[], onRetryEstimation?: () => void, estimatingTokenCosts = false) =>
+const render = (
+  feeTokens: FeeTokenOption[],
+  onRetryEstimation?: () => void,
+  estimatingTokenCosts = false,
+  gasFeeLoading = false
+) =>
   renderToStaticMarkup(
     <TransactionDialog
       open
@@ -42,7 +47,7 @@ const render = (feeTokens: FeeTokenOption[], onRetryEstimation?: () => void, est
       transactions={[{ to: '0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045', value: '0x1', chainId: 8453 }]}
       walletAddress="0x71f2F1c2dc94cDaBFE29Cb355119f8683AE0969b"
       gasFee=""
-      gasFeeLoading={false}
+      gasFeeLoading={gasFeeLoading}
       gasEstimationError={INSUFFICIENT_FUNDS_ERROR}
       sponsored={false}
       feeTokens={feeTokens}
@@ -108,5 +113,26 @@ describe('TransactionDialog fee estimation failure', () => {
   it('still says insufficient funds on a prefund shortfall', () => {
     const html = render([eth(0n), usdc({ gasCostFormatted: 'Insufficient' })]);
     expect(html).toContain('Insufficient funds');
+  });
+
+  describe('while the fee is still estimating', () => {
+    const unpayable = [eth(0n), usdc({ balance: 100_000n, balanceFormatted: '0.1' })];
+    const disabledConfirm = /<button[^>]*disabled[^>]*>Confirm</;
+
+    it('keeps Confirm disabled and does not read Insufficient Funds while gas loads', () => {
+      const html = render(unpayable, undefined, false, true);
+      expect(html).not.toContain('Insufficient Funds');
+      expect(html).toMatch(disabledConfirm);
+    });
+
+    it('does the same while the fee-token costs load', () => {
+      const html = render(unpayable, undefined, true, false);
+      expect(html).not.toContain('Insufficient Funds');
+      expect(html).toMatch(disabledConfirm);
+    });
+
+    it('reads Insufficient Funds once the estimate has settled', () => {
+      expect(render(unpayable)).toContain('Insufficient Funds');
+    });
   });
 });

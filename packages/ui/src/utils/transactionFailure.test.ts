@@ -239,7 +239,7 @@ describe('prefund shortfall vs the call reverting on its own terms', () => {
 });
 
 describe('resolveFeeBlock', () => {
-  const base = { gasEstimationError: '', sponsored: false, isPayingWithErc20: false };
+  const base = { gasEstimationError: '', sponsored: false, isPayingWithErc20: false, pending: false };
 
   it('is payable while one token of several can pay', () => {
     const fee = resolveFeeBlock({ ...base, feeTokens: [{ isSelectable: false }, { isSelectable: true }] });
@@ -268,7 +268,7 @@ describe('resolveFeeBlock', () => {
   describe('while the fee is still estimating', () => {
     const unpayable = [{ isSelectable: false }];
 
-    it.fails('holds back the funds block', () => {
+    it('holds back the funds block', () => {
       const fee = resolveFeeBlock({ ...base, feeTokens: unpayable, pending: true });
       expect(fee).toMatchObject({ blockReason: null, hasSelectablePaymentOption: false });
     });
@@ -277,12 +277,17 @@ describe('resolveFeeBlock', () => {
       expect(resolveFeeBlock({ ...base, feeTokens: unpayable, pending: false }).blockReason).toBe('funds');
     });
 
-    it.fails('keeps the estimation failure it already knows', () => {
+    it('keeps reporting a failure it already knows', () => {
       const feeTokens = [{ isSelectable: false, estimationFailure: 'reverted' }];
       expect(resolveFeeBlock({ ...base, feeTokens, pending: true })).toMatchObject({
-        blockReason: null,
+        blockReason: 'estimation-failed',
         feeEstimationFailure: 'reverted',
       });
+    });
+
+    it('keeps reporting a balance shortfall the simulation saw', () => {
+      const fee = resolveFeeBlock({ ...base, feeTokens: unpayable, pending: true, revertCause: 'balance' });
+      expect(fee.blockReason).toBe('funds');
     });
   });
 });

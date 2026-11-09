@@ -53,7 +53,7 @@ afterEach(() => {
 });
 
 describe('useAssetPreview retry', () => {
-  it.fails('never exposes an error when a retry succeeds', async () => {
+  it('never exposes an error when a retry succeeds', async () => {
     simulate.mockRejectedValueOnce(new Error('timeout')).mockResolvedValue(OK);
     await render(props());
 
@@ -65,7 +65,7 @@ describe('useAssetPreview retry', () => {
     expect(latest?.assetsOut).toEqual([DELTA]);
   });
 
-  it.fails('turns error on only after the third rejection', async () => {
+  it('turns error on only after the third rejection', async () => {
     simulate.mockRejectedValue(new Error('timeout'));
     await render(props());
     await advance(3_000);
@@ -78,7 +78,7 @@ describe('useAssetPreview retry', () => {
     expect(simulate).toHaveBeenCalledTimes(3);
   });
 
-  it.fails('warns with the error on each rejection', async () => {
+  it('warns with the error on each rejection', async () => {
     const failure = new Error('timeout');
     simulate.mockRejectedValue(failure);
     await render(props());
@@ -88,7 +88,7 @@ describe('useAssetPreview retry', () => {
     expect(vi.mocked(console.warn).mock.calls[0]).toContain(failure);
   });
 
-  it.fails('starts over with a fresh count when the calls change during a retry wait', async () => {
+  it('starts over with a fresh count when the calls change during a retry wait', async () => {
     simulate.mockRejectedValue(new Error('timeout'));
     const rerender = await render(props());
     expect(simulate).toHaveBeenCalledTimes(1);
