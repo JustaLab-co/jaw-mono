@@ -12,6 +12,7 @@ import { type TransactionCall } from '@jaw.id/core';
 import { getJawPublicClient } from './publicClient';
 import { subscriptDecimal } from './displayFormat';
 import { classifyRevert, type RevertCause } from './transactionFailure';
+import { SYMBOL_CALLDATA, cleanSymbol, decodeSymbol } from './tokenSymbol';
 
 export interface RawAssetChange {
   token: { address: string; decimals?: number; symbol?: string };
@@ -65,7 +66,7 @@ export function mapAssetChanges(
 
     const isNative = c.token.address.toLowerCase() === ethAddress;
     const isNft = erc721.has(c.token.address.toLowerCase());
-    const symbol = isNative ? (c.token.symbol ?? 'ETH') : c.token.symbol;
+    const symbol = isNative ? (c.token.symbol ?? 'ETH') : cleanSymbol(c.token.symbol);
     const reported = c.token.decimals;
     const usable = reported !== undefined && Number.isInteger(reported) && reported >= 0 && reported <= MAX_DECIMALS;
     const decimals = isNative ? 18 : isNft ? 0 : usable ? reported : 0;
@@ -157,14 +158,14 @@ export interface AssetBatch {
 }
 
 export interface ResolvedTokenUnits {
-  /** `changes`, with the decimals viem left `undefined` filled in wherever they could be read. */
+  /** `changes`, with the decimals and symbols viem left `undefined` filled in wherever they could be read. */
   changes: RawAssetChange[];
   /** Lowercased addresses confirmed as ERC-721, whose diffs read as whole-token counts. */
   erc721: Set<string>;
 }
 
 /**
- * Repair the token metadata viem could not pin down, for the two shapes where it renders wrong.
+ * Repair the token metadata viem could not pin down, for the three shapes where it renders wrong.
  *
  * viem infers `decimals` as `Number(decimals() ?? 1)` when either `decimals()` or `tokenURI(0)`
  * answers, and `undefined` when both revert. That misses:
@@ -174,9 +175,12 @@ export interface ResolvedTokenUnits {
  * - **0-decimal ERC-20s**, which arrive as `undefined` because viem's `tokenURI_ || decimals_`
  *   guard reads a `0n` result as falsy — so a real transfer vanishes from the preview. Reading
  *   `decimals()` ourselves recovers it.
+ * - **Tokens with no symbol**, since viem decodes `symbol()` as a string only and a `bytes32`
+ *   one (MKR style) arrives `undefined`. Asking again and decoding either form names them as
+ *   the bridge read does.
  *
- * Only those two shapes are suspects, so a batch of tokens with readable non-1 decimals asks
- * nothing extra. When it does ask, every probe rides in one `eth_simulateV1` — one request
+ * Only those shapes are asked about, so a batch of tokens with readable non-1 decimals and a
+ * symbol asks nothing extra. When it does ask, every probe rides in one `eth_simulateV1` — one request
  * whatever the candidate count — with `batch` replayed in the block ahead of them.
  *
  * That replay is what makes the answers match the amounts. viem reads its own `decimals` and
@@ -210,7 +214,10 @@ export async function resolveTokenUnits(
       c.token.address.toLowerCase() !== ethAddress &&
       (c.token.decimals === undefined || c.token.decimals === 1)
   );
-  if (suspects.length === 0) return { changes: [...changes], erc721: new Set() };
+  const unnamed = changes.filter(
+    (c) => c.value.diff !== 0n && c.token.address.toLowerCase() !== ethAddress && !cleanSymbol(c.token.symbol)
+  );
+  if (suspects.length === 0 && unnamed.length === 0) return { changes: [...changes], erc721: new Set() };
 
   const unknownDecimals = suspects.filter((c) => c.token.decimals === undefined);
   const supportsInterfaceData = encodeFunctionData({
@@ -221,6 +228,7 @@ export async function resolveTokenUnits(
   const decimalsData = encodeFunctionData({ abi: erc20DecimalsAbi, functionName: 'decimals' });
   // Raw calldata rather than `simulateBlocks`' `abi` shortcut: that shortcut decodes inside the
   // action, where a throw escapes as a node error and takes every other probe with it.
+  // A failed request with no decimals asked leaves the rows as they are, only unnamed.
   const [, block] = await simulateBlocks(client, {
     blockNumber,
     blocks: [
@@ -235,10 +243,15 @@ export async function resolveTokenUnits(
             data: supportsInterfaceData,
           })),
           ...unknownDecimals.map((c) => ({ from: batch.account, to: c.token.address as Address, data: decimalsData })),
+          ...unnamed.map((c) => ({ from: batch.account, to: c.token.address as Address, data: SYMBOL_CALLDATA })),
         ],
       },
     ],
+  }).catch((e: unknown) => {
+    if (suspects.length > 0) throw e;
+    return [];
   });
+  if (!block && suspects.length === 0) return { changes: [...changes], erc721: new Set() };
   // Every other "no answer" here is a contract's own, and is read as one (see `probeAnswer`). A
   // node that returns fewer blocks than it was asked for is not that, so it must not read as a
   // batch of silent tokens — it rejects, and the caller shows its fallback.
@@ -262,12 +275,19 @@ export async function resolveTokenUnits(
     );
     if (read !== null) recovered.set(address, read);
   });
+  const named = new Map<string, string>();
+  unnamed.forEach((c, k) => {
+    const symbol = probeAnswer(block.calls[suspects.length + unknownDecimals.length + k], decodeSymbol);
+    if (symbol) named.set(c.token.address.toLowerCase(), symbol);
+  });
 
   return {
     erc721,
     changes: changes.map((c) => {
-      const decimals = recovered.get(c.token.address.toLowerCase());
-      return decimals === undefined ? c : { ...c, token: { ...c.token, decimals } };
+      const address = c.token.address.toLowerCase();
+      const decimals = recovered.get(address) ?? c.token.decimals;
+      const symbol = named.get(address) ?? c.token.symbol;
+      return { ...c, token: { ...c.token, decimals, symbol } };
     }),
   };
 }
