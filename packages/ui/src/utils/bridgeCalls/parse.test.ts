@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { BRIDGE_CHAINS, type BridgeChain } from './contracts';
-import { parse } from './parse';
+import { parse, tableProblem } from './parse';
 
 type Body = { version: number; chains: Record<string, BridgeChain> };
 
@@ -15,6 +15,7 @@ const reason = (raw: unknown) => {
 };
 
 const BASE_USDC = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
+const PROXY = '0x5567954cD026CEbFE486062cb75848e0f1c12E58';
 
 describe('given the body the proxy serves for the bridge table', () => {
   it('when it is the compiled table, then it reads as a live table of that version', () => {
@@ -41,9 +42,13 @@ describe('given the body the proxy serves for the bridge table', () => {
     expect(reason(raw)).toBe('chain 4663: an address holds two roles');
   });
 
-  it('when a Relay approval proxy is lowercase, then it is rejected as not checksummed', () => {
-    const raw = body((b) => (b.chains['8453'].relay!.approvalProxies = ['0x5567954cd026cebfe486062cb75848e0f1c12e58']));
-    expect(reason(raw)).toContain('not a checksummed address');
+  it.each([
+    ['a lowercase one', (c: BridgeChain) => (c.relay!.approvalProxies = [PROXY.toLowerCase() as typeof PROXY])],
+    ['one listed twice', (c: BridgeChain) => (c.relay!.approvalProxies = [PROXY, PROXY])],
+    ['the depository', (c: BridgeChain) => (c.relay!.approvalProxies = [c.relay!.depository])],
+  ])('when it carries %s as a Relay approval proxy, then it is accepted without the proxies', (_name, change) => {
+    const result = parse(body((b) => change(b.chains['8453'])));
+    expect(result.ok && result.contracts.chain(8453)?.relay).not.toHaveProperty('approvalProxies');
   });
 
   it('when keys arrive in another order, then the table is the same', () => {
@@ -116,14 +121,6 @@ describe('given the body the proxy serves for the bridge table', () => {
     ['a Relay router and the depository', (c: BridgeChain) => (c.relay!.erc20Routers = [c.relay!.depository])],
     ['a Relay solver and the Across spoke pool', (c: BridgeChain) => (c.relay!.solvers = [c.across!.spokePool])],
     ['a Relay router and a Relay solver', (c: BridgeChain) => (c.relay!.erc20Routers = [...c.relay!.solvers])],
-    [
-      'a Relay approval proxy and the depository',
-      (c: BridgeChain) => (c.relay!.approvalProxies = [c.relay!.depository]),
-    ],
-    [
-      'a Relay approval proxy and a Relay router',
-      (c: BridgeChain) => (c.relay!.approvalProxies = [...c.relay!.erc20Routers]),
-    ],
   ])('when one chain gives %s the same address, then it is rejected', (_name, change) => {
     expect(reason(body((b) => change(b.chains['8453'])))).toBe('chain 8453: an address holds two roles');
   });
@@ -153,5 +150,31 @@ describe('given the body the proxy serves for the bridge table', () => {
 
   it('when a Relay chain lists no solver, then it is rejected for its shape', () => {
     expect(reason(body((b) => (b.chains['8453'].relay!.solvers = [])))).toMatch(/^bad shape/);
+  });
+});
+
+describe('given a merged table whose Relay approval proxies come from the build', () => {
+  const problem = (change: (chain: BridgeChain) => void) => {
+    const chains = JSON.parse(JSON.stringify(BRIDGE_CHAINS)) as Record<string, BridgeChain>;
+    change(chains['8453']);
+    return tableProblem(chains);
+  };
+
+  it('when a proxy is also the depository, then it is rejected', () => {
+    expect(problem((c) => (c.relay!.approvalProxies = [c.relay!.depository]))).toBe(
+      'chain 8453: an address holds two roles'
+    );
+  });
+
+  it('when a proxy is also a Relay router, then it is rejected', () => {
+    expect(problem((c) => (c.relay!.approvalProxies = [...c.relay!.erc20Routers]))).toBe(
+      'chain 8453: an address holds two roles'
+    );
+  });
+
+  it('when a proxy is listed twice, then it is rejected as a repeated proxy', () => {
+    expect(problem((c) => (c.relay!.approvalProxies = [PROXY, PROXY]))).toBe(
+      'chain 8453: a Relay approval proxy is listed twice'
+    );
   });
 });

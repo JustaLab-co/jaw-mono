@@ -21,7 +21,7 @@ export type AcrossContracts = {
  * through one of erc20Routers by one of the solvers; testnet orders may leave the router out.
  * erc20Routers holds every router Relay lists for the chain, since quotes and older orders
  * name different versions. approvalProxies are the contracts a same-chain swap pulls the token
- * through, one per router version; the network overlay never replaces them.
+ * through. They come only from the build: the live table's are dropped when it is parsed.
  */
 export type RelayContracts = {
   depository: Address;
