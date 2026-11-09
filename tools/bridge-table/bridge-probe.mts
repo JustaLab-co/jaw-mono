@@ -5,9 +5,8 @@
 //   bun tools/bridge-table/bridge-probe.mts      Exits 1 if any quote reads as unreadable.
 import { zeroAddress, type Address } from 'viem';
 import { readAcrossCall } from '../../packages/ui/src/utils/bridgeCalls/across.ts';
-import { readBridgeApprove } from '../../packages/ui/src/utils/bridgeCalls/approve.ts';
+import { readBridgeCall } from '../../packages/ui/src/utils/bridgeCalls/batch.ts';
 import { BRIDGE_CHAINS, JAW_FEE_RECIPIENT } from '../../packages/ui/src/utils/bridgeCalls/contracts.ts';
-import { readRelayCall, readRelaySwap } from '../../packages/ui/src/utils/bridgeCalls/relay.ts';
 import { readRelayOrder } from '../../packages/ui/src/utils/bridgeCalls/relayOrder.ts';
 import { snapshotContracts } from '../../packages/ui/src/utils/bridgeCalls/table.ts';
 import type { BridgeCall } from '../../packages/ui/src/utils/bridgeCalls/view.ts';
@@ -172,14 +171,11 @@ async function problemOf(provider: Provider, pair: Pair): Promise<string | undef
   }
   const { calls, orderData } = await relayCalls(pair);
   let deposits = 0;
-  for (const [at, call] of calls.entries()) {
-    const read =
-      readRelayCall(contracts, call) ??
-      readRelaySwap(contracts, call, ACCOUNT, calls[at - 1]) ??
-      readBridgeApprove(contracts, call);
+  for (const call of calls) {
+    const read = readBridgeCall(contracts, call, ACCOUNT);
     if (read?.kind === 'swap') {
       deposits++;
-    } else if (read?.kind === 'deposit') {
+    } else if (read?.kind === 'deposit' && read.provider === 'relay') {
       deposits++;
       const order = readRelayOrder(contracts, { orderData }, read);
       if (order?.kind === 'unshown') line('warn', `${labelOf('relay', pair)}: ${order.reason}`);

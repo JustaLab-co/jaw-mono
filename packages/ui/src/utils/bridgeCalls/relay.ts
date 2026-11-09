@@ -1,7 +1,6 @@
 import {
   decodeFunctionData,
   encodeFunctionData,
-  getAddress,
   isAddress,
   isAddressEqual,
   parseAbi,
@@ -9,7 +8,6 @@ import {
   type Address,
   type Hex,
 } from 'viem';
-import { readBridgeApprove } from './approve';
 import type { BridgeContracts } from './table';
 import { callValue, tokenAmount, type BridgeCall, type Inert, type TokenAmount, type Unreadable } from './view';
 
@@ -33,60 +31,27 @@ export function readRelayCall(
   return depositOf(contracts, call) ?? { kind: 'unreadable', what: 'deposit' };
 }
 
-/**
- * A swap through Relay's approval proxy. What it pulls is read; what it pays out is not in the call.
- * `crossChain` is set when a pinned solver takes the output here to pay out on a chain the call does
- * not name.
- */
-export type RelaySwap = { kind: 'swap'; provider: 'relay'; send: TokenAmount; crossChain?: true };
+/** A same-chain swap through Relay's approval proxy. What it pulls is read; what it pays out is not in the call. */
+export type RelaySwap = { kind: 'swap'; provider: 'relay'; send: TokenAmount };
 
 /**
  * The proxy pulls exactly `tokens` and `amounts` from the account into Relay's router, which runs
  * the inner calls with only those funds and returns only leftover native token to `refundTo`.
  * ERC-20 leftovers move through the inner calls, which are not read, so the summary claims nothing
- * about them. A same-chain swap refunds to the account; a cross-chain one to one of Relay's solvers.
+ * about them. Only the same-chain shape is read: one token, no value, and refundTo and nftRecipient
+ * both the account. Any other call to the proxy is left to the generic review screen.
  */
-export function readRelaySwap(
-  contracts: BridgeContracts,
-  call: BridgeCall,
-  account: Address,
-  before: BridgeCall | undefined
-): RelaySwap | Unreadable | undefined {
+export function readRelaySwap(contracts: BridgeContracts, call: BridgeCall, account: Address): RelaySwap | undefined {
   const proxies = contracts.chain(call.chainId)?.relay?.approvalProxies ?? [];
   const { to } = call;
   if (!isAddress(to, { strict: false }) || !proxies.some((proxy) => isAddressEqual(proxy, to))) return undefined;
-  return swapOf(contracts, call, account, before) ?? { kind: 'unreadable', what: 'swap' };
-}
 
-// One token, pulled for the exact amount in the call. Relay leaves the approve out when the allowance
-// already covers it, but an approve right before it must be on the same chain, for this proxy, and
-// for exactly the token and amount pulled.
-function swapOf(
-  contracts: BridgeContracts,
-  call: BridgeCall,
-  account: Address,
-  before: BridgeCall | undefined
-): RelaySwap | undefined {
   const swap = decodeSwap(call.data);
   if (!swap || callValue(call.value) !== 0n) return undefined;
   const [tokens, amounts, , refundTo, nftRecipient] = swap.args;
   if (tokens.length !== 1 || amounts.length !== 1) return undefined;
-  if (!isAddressEqual(refundTo, nftRecipient)) return undefined;
-  const solvers = contracts.chain(call.chainId)?.relay?.solvers ?? [];
-  const crossChain = solvers.some((solver) => isAddressEqual(solver, refundTo));
-  if (!crossChain && !isAddressEqual(refundTo, account)) return undefined;
-  const read: RelaySwap = {
-    kind: 'swap',
-    provider: 'relay',
-    send: tokenAmount(contracts, call.chainId, tokens[0], amounts[0]),
-    ...(crossChain && { crossChain: true }),
-  };
-
-  const approve = before && readBridgeApprove(contracts, before);
-  if (approve?.kind !== 'approve') return read;
-  if (before?.chainId !== call.chainId || !isAddressEqual(approve.spender, getAddress(call.to))) return undefined;
-  if (!isAddressEqual(approve.token.address, tokens[0]) || approve.amount !== amounts[0]) return undefined;
-  return read;
+  if (!isAddressEqual(refundTo, account) || !isAddressEqual(nftRecipient, account)) return undefined;
+  return { kind: 'swap', provider: 'relay', send: tokenAmount(contracts, call.chainId, tokens[0], amounts[0]) };
 }
 
 function depositOf(contracts: BridgeContracts, call: BridgeCall): RelayDeposit | Inert | undefined {

@@ -6,7 +6,7 @@ export type BridgeProvider = 'across' | 'relay';
 
 export type BridgeCall = { chainId: number; to: string; data?: string; value?: string };
 
-export type Unreadable = { kind: 'unreadable'; what: 'deposit' | 'swap' | 'approval' };
+export type Unreadable = { kind: 'unreadable'; what: 'deposit' | 'approval' };
 
 /** A call to a pinned bridge contract that moves nothing: it can only revert, or it deposits zero. */
 export type Inert = { kind: 'inert' };

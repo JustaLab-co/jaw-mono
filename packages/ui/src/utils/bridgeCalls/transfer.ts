@@ -37,8 +37,6 @@ const tokenNotice = (token: Token) =>
     : `This screen does not know the token ${token.address}. Check it before you confirm.`;
 const unknownChain = (id: number) =>
   `This screen does not know chain ${id} and cannot confirm that the recipient there is this account. Check it before you confirm.`;
-const RELAY_SWAP_HIDDEN =
-  'Relay does not say in this transaction what the swap pays out, so this screen cannot confirm what you get. Confirm only if you started this swap yourself.';
 const RELAY_HIDDEN =
   'Relay keeps the destination chain and the recipient in an order outside this transaction. This screen cannot show them. Confirm only if you started this transfer yourself.';
 
@@ -151,13 +149,18 @@ function relayTransfer(
 }
 
 function relaySwapTransfer(contracts: BridgeContracts, swap: RelaySwap): TransferRead {
-  const notices = [swap.crossChain ? RELAY_HIDDEN : RELAY_SWAP_HIDDEN];
-  if (!swap.send.token.known) notices.push(tokenNotice(swap.send.token));
-  const origin = labelOf(contracts, swap.send.chainId);
-  const transfer: BridgeTransfer = swap.crossChain
-    ? { provider: 'relay', title: 'Bridge through Relay', send: swap.send, origin, details: [] }
-    : { provider: 'relay', title: 'Swap through Relay', send: swap.send, origin, sameChain: true, details: [] };
-  return { transfer, notices };
+  const notices = swap.send.token.known ? [] : [tokenNotice(swap.send.token)];
+  return {
+    transfer: {
+      provider: 'relay',
+      title: 'Swap through Relay',
+      send: swap.send,
+      origin: labelOf(contracts, swap.send.chainId),
+      sameChain: true,
+      details: [],
+    },
+    notices,
+  };
 }
 
 // Only a plain Across deposit can name a chain the table lacks, and what it pays out is never native.

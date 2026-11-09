@@ -30,7 +30,7 @@ export type BridgeStep = { unreadable: true } | null;
 export type BridgeBatch = { transfer?: BridgeTransfer; steps: BridgeStep[]; alerts: string[]; notices: string[] };
 
 type Deposit = AcrossDeposit | RelayDeposit | RelaySwap;
-type Read = Deposit | BridgeApprove | Inert | Unreadable | undefined;
+export type BridgeRead = Deposit | BridgeApprove | Inert | Unreadable | undefined;
 type Pull = { token: Address; amount: bigint; spender: Address };
 
 // A lone call has no step number on screen, so the line names no step.
@@ -46,12 +46,22 @@ function cannotRead(what: Unreadable['what'], steps: number[], batchSize: number
   return `${sentence} ${CHECK_RAW}`;
 }
 
-function unreadableAlerts(reads: Read[]): string[] {
+function unreadableAlerts(reads: BridgeRead[]): string[] {
   const stepsBy = new Map<Unreadable['what'], number[]>();
   reads.forEach((read, at) => {
     if (read?.kind === 'unreadable') stepsBy.set(read.what, [...(stepsBy.get(read.what) ?? []), at + 1]);
   });
   return [...stepsBy].map(([what, steps]) => cannotRead(what, steps, reads.length));
+}
+
+/** One call on its own, before it is paired with the rest of the batch. */
+export function readBridgeCall(contracts: BridgeContracts, call: BridgeCall, account: Address): BridgeRead {
+  return (
+    readAcrossCall(contracts, call) ??
+    readRelayCall(contracts, call) ??
+    readRelaySwap(contracts, call, account) ??
+    readBridgeApprove(contracts, call)
+  );
 }
 
 export function readBridgeBatch(
@@ -70,13 +80,7 @@ export function readBridgeBatchWithUnread(
   account: Address,
   relayOrder?: unknown
 ): { batch: BridgeBatch; unread: TokenRef[] } | null {
-  const reads: Read[] = calls.map(
-    (call, at) =>
-      readAcrossCall(contracts, call) ??
-      readRelayCall(contracts, call) ??
-      readRelaySwap(contracts, call, account, calls[at - 1]) ??
-      readBridgeApprove(contracts, call)
-  );
+  const reads: BridgeRead[] = calls.map((call) => readBridgeCall(contracts, call, account));
   if (reads.every((read) => read === undefined)) return null;
 
   const steps = reads.map(stepOf);
@@ -137,9 +141,9 @@ function erc20Call(data: string | undefined) {
 }
 
 // Each deposit that pulls a token pairs with the approve right before it on the same chain.
-function approveNotices(calls: BridgeCall[], reads: Read[]): string[] {
+function approveNotices(calls: BridgeCall[], reads: BridgeRead[]): string[] {
   const notices: string[] = [];
-  const paired = new Set<Read>();
+  const paired = new Set<BridgeRead>();
   reads.forEach((read, at) => {
     const before = reads[at - 1];
     if (!isDeposit(read) || before?.kind !== 'approve' || calls[at - 1].chainId !== calls[at].chainId) return;
@@ -152,9 +156,9 @@ function approveNotices(calls: BridgeCall[], reads: Read[]): string[] {
   return notices;
 }
 
-const isDeposit = (read: Read): read is Deposit => read?.kind === 'deposit' || read?.kind === 'swap';
+const isDeposit = (read: BridgeRead): read is Deposit => read?.kind === 'deposit' || read?.kind === 'swap';
 
-const stepOf = (read: Read): BridgeStep => (read?.kind === 'unreadable' ? { unreadable: true } : null);
+const stepOf = (read: BridgeRead): BridgeStep => (read?.kind === 'unreadable' ? { unreadable: true } : null);
 
 function pullOf({ send }: Deposit, call: BridgeCall): Pull | undefined {
   if (send.token.address === zeroAddress) return undefined;
