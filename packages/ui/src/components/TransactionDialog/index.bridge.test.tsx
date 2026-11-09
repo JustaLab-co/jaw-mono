@@ -413,8 +413,6 @@ describe('TransactionDialog with a bridge deposit', () => {
 describe('TransactionDialog notices around a bridge deposit', () => {
   const ATTACKER = '0x2222222222222222222222222222222222222222';
   const USDBC = '0xd9aAEc86B65D86f6A7B5B1b0c42FFA531710b6CA';
-  const APPROVE_UNKNOWN =
-    'This batch approves a token this screen does not know. Check its address before you confirm.';
   const OUTSIDE = `Step 3 calls ${ATTACKER} outside the bridge. Check it before you confirm.`;
   const extraCall: BridgeCall = { chainId: 8453, to: ATTACKER, data: '0x12345678' };
 
@@ -481,16 +479,14 @@ describe('TransactionDialog notices around a bridge deposit', () => {
     expect(yellow(root)).toEqual([]);
   });
 
-  it('shows the notice for an approve of an unknown token with no deposit', () => {
+  it('shows no notice for an approve of an unknown token with no deposit', () => {
     const root = render([{ ...approve(SPOKE_POOL), to: USDBC }]);
-    expect(yellow(root)).toContain(APPROVE_UNKNOWN);
+    expect(yellow(root)).toEqual([]);
   });
 
-  it('shows an unpaired approve notice in view', () => {
+  it('shows no notice for an approve that no deposit uses', () => {
     const root = render([ACROSS_CALLS.prod, approve(SPOKE_POOL)]);
-    expect(yellow(root)).toEqual([
-      'This batch has an approval that no deposit uses. Check its token, amount and spender.',
-    ]);
+    expect(yellow(root)).toEqual([]);
   });
 
   it('leaves a transaction that is not a bridge call without bridge notices', () => {

@@ -18,8 +18,6 @@ import { pinnedToken, unreadRefs, type BridgeCall, type Inert, type TokenRef, ty
 
 const OTHER_CONTRACT = 'This approval is for a different contract than the deposit.';
 const OTHER_TOKEN = 'This approval is for a different token than the deposit.';
-const UNPAIRED = 'This batch has an approval that no deposit uses. Check its token, amount and spender.';
-const APPROVE_UNKNOWN = 'This batch approves a token this screen does not know. Check its address before you confirm.';
 
 const CHECK = 'Check it before you confirm.';
 const CHECK_RAW = 'Check the raw details before you confirm.';
@@ -85,8 +83,7 @@ export function readBridgeBatchWithUnread(
   const approves = reads.flatMap((read, at) =>
     read?.kind === 'approve' ? [{ chainId: calls[at].chainId, read }] : []
   );
-  if (approves.some(({ read }) => !read.token.known)) notices.push(APPROVE_UNKNOWN);
-  if (deposits.length > 0) notices.push(...approveNotices(calls, reads));
+  notices.push(...approveNotices(calls, reads));
   calls.forEach((call, i) => reads[i] === undefined && notices.push(outsideNotice(contracts, call, i + 1)));
   return {
     batch: {
@@ -133,16 +130,13 @@ function erc20Call(data: string | undefined) {
 // Each deposit that pulls a token pairs with the approve right before it on the same chain.
 function approveNotices(calls: BridgeCall[], reads: Read[]): string[] {
   const notices: string[] = [];
-  const paired = new Set<Read>();
   reads.forEach((read, at) => {
     const before = reads[at - 1];
     if (read?.kind !== 'deposit' || before?.kind !== 'approve' || calls[at - 1].chainId !== calls[at].chainId) return;
     const pull = pullOf(read, calls[at]);
     if (!pull) return;
-    paired.add(before);
     notices.push(...pairingNotices(before, pull));
   });
-  if (reads.some((read) => read?.kind === 'approve' && !paired.has(read))) notices.push(UNPAIRED);
   return notices;
 }
 
