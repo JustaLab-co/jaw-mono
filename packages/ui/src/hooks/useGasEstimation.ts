@@ -133,6 +133,9 @@ function unpriced(token: FeeTokenOption): FeeTokenOption {
   };
 }
 
+/** Shown for a call revert in place of its reason, which the reverting contract wrote. */
+const REVERTED_FAILURE = "The bundler's estimate of this transaction reverted.";
+
 /**
  * Every funded ERC-20 marked as failed to estimate. The reason is recorded unless the error is a
  * balance revert, which is a real shortfall and keeps reading as one, along with whether the calls
@@ -140,8 +143,8 @@ function unpriced(token: FeeTokenOption): FeeTokenOption {
  */
 function markEstimationFailed(tokens: FeeTokenOption[], error: unknown): FeeTokenOption[] {
   const balance = classifyRevert(error) === 'balance';
-  const estimationFailure = balance ? undefined : describeFailure(error);
   const estimationReverted = !balance && isRevert(error);
+  const estimationFailure = balance ? undefined : estimationReverted ? REVERTED_FAILURE : describeFailure(error);
   return tokens.map((token) => {
     if (token.isNative) return token;
     if (token.balance === 0n) return unpriced(token);
@@ -311,9 +314,9 @@ export function useGasEstimation({
     // value. But a changed key means the fee on screen was measured for a *different* userOp: the
     // permission dialogs' first pass runs against a dummy call before the real one is built, and
     // that number must read as loading rather than pass as final.
+    // The last error stays until this run replaces it, so a retry keeps the block it is retrying.
     if (ethEstimatedForRef.current !== ethInputsKey) setGasFeeLoading(true);
     setEstimatingTokenCosts(true);
-    setGasEstimationError('');
 
     try {
       // Use refs to avoid infinite loops (these values shouldn't trigger re-estimation)
@@ -477,7 +480,7 @@ export function useGasEstimation({
   /** Explicit refetch discards the reuse key so the ETH leg is genuinely re-measured. */
   const forceRefetch = useCallback(() => {
     ethEstimatedForRef.current = '';
-    void estimateGas();
+    return estimateGas();
   }, [estimateGas]);
 
   // -------------------------------------------------------------------------

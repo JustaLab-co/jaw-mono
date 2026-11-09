@@ -492,7 +492,7 @@ const ETH_BALANCE = word(10n ** 18n);
  * Answers are keyed off the exact calldata, not just "request 3", so a probe asking the wrong
  * question — a different interface id, the two probe groups swapped — fails here.
  */
-function stubNode({ batchReverts = false, senderRejected = false } = {}) {
+function stubNode({ batchReverts = false, senderRejected = false, metadataFails = false } = {}) {
   const blockParams: unknown[] = [];
   let blockNumberCalls = 0;
   let simulations = 0;
@@ -553,6 +553,8 @@ function stubNode({ batchReverts = false, senderRejected = false } = {}) {
           ];
         }
 
+        if (metadataFails) throw new Error('metadata probe failed');
+
         // Ours: [batch replay, metadata probes]. A single block means the probes ran with nothing
         // ahead of them, so the fixture's contract is not yet deployed and cannot answer.
         const probeBlock = blockStateCalls.length - 1;
@@ -606,6 +608,14 @@ describe('simulateAssetChanges', () => {
 
     expect(result).toMatchObject({ willRevert: true, deltas: [], revertCause: 'balance' });
     expect(node.simulations()).toBe(2);
+  });
+
+  it('keeps the clean verdict when the token amounts cannot be read', async () => {
+    stubNode({ metadataFails: true });
+
+    const result = await simulateAssetChanges({ chainId: base.id, account: ACCOUNT, calls });
+
+    expect(result).toEqual({ deltas: [], willRevert: false, unreadable: true });
   });
 
   it('rejects, rather than reporting a revert, when the node refused to run the batch', async () => {
