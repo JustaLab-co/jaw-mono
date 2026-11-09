@@ -120,20 +120,14 @@ export type RelayOrder = {
 };
 export type Refund = { chainId: number; to: Address };
 /** `token` is the one whose symbol and decimals would let the terms show. */
-export type OrderUnshown = { kind: 'unshown'; reason: string; outsideTable?: true; token?: TokenRef };
+export type OrderUnshown = { kind: 'unshown'; reason: string; token?: TokenRef };
 
-const unshown = (reason: string, outsideTable?: true, token?: TokenRef): OrderUnshown => ({
-  kind: 'unshown',
-  reason,
-  outsideTable,
-  token,
-});
-const includes = (what: string, outsideTable?: true, token?: TokenRef) =>
-  unshown(`This Relay order includes ${what}, so its terms are not shown.`, outsideTable, token);
+const unshown = (reason: string, token?: TokenRef): OrderUnshown => ({ kind: 'unshown', reason, token });
+const includes = (what: string, token?: TokenRef) =>
+  unshown(`This Relay order includes ${what}, so its terms are not shown.`, token);
 const MISMATCH = unshown('The Relay order details do not match this deposit, so this screen does not show them.');
 const UNKNOWN_ROUTE = unshown(
-  'This Relay order uses a solver or route this screen does not recognize, so its terms are not shown.',
-  true
+  'This Relay order uses a solver or route this screen does not recognize, so its terms are not shown.'
 );
 const isAddress = (hex: Hex): hex is Address => hex.length === 42;
 const sameBytes = (a: Hex, b: Hex) => a.toLowerCase() === b.toLowerCase();
@@ -197,10 +191,10 @@ function termsOf(contracts: BridgeContracts, order: Order): RelayOrder | OrderUn
   const currency = paid.toLowerCase() as Hex;
   const destination = contracts.relayByProtocolChain(output.chainId)?.chainId;
   if (destination === undefined || !isAddress(recipient)) return undefined;
-  if (!isAddress(currency)) return includes('an unrecognized token', true);
+  if (!isAddress(currency)) return includes('an unrecognized token');
   const token = tokenOf(contracts, destination, currency);
   if (currency !== zeroAddress && !token.known && !token.unverified) {
-    return includes('an unrecognized token', true, { chainId: destination, address: currency });
+    return includes('an unrecognized token', { chainId: destination, address: currency });
   }
   const refunds = refundsOf(contracts, order);
   if (!refunds) return undefined;

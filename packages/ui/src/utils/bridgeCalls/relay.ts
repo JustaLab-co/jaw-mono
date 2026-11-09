@@ -9,7 +9,7 @@ import {
   type Hex,
 } from 'viem';
 import type { BridgeContracts } from './table';
-import { callValue, tokenAmount, type BridgeCall, type TokenAmount, type Unreadable } from './view';
+import { callValue, tokenAmount, type BridgeCall, type Inert, type TokenAmount, type Unreadable } from './view';
 
 const DEPOSITORY_ABI = parseAbi([
   'function depositNative(address depositor, bytes32 id)',
@@ -18,20 +18,24 @@ const DEPOSITORY_ABI = parseAbi([
 
 export type RelayDeposit = { kind: 'deposit'; provider: 'relay'; send: TokenAmount; depositor: Address; orderId: Hex };
 
-export function readRelayCall(contracts: BridgeContracts, call: BridgeCall): RelayDeposit | Unreadable | undefined {
+export function readRelayCall(
+  contracts: BridgeContracts,
+  call: BridgeCall
+): RelayDeposit | Inert | Unreadable | undefined {
   const depository = contracts.chain(call.chainId)?.relay?.depository;
   if (!depository || !isAddress(call.to, { strict: false }) || !isAddressEqual(call.to, depository)) return undefined;
-  return depositOf(contracts, call) ?? { kind: 'unreadable', provider: 'relay' };
+  return depositOf(contracts, call) ?? { kind: 'unreadable', what: 'deposit' };
 }
 
-function depositOf(contracts: BridgeContracts, call: BridgeCall): RelayDeposit | undefined {
+function depositOf(contracts: BridgeContracts, call: BridgeCall): RelayDeposit | Inert | undefined {
   const deposit = decodeExact(call.data);
   const value = callValue(call.value);
   if (!deposit || value === undefined) return undefined;
 
   if (deposit.functionName === 'depositNative') {
     const [depositor, orderId] = deposit.args;
-    if (value === 0n) return undefined;
+    // The depository only records a deposit of zero (RelayDepository.depositNative).
+    if (value === 0n) return { kind: 'inert' };
     return {
       kind: 'deposit',
       provider: 'relay',

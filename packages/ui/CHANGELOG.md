@@ -1,3 +1,33 @@
+## 1.12.0 (2026-11-05)
+
+### 🚀 Features
+
+- **ui:** show the SIWE request id as a code to compare ([c56bcfff](https://github.com/JustaLab-co/jaw-mono/commit/c56bcfff))
+
+### 🩹 Fixes
+
+- **ui:** show only a strict request code and refuse mid-line field blocks ([873d7bcc](https://github.com/JustaLab-co/jaw-mono/commit/873d7bcc))
+
+### ❤️ Thank You
+
+- Ghadi Mhawej
+
+## 1.11.7 (2026-11-03)
+
+### 🩹 Fixes
+
+- **ui:** word the unpaired approval for several deposits ([cb7ab8f6](https://github.com/JustaLab-co/jaw-mono/commit/cb7ab8f6))
+- **ui:** drop bridge warnings the owner cannot act on ([baf2a202](https://github.com/JustaLab-co/jaw-mono/commit/baf2a202))
+- **ui:** align unreadable marks with their text ([e8928ed5](https://github.com/JustaLab-co/jaw-mono/commit/e8928ed5))
+- **ui:** address review of unreadable call icon ([8a851831](https://github.com/JustaLab-co/jaw-mono/commit/8a851831))
+- **ui:** show unreadable bridge calls as a warning icon ([bf6d1794](https://github.com/JustaLab-co/jaw-mono/commit/bf6d1794))
+- **ui:** name unreadable steps in the bridge alert line ([0d030c4b](https://github.com/JustaLab-co/jaw-mono/commit/0d030c4b))
+- **ui:** show unreadable bridge calls as one compact line ([ff3ad068](https://github.com/JustaLab-co/jaw-mono/commit/ff3ad068))
+
+### ❤️ Thank You
+
+- Mariano Aguero @mariano-aguero
+
 ## 1.11.6 (2026-11-03)
 
 ### 🩹 Fixes

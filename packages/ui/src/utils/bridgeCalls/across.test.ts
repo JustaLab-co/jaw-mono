@@ -32,6 +32,7 @@ const ARB_USDC = getAddress('0xaf88d065e77c8cc2239327c5edb3a432268e5831');
 const ARB = getAddress('0x912ce59144191c1204e64559fe8253a0e49e6548');
 const NVDA = getAddress('0xd0601ce157db5bdc3162bbac2a2c8af5320d9eec');
 const ARB_WETH = getAddress('0x82af49447d8a07e3bd95bd0d56f35241523fbab1');
+const BASE_WETH = getAddress('0x4200000000000000000000000000000000000006');
 const BSC_USDC = getAddress('0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d');
 const BSC_POOL = getAddress('0x4e8e101924ede233c13e2d8622dc8aed2872d505');
 const HANDLER = getAddress('0x0f7ae28de1c8532170ad4ee566b5801485c13a0e');
@@ -100,8 +101,8 @@ const transfer = (token: string, to: string, amount: bigint) => ({
   value: 0n,
 });
 
-const unreadable = { kind: 'unreadable', provider: 'across' };
-const outsideTable = { ...unreadable, outsideTable: true };
+const unreadable = { kind: 'unreadable', what: 'deposit' };
+const inert = { kind: 'inert' };
 
 describe('given the deposit call of a live Across quote', () => {
   it('then prod Base USDC to Arbitrum reads 10 USDC sent, 9.9609 USDC minimum and a 0.024964 USDC JAW fee', () => {
@@ -354,19 +355,48 @@ describe('given a deposit whose tokens or chains need the pinned table', () => {
     });
   });
 
-  it('then a destination the table lacks, or one with no Across contracts, is unreadable', () => {
+  it('then an empty message to a chain the table lacks reads the recipient and the output token there', () => {
+    const OUTPUT = getAddress('0x3333333333333333333333333333333333333333');
+    const call = withArgs(ACROSS_CALLS.usdcNofee, (a) => {
+      a[3] = word(OUTPUT);
+      a[6] = 999n;
+    });
+    expect(readAcrossCall(contracts, call)).toMatchObject({
+      kind: 'deposit',
+      destinationChainId: 999,
+      recipient: ACCOUNT,
+      receive: {
+        kind: 'minimum',
+        amount: { chainId: 999, amount: 9_990_214n, token: { address: OUTPUT, known: false } },
+      },
+    });
+  });
+
+  it('then an empty message to a chain with no Across contracts reads the same way', () => {
+    const call = withArgs(ACROSS_CALLS.usdcNofee, (a) => (a[6] = 100n));
+    expect(readAcrossCall(contracts, call)).toMatchObject({ kind: 'deposit', destinationChainId: 100 });
+  });
+
+  it('then an empty message to a chain the table lacks that pays a pinned handler is unreadable, since anyone could drain it', () => {
+    const call = withArgs(ACROSS_CALLS.usdcNofee, (a) => {
+      a[1] = word(HANDLER);
+      a[6] = 999n;
+    });
+    expect(readAcrossCall(contracts, call)).toEqual(unreadable);
+  });
+
+  it('then a chain id too large to show exactly is unreadable', () => {
+    const call = withArgs(ACROSS_CALLS.usdcNofee, (a) => (a[6] = 2n ** 53n + 1n));
+    expect(readAcrossCall(contracts, call)).toEqual(unreadable);
+  });
+
+  it('then a message to a chain the table lacks is unreadable, since its handler is unknown', () => {
     expect(
       readAcrossCall(
         contracts,
-        withArgs(ACROSS_CALLS.usdcNofee, (a) => (a[6] = 999n))
+        withArgs(ACROSS_CALLS.usdcFee, (a) => (a[6] = 999n))
       )
-    ).toEqual(outsideTable);
-    expect(
-      readAcrossCall(
-        contracts,
-        withArgs(ACROSS_CALLS.usdcNofee, (a) => (a[6] = 100n))
-      )
-    ).toEqual(outsideTable);
+    ).toEqual(unreadable);
   });
 
   it('then native ETH out to Arc, which has no pinned wrapped native, is unreadable', () => {
@@ -382,30 +412,26 @@ describe('given a deposit whose tokens or chains need the pinned table', () => {
 });
 
 describe('given an Across deposit with bytes it does not explain', () => {
-  it('then one byte after the tag is unreadable', () => {
-    expect(readAcrossCall(contracts, { ...ACROSS_CALLS.prod, data: ACROSS_CALLS.prod.data + '00' })).toEqual(
-      unreadable
-    );
+  const prodWith = (data: string) => ({ ...ACROSS_CALLS.prod, data });
+  const untagged = ACROSS_CALLS.prod.data.replace(/1dc0de016173c0de$/, '');
+
+  it.each([
+    ['one byte after the tag', ACROSS_CALLS.prod.data + '00'],
+    ['a tag other than the Across one', ACROSS_CALLS.prod.data.replace(/73c0de$/, '73c0df')],
+    ['no tag at all', untagged],
+    ['bytes of another front end', untagged + 'deadbeef'],
+  ])('then %s reads the same deposit, since the contract ignores bytes after its arguments', (_, data) => {
+    expect(readAcrossCall(contracts, prodWith(data))).toEqual(readAcrossCall(contracts, ACROSS_CALLS.prod));
+  });
+
+  it('then half a byte after the arguments is unreadable', () => {
+    expect(readAcrossCall(contracts, prodWith(untagged + '0'))).toEqual(unreadable);
   });
 
   it('then an address argument with dirty high bytes is unreadable', () => {
     const { data } = ACROSS_CALLS.nativeEth;
     expect(
       readAcrossCall(contracts, { ...ACROSS_CALLS.nativeEth, data: `${data.slice(0, 10)}01${data.slice(12)}` })
-    ).toEqual(unreadable);
-  });
-
-  it('then a tag other than the Across one is unreadable', () => {
-    const data = ACROSS_CALLS.prod.data.replace(/73c0de$/, '73c0df');
-    expect(readAcrossCall(contracts, { ...ACROSS_CALLS.prod, data })).toEqual(unreadable);
-  });
-
-  it('then a deposit without the Across tag is unreadable', () => {
-    expect(
-      readAcrossCall(contracts, { ...ACROSS_CALLS.prod, data: ACROSS_CALLS.prod.data.replace(/1dc0de016173c0de$/, '') })
-    ).toEqual(unreadable);
-    expect(
-      readAcrossCall(contracts, { ...ACROSS_CALLS.usdcNofee, data: ACROSS_CALLS.usdcNofee.data.replace(/73c0de$/, '') })
     ).toEqual(unreadable);
   });
 
@@ -531,8 +557,25 @@ describe('given a periphery depositNative or deposit value that does not fit', (
     expect(readAcrossCall(contracts, { ...ACROSS_CALLS.nativeEth, value: '1' })).toEqual(unreadable);
   });
 
-  it('then a value on an ERC-20 deposit is unreadable', () => {
-    expect(readAcrossCall(contracts, { ...ACROSS_CALLS.prod, value: '1' })).toEqual(unreadable);
+  it('then a value on a SpokePool deposit of USDC moves nothing, since the SpokePool reverts', () => {
+    expect(readAcrossCall(contracts, { ...ACROSS_CALLS.prod, value: '1' })).toEqual(inert);
+  });
+
+  it('then a SpokePool deposit of WETH with the input amount as value reads that much ETH sent', () => {
+    const call = withArgs({ ...ACROSS_CALLS.usdcNofee, value: '10000000' }, (a) => (a[2] = word(BASE_WETH)));
+    expect(readAcrossCall(contracts, call)).toMatchObject({ kind: 'deposit', send: eth(8453, 10_000_000n) });
+  });
+
+  it('then a value on a SpokePool deposit is unreadable when the table pins no wrapped native token', () => {
+    const chains = structuredClone(BRIDGE_CHAINS) as Record<number, BridgeChain>;
+    delete chains[8453].across!.wrappedNative;
+    const table = new BridgeContracts({ version: 1, chains });
+    expect(readAcrossCall(table, { ...ACROSS_CALLS.prod, value: '1' })).toEqual(unreadable);
+  });
+
+  it('then a SpokePool deposit of WETH with any other value moves nothing, since the SpokePool reverts', () => {
+    const call = withArgs({ ...ACROSS_CALLS.usdcNofee, value: '9999999' }, (a) => (a[2] = word(BASE_WETH)));
+    expect(readAcrossCall(contracts, call)).toEqual(inert);
   });
 
   it('then a hex value equal to the decimal one reads the same', () => {
@@ -540,8 +583,8 @@ describe('given a periphery depositNative or deposit value that does not fit', (
     expect(readAcrossCall(contracts, hex)).toEqual(readAcrossCall(contracts, ACROSS_CALLS.nativeEth));
   });
 
-  it('then a depositNative sent to the SpokePool is unreadable', () => {
-    expect(readAcrossCall(contracts, { ...ACROSS_CALLS.nativeEth, to: ACROSS_CALLS.prod.to })).toEqual(unreadable);
+  it('then a depositNative sent to the SpokePool moves nothing, since the SpokePool has no such function', () => {
+    expect(readAcrossCall(contracts, { ...ACROSS_CALLS.nativeEth, to: ACROSS_CALLS.prod.to })).toEqual(inert);
   });
 
   it('then a native deposit from BNB Chain reads BNB, not ETH', () => {
@@ -816,17 +859,17 @@ describe('given a periphery swapAndBridge, which swaps on the origin before it d
 
   it('then a bridged token not pinned on the origin is unreadable, since the exchange could fake the swap', () => {
     expect(readAcrossCall(contracts, withSwap(ACROSS_CALLS.usdcToWeth, setDeposit('inputToken', OTHER)))).toEqual(
-      outsideTable
+      unreadable
     );
     expect(readAcrossCall(contracts, withSwap(ACROSS_CALLS.ethToUsdc, setDeposit('inputToken', USDBC)))).toEqual(
-      outsideTable
+      unreadable
     );
   });
 
-  it('then a swap to a chain the table lacks is unreadable and says the table lacks it', () => {
+  it('then a swap to a chain the table lacks is unreadable', () => {
     expect(
       readAcrossCall(contracts, withSwap(ACROSS_CALLS.usdcToWeth, setDeposit('destinationChainId', 999n)))
-    ).toEqual(outsideTable);
+    ).toEqual(unreadable);
   });
 
   it('then a value with a swap token other than WETH is unreadable', () => {
@@ -835,13 +878,13 @@ describe('given a periphery swapAndBridge, which swaps on the origin before it d
     );
   });
 
-  it('then swapAndBridge sent to the SpokePool is unreadable', () => {
-    expect(readAcrossCall(contracts, { ...ACROSS_CALLS.usdcToWeth, to: ACROSS_CALLS.prod.to })).toEqual(unreadable);
+  it('then swapAndBridge sent to the SpokePool moves nothing, since the SpokePool has no such function', () => {
+    expect(readAcrossCall(contracts, { ...ACROSS_CALLS.usdcToWeth, to: ACROSS_CALLS.prod.to })).toEqual(inert);
   });
 
-  it('then one byte after the tag is unreadable', () => {
+  it('then a byte after the tag reads the same swap', () => {
     const call = { ...ACROSS_CALLS.usdcToWeth, data: ACROSS_CALLS.usdcToWeth.data + '00' };
-    expect(readAcrossCall(contracts, call)).toEqual(unreadable);
+    expect(readAcrossCall(contracts, call)).toEqual(readAcrossCall(contracts, ACROSS_CALLS.usdcToWeth));
   });
 });
 
@@ -901,25 +944,25 @@ describe('given an Across call that needs a table entry the table in use lacks',
     }
   };
 
-  it('then a swapAndBridge whose output token is missing is unreadable and says the table lacks it', () => {
+  it('then a swapAndBridge whose output token is missing is unreadable', () => {
     const table = without(dropToken(42161, ARB_WETH));
-    expect(readAcrossCall(table, ACROSS_CALLS.usdcToWeth)).toEqual(outsideTable);
+    expect(readAcrossCall(table, ACROSS_CALLS.usdcToWeth)).toEqual(unreadable);
     expect(readAcrossCall(contracts, ACROSS_CALLS.usdcToWeth)).toMatchObject({ kind: 'deposit' });
   });
 
-  it('then a destination swap on a chain with no swap router is unreadable and says the table lacks it', () => {
+  it('then a destination swap on a chain with no swap router is unreadable', () => {
     const table = without((chains) => delete chains[42161].across!.swapRouter);
-    expect(readAcrossCall(table, ACROSS_CALLS.usdcToArb)).toEqual(outsideTable);
+    expect(readAcrossCall(table, ACROSS_CALLS.usdcToArb)).toEqual(unreadable);
   });
 
-  it('then a LiFi swap on a chain with no pinned diamond is unreadable and says the table lacks it', () => {
+  it('then a LiFi swap on a chain with no pinned diamond is unreadable', () => {
     const table = without((chains) => delete chains[4663].across!.lifiDiamond);
-    expect(readAcrossCall(table, ACROSS_CALLS.usdcToNvdaLifi)).toEqual(outsideTable);
+    expect(readAcrossCall(table, ACROSS_CALLS.usdcToNvdaLifi)).toEqual(unreadable);
   });
 
-  it('then a native deposit on a chain with no wrapped native is unreadable and says the table lacks it', () => {
+  it('then a native deposit on a chain with no wrapped native is unreadable', () => {
     const table = without((chains) => delete chains[8453].across!.wrappedNative);
-    expect(readAcrossCall(table, ACROSS_CALLS.nativeEth)).toEqual(outsideTable);
+    expect(readAcrossCall(table, ACROSS_CALLS.nativeEth)).toEqual(unreadable);
   });
 });
 
