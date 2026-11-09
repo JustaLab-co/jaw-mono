@@ -4,7 +4,7 @@ import { useSearchParams } from 'next/navigation';
 import { useEffect, useState, Suspense, useRef, useCallback } from 'react';
 import { JAW, Mode, getSupportedChains } from '@jaw.id/core';
 import { ReactUIHandler } from '@jaw.id/ui';
-import { MAX_FRAME_BYTES, parseInit, parseRequest } from '../../lib/bridge-frames';
+import { ANSWERS_KEPT, MAX_FRAME_BYTES, parseInit, parseRequest } from '../../lib/bridge-frames';
 import { keyProof, readLink, type BridgeLink } from '../../lib/bridge-proof';
 import { resolveBridgeApiKey } from '../../lib/cli-api-key';
 import { DEFAULT_BRIDGE_APP_NAME, resolveBridgeAppName } from '../../lib/bridge-app-name';
@@ -87,8 +87,11 @@ function CLIBridgeContent() {
   const sdkRef = useRef<ReturnType<typeof JAW.create> | null>(null);
   /** What `sdkRef` was built from, so a second init can tell whether it still fits. */
   const sdkSignatureRef = useRef<string | null>(null);
-  /** The first name a client gave. A dialog may be open under it, so a later init cannot rename the page. */
-  const appNameRef = useRef<string | null>(null);
+  /**
+   * The name and logo the first init gave. A dialog may be open under them, so a later init can
+   * neither rename the page nor swap or add a logo.
+   */
+  const appIdentityRef = useRef<{ name: string; logoUrl?: string } | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const sharedSecretRef = useRef<CryptoKey | null>(null);
   /**
@@ -225,7 +228,10 @@ function CLIBridgeContent() {
                   }
                   setState('connected');
                   const { chainId, ens, paymaster, client } = parsed;
-                  const name = (appNameRef.current ??= resolveBridgeAppName(parsed.appName));
+                  const { name, logoUrl: appLogoUrl } = (appIdentityRef.current ??= {
+                    name: resolveBridgeAppName(parsed.appName),
+                    logoUrl: parsed.appLogoUrl,
+                  });
                   setAppName(name);
 
                   // A CLI that brought its own key keeps it, so anyone who wants
@@ -257,11 +263,12 @@ function CLIBridgeContent() {
                   // first SDK meant the browser kept signing under the key, the
                   // chain and the paymaster of the previous run while the CLI
                   // recorded the new ones, and neither side could see the gap.
-                  const signature = JSON.stringify({ chainId, ens, paymaster, apiKey, name });
+                  const signature = JSON.stringify({ chainId, ens, paymaster, apiKey, name, appLogoUrl });
                   if (!sdkRef.current || sdkSignatureRef.current !== signature) {
                     sdkSignatureRef.current = signature;
                     sdkRef.current = JAW.create({
                       appName: name,
+                      ...(appLogoUrl ? { appLogoUrl } : {}),
                       defaultChainId: chainId,
                       preference: {
                         mode: Mode.AppSpecific,
@@ -382,7 +389,7 @@ function CLIBridgeContent() {
     return () => {
       cancelled = true;
       clearTimeout(unanswered);
-      appNameRef.current = null;
+      appIdentityRef.current = null;
       setAppName(DEFAULT_BRIDGE_APP_NAME);
       if (beforeUnloadHandler) {
         window.removeEventListener('beforeunload', beforeUnloadHandler);
@@ -481,10 +488,6 @@ const REPLACED_URL = '/cli-bridge?replaced=1';
 
 // A live server sends init as soon as the key exchange reaches it.
 const SERVER_WAIT_MS = 20_000;
-
-// A server re-asks within the 30 minute approval window, so the oldest answers
-// can go once a long session of reads would otherwise keep them all.
-const ANSWERS_KEPT = 500;
 
 /** JSON with object keys sorted, so a request rebuilt from storage in another key order is still the same request. */
 function canonical(value: unknown): string {

@@ -12,7 +12,7 @@ const USDBC = '0xd9aAEc86B65D86f6A7B5B1b0c42FFA531710b6CA';
 const BASE_SPOKE_POOL = '0x09aea4b2242abC8bb4BB78D537A67a245A7bEC64';
 const PERIPHERY = '0x97CCDBea4632140639aD5eA9b944aa034eb15fD4';
 const PERMIT2 = '0x000000000022D473030F116dDEE9F6B43aC78BA3';
-const UNREADABLE = { kind: 'unreadable', provider: 'relay' };
+const UNREADABLE = { kind: 'unreadable', what: 'approval' };
 
 const word = (hex: string) => hex.replace(/^0x/, '').toLowerCase().padStart(64, '0');
 const approve = (spender: string, amount: string): BridgeCall => ({

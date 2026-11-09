@@ -24,7 +24,7 @@ export type BridgeTransfer = {
   details: Detail[];
 };
 
-export type TransferRead = { transfer: BridgeTransfer; notices: string[]; outsideTable: boolean };
+export type TransferRead = { transfer: BridgeTransfer; notices: string[] };
 
 export const PROVIDER_NAME: Record<BridgeProvider, string> = { across: 'Across', relay: 'Relay' };
 
@@ -33,6 +33,8 @@ const tokenNotice = (token: Token) =>
   token.known === false && token.unverified
     ? `This screen has not verified the token ${token.symbol} (${formatAddress(getAddress(token.address))}). Check it before you confirm.`
     : `This screen does not know the token ${token.address}. Check it before you confirm.`;
+const unknownChain = (id: number) =>
+  `This screen does not know chain ${id} and cannot confirm that the recipient there is this account. Check it before you confirm.`;
 const RELAY_HIDDEN =
   'Relay keeps the destination chain and the recipient in an order outside this transaction. This screen cannot show them. Confirm only if you started this transfer yourself.';
 
@@ -49,13 +51,19 @@ export const transferOf = (
 function acrossTransfer(contracts: BridgeContracts, deposit: AcrossDeposit, account: Address): TransferRead {
   const { fee } = deposit;
   const notices: string[] = [];
-  if (!isAddressEqual(deposit.recipient, account)) notices.push(notThisAccount('The recipient', deposit.recipient));
+  // On a chain the table lacks, the same address may not be this account, so it is never called that.
+  const knownChain = contracts.chain(deposit.destinationChainId) !== undefined;
+  const yours = knownChain && isAddressEqual(deposit.recipient, account);
+  if (!knownChain) notices.push(unknownChain(deposit.destinationChainId));
+  else if (!yours) notices.push(notThisAccount('The recipient', deposit.recipient));
   if (!isAddressEqual(deposit.refundTo, account)) notices.push(notThisAccount('The refund address', deposit.refundTo));
   const received = deposit.receive.amount.token;
-  const unknown = [deposit.send.token, received].filter((token) => !token.known);
-  for (const token of unknown) notices.push(tokenNotice(token));
+  for (const token of [deposit.send.token, received]) if (!token.known) notices.push(tokenNotice(token));
 
-  const details: Detail[] = [accountDetail('Recipient', deposit.recipient, account)];
+  const recipient = getAddress(deposit.recipient);
+  const details: Detail[] = [
+    yours ? accountDetail('Recipient', recipient, account) : { label: 'Recipient', value: recipient, copy: recipient },
+  ];
   if (fee) {
     const to = fee.jaw ? 'JAW' : getAddress(fee.recipient);
     details.push({ label: 'Fee', value: `${amountText(fee.amount)} to ${to}`, copy: fee.jaw ? undefined : to });
@@ -75,11 +83,10 @@ function acrossTransfer(contracts: BridgeContracts, deposit: AcrossDeposit, acco
       origin,
       receive: deposit.receive,
       destination,
-      otherRecipient: isAddressEqual(deposit.recipient, account) ? undefined : deposit.recipient,
+      otherRecipient: yours ? undefined : recipient,
       details,
     },
     notices,
-    outsideTable: unknown.length > 0,
   };
 }
 
@@ -91,7 +98,6 @@ function relayTransfer(
 ): TransferRead {
   const id = deposit.orderId;
   const notices: string[] = [];
-  const outsideTable = !deposit.send.token.known || (order?.kind === 'unshown' && order.outsideTable === true);
   if (!deposit.send.token.known) notices.push(tokenNotice(deposit.send.token));
   if (!isAddressEqual(deposit.depositor, account))
     notices.push(notThisAccount('The account credited', deposit.depositor));
@@ -109,14 +115,20 @@ function relayTransfer(
         details: [credited, orderDetail],
       },
       notices,
-      outsideTable,
     };
   }
 
   const received = order.minimumReceived.token;
   if (!received.known) notices.push(tokenNotice(received));
   if (!isAddressEqual(order.recipient, account)) notices.push(notThisAccount('The recipient', order.recipient));
-  if (!isAddressEqual(order.refundTo, account)) notices.push(notThisAccount('The refund address', order.refundTo));
+  // The recipient is only known to hold its address on the destination chain.
+  for (const { chainId, to } of order.refunds) {
+    const toRecipient = chainId === order.destinationChainId && isAddressEqual(to, order.recipient);
+    if (!isAddressEqual(to, account) && !toRecipient) notices.push(notThisAccount('The refund address', to));
+  }
+  const refundDetails = order.refunds.map(({ chainId, to }) =>
+    accountDetail(`Refund on ${labelOf(contracts, chainId).name}`, to, account)
+  );
   const destination = labelOf(contracts, order.destinationChainId);
   return {
     transfer: {
@@ -127,21 +139,18 @@ function relayTransfer(
       receive: { kind: 'minimum', amount: order.minimumReceived },
       destination,
       otherRecipient: isAddressEqual(order.recipient, account) ? undefined : getAddress(order.recipient),
-      details: [
-        accountDetail('Recipient', order.recipient, account),
-        accountDetail('Refund to', order.refundTo, account),
-        credited,
-        orderDetail,
-      ],
+      details: [accountDetail('Recipient', order.recipient, account), ...refundDetails, credited, orderDetail],
     },
     notices,
-    outsideTable: outsideTable || !received.known,
   };
 }
 
+// Only a plain Across deposit can name a chain the table lacks, and what it pays out is never native.
 function labelOf(contracts: BridgeContracts, chainId: number): ChainLabel {
-  const { name, nativeSymbol } = contracts.chain(chainId)!;
-  return { name, nativeSymbol };
+  const chain = contracts.chain(chainId);
+  return chain
+    ? { name: chain.name, nativeSymbol: chain.nativeSymbol }
+    : { name: `chain ${chainId}`, nativeSymbol: '' };
 }
 
 function amountText({ amount, token }: Pick<TokenAmount, 'amount' | 'token'>): string {

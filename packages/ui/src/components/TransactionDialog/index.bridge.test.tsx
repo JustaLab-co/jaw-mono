@@ -2,13 +2,18 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { act } from 'react';
-import { createRoot } from 'react-dom/client';
+import { createRoot, type Root } from 'react-dom/client';
 import type { ReactNode } from 'react';
 import { decodeFunctionData, encodeFunctionData, parseAbi, type Hex } from 'viem';
+import fc from 'fast-check';
 import { identityKey } from '../../utils';
 import {
   ACROSS_CALLS,
   PROD_RELAY_DEPOSIT,
+  RELAY_OTHER_RECIPIENT_APPROVE,
+  RELAY_OTHER_RECIPIENT_DEPOSIT,
+  RELAY_OTHER_RECIPIENT_DEPOSITOR,
+  RELAY_OTHER_RECIPIENT_ORDER,
   RELAY_USDC_APPROVE,
   RELAY_USDC_DEPOSIT,
   RELAY_USDC_ORDER,
@@ -94,7 +99,11 @@ const PERIPHERY = '0x97CCDBea4632140639aD5eA9b944aa034eb15fD4';
 const BASE_USDC = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 const RELAY_HIDDEN =
   'Relay keeps the destination chain and the recipient in an order outside this transaction. This screen cannot show them. Confirm only if you started this transfer yourself.';
-const UNREADABLE = 'This screen cannot read this Across call. Check the raw details before you confirm.';
+const RAW = 'Check the raw details before you confirm.';
+const UNREADABLE = `This screen cannot confirm where the deposit in step 2 sends the funds. ${RAW}`;
+// The red explanation, which the header icon carries and no text line may show.
+const RED = /This screen cannot (confirm where|read th)/;
+const cut = (call: BridgeCall): BridgeCall => ({ ...call, data: call.data?.slice(0, 300) });
 
 const word = (hex: string) => hex.replace(/^0x/, '').toLowerCase().padStart(64, '0');
 const approve = (spender: string, amount = '989680'): BridgeCall => ({
@@ -139,12 +148,18 @@ const render = (transactions: BridgeCall[], extra: Extra = {}) => {
   return root;
 };
 
+// Unmounted after each test, so no pending render outlives the jsdom environment.
+const live: Root[] = [];
+afterEach(() => act(() => live.splice(0).forEach((root) => root.unmount())));
+
 // Prices arrive in an effect, which static markup never runs.
 const renderLive = async (transactions: BridgeCall[], extra: Extra = {}) => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   const root = document.createElement('div');
+  const react = createRoot(root);
+  live.push(react);
   await act(async () => {
-    createRoot(root).render(
+    react.render(
       <TransactionDialog
         open
         onOpenChange={() => undefined}
@@ -167,11 +182,23 @@ const renderLive = async (transactions: BridgeCall[], extra: Extra = {}) => {
 };
 
 const title = (root: HTMLElement) => root.querySelector('h2')?.textContent;
-const red = (root: HTMLElement) => [...root.querySelectorAll('.text-destructive')].map((e) => e.textContent);
+const red = (root: HTMLElement) => [...root.querySelectorAll('p.text-destructive')].map((e) => e.textContent);
 const yellow = (root: HTMLElement) =>
   [...root.querySelectorAll('[role="alert"].bg-warning\\/10 p, [role="alert"] > p')].map((e) => e.textContent);
 const notice = (root: HTMLElement, text: string) =>
   [...root.querySelectorAll('[role="alert"] > p')].find((e) => e.textContent === text);
+// Throws without a header, so a "no icon" assertion cannot pass on a missing one.
+const headerIcons = (root: HTMLElement) => {
+  const header = root.querySelector('h2')?.parentElement;
+  if (!header) throw new Error('no dialog header');
+  return [...header.querySelectorAll('button')].filter((b) => RED.test(b.getAttribute('aria-label') ?? ''));
+};
+// Page text a sighted reader sees: the screen reader line is cut out.
+const visibleText = (root: HTMLElement) => {
+  const copy = root.cloneNode(true) as HTMLElement;
+  copy.querySelectorAll('.sr-only').forEach((e) => e.remove());
+  return copy.textContent ?? '';
+};
 const before = (first?: Element | null, second?: Element | null) =>
   !!first && !!second && !!(first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING);
 const box = (root: HTMLElement, heading: string) =>
@@ -302,10 +329,27 @@ describe('TransactionDialog with a bridge deposit', () => {
     expect(yellow(root)).toContain(`The recipient is not this account: ${SIGNER}.`);
   });
 
-  it('marks a bridge call it cannot read in red, on the batch and on its step', () => {
-    const broken = { ...ACROSS_CALLS.prod, data: ACROSS_CALLS.prod.data + '00' };
+  it('shows a plain deposit to a chain the table lacks by its id, with a notice and no red', () => {
+    const root = render([approve(SPOKE_POOL), nofeeWith((a) => (a[6] = 999n))]);
+    expect(title(root)).toBe('Bridge to chain 999');
+    expect(box(root, 'They get via Across')).toBeDefined();
+    expect(yellow(root)).toContain(
+      'This screen does not know chain 999 and cannot confirm that the recipient there is this account. Check it before you confirm.'
+    );
+    expect(headerIcons(root)).toHaveLength(0);
+  });
+
+  it('marks a bridge call it cannot read with a header icon and a mark on its step, and no text line', () => {
+    const broken = cut(ACROSS_CALLS.prod);
     const root = render([approve(SPOKE_POOL), broken]);
-    expect(red(root)).toEqual([UNREADABLE, UNREADABLE]);
+    expect(red(root)).toEqual([]);
+    expect(root.querySelector('[role="alert"]')).toBeNull();
+    expect(headerIcons(root).map((e) => e.getAttribute('aria-label'))).toEqual([UNREADABLE]);
+    const steps = [...root.querySelectorAll('[data-slot="accordion-item"]')];
+    expect(steps).toHaveLength(2);
+    expect(steps.some((step) => RED.test(step.textContent ?? ''))).toBe(false);
+    expect(steps[1].querySelector('[aria-label="Unreadable call"]')).not.toBeNull();
+    expect(steps[0].querySelector('[aria-label="Unreadable call"]')).toBeNull();
     expect(title(root)).not.toContain('Bridge');
     expect(root.textContent).not.toContain('You get');
   });
@@ -325,6 +369,19 @@ describe('TransactionDialog with a bridge deposit', () => {
     expect(column(root, 'You get via Relay')).toContain('≥ 9.7764');
     expect(column(root, 'You get via Relay')).toContain('on Arbitrum');
     expect(yellow(root)).toEqual([]);
+    expect(red(root)).toEqual([]);
+  });
+
+  it('shows a Relay order to another address with its chain, recipient and minimum', () => {
+    const recipient = '0x93AdDED9e7F06380A007D91830C59a45309c7806';
+    const root = render([RELAY_OTHER_RECIPIENT_APPROVE, RELAY_OTHER_RECIPIENT_DEPOSIT], {
+      walletAddress: RELAY_OTHER_RECIPIENT_DEPOSITOR,
+      capabilities: { jawRelayOrder: { optional: true, orderData: RELAY_OTHER_RECIPIENT_ORDER } },
+    });
+    expect(title(root)).toBe('Bridge to Arbitrum');
+    expect(column(root, 'They get via Relay')).toContain('≥ 1.9108');
+    expect(column(root, 'They get via Relay')).toContain('on Arbitrum');
+    expect(yellow(root)).toEqual([`The recipient is not this account: ${recipient}.`]);
     expect(red(root)).toEqual([]);
   });
 
@@ -402,16 +459,26 @@ describe('TransactionDialog notices around a bridge deposit', () => {
     expect(before(box(root, 'You get via Across'), line)).toBe(true);
   });
 
-  it('keeps a red alert above You send', () => {
-    const broken = { ...ACROSS_CALLS.prod, data: ACROSS_CALLS.prod.data + '00' };
+  it('keeps the header icon above You send', () => {
+    const broken = cut(ACROSS_CALLS.prod);
     const root = render([approve(SPOKE_POOL), broken, RELAY_USDC_DEPOSIT]);
-    expect(before(root.querySelector('.text-destructive'), box(root, 'You send'))).toBe(true);
+    expect(before(headerIcons(root)[0], box(root, 'You send'))).toBe(true);
   });
 
-  it('shows the deposit count when there is no single transfer to show', () => {
+  it('keeps the header icon when a readable deposit sits beside an approve it cannot read', () => {
+    const odd = { ...RELAY_USDC_APPROVE, data: RELAY_USDC_APPROVE.data + '00' };
+    const root = render([odd, RELAY_USDC_DEPOSIT]);
+    expect(title(root)).toBe('Deposit to Relay');
+    expect(headerIcons(root).map((e) => e.getAttribute('aria-label'))).toEqual([
+      `This screen cannot read the approval in step 1. ${RAW}`,
+    ]);
+    expect(red(root)).toEqual([]);
+  });
+
+  it('shows no deposit count when there is no single transfer to show, since each step renders', () => {
     const root = render([approve(SPOKE_POOL), ACROSS_CALLS.prod, ACROSS_CALLS.prod]);
     expect(root.textContent).not.toContain('You get');
-    expect(yellow(root)).toEqual(['This batch has 2 bridge deposits. Check each step before you confirm.']);
+    expect(yellow(root)).toEqual([]);
   });
 
   it('shows the notice for an approve of an unknown token with no deposit', () => {
@@ -422,7 +489,7 @@ describe('TransactionDialog notices around a bridge deposit', () => {
   it('shows an unpaired approve notice in view', () => {
     const root = render([ACROSS_CALLS.prod, approve(SPOKE_POOL)]);
     expect(yellow(root)).toEqual([
-      'This batch has an approval that the deposit does not use. Check its token, amount and spender.',
+      'This batch has an approval that no deposit uses. Check its token, amount and spender.',
     ]);
   });
 
@@ -519,4 +586,157 @@ describe('TransactionDialog with a bridge into a token outside the table', () =>
     expect(root.textContent).not.toContain('unverified');
     expect(confirm(root).disabled).toBe(false);
   });
+});
+
+describe('TransactionDialog with bridge calls it cannot read', () => {
+  const ATTACKER = '0x2222222222222222222222222222222222222222';
+  const APPROVAL_1 = `This screen cannot read the approval in step 1. ${RAW}`;
+  const DEPOSIT_2 = `This screen cannot confirm where the deposit in step 2 sends the funds. ${RAW}`;
+  const DEPOSIT_3 = `This screen cannot confirm where the deposit in step 3 sends the funds. ${RAW}`;
+  const APPROVALS_1_3 = `This screen cannot read the approvals in steps 1 and 3. ${RAW}`;
+  const DEPOSITS_2_4 = `This screen cannot confirm where the deposits in steps 2 and 4 send the funds. ${RAW}`;
+  const DEPOSITS_ALL = `This screen cannot confirm where the deposits in steps 1, 2, 3, 4, 5, 6, 7 and 8 send the funds. ${RAW}`;
+  const DEPOSIT_ONLY = `This screen cannot confirm where this deposit sends the funds. ${RAW}`;
+  // Relay reads its calldata exactly, so a trailing byte makes a Relay call unreadable.
+  const tail = (call: BridgeCall): BridgeCall => ({ ...call, data: call.data + '00' });
+  const paid = (call: BridgeCall): BridgeCall => ({ ...call, value: '1' });
+
+  const steps = (root: HTMLElement) =>
+    [...root.querySelectorAll('[data-slot="accordion-item"]')].filter(
+      (item) => item.querySelector('button')?.textContent !== 'Details'
+    );
+  const labels = (root: HTMLElement) => headerIcons(root).map((e) => e.getAttribute('aria-label'));
+  const marked = (step: Element) => step.querySelector('[aria-label="Unreadable call"]') !== null;
+
+  it('given a readable deposit and an approve that sends USDC to an attacker, then it is a yellow outside-call notice and no red line', () => {
+    const root = render([{ ...approve(ATTACKER), to: BASE_USDC }, ACROSS_CALLS.prod]);
+    expect(yellow(root)).toContain(`Step 1 approves ${ATTACKER} to spend USDC. Check it before you confirm.`);
+    expect(headerIcons(root)).toHaveLength(0);
+  });
+
+  it('given a readable deposit and an Across approve it cannot read, then a header icon and only that step is marked', () => {
+    const root = render([paid(approve(SPOKE_POOL)), ACROSS_CALLS.prod]);
+    expect(labels(root)).toEqual([APPROVAL_1]);
+    expect(steps(root).map(marked)).toEqual([true, false]);
+  });
+
+  it('given a readable approve and a deposit it cannot read, then the deposit step carries the mark', () => {
+    const root = render([approve(SPOKE_POOL), cut(ACROSS_CALLS.prod)]);
+    expect(labels(root)).toEqual([DEPOSIT_2]);
+    expect(steps(root).map(marked)).toEqual([false, true]);
+  });
+
+  it('given approvals and deposits unreadable on two steps each, then one header icon explaining both', () => {
+    const root = render([
+      paid(approve(SPOKE_POOL)),
+      cut(ACROSS_CALLS.prod),
+      paid(RELAY_USDC_APPROVE),
+      tail(RELAY_USDC_DEPOSIT),
+    ]);
+    expect(labels(root)).toEqual([`${APPROVALS_1_3} ${DEPOSITS_2_4}`]);
+    expect(steps(root).map(marked)).toEqual([true, true, true, true]);
+  });
+
+  it('given eight unreadable Across steps, then still one header icon', () => {
+    const root = render(Array.from({ length: 8 }, () => cut(ACROSS_CALLS.prod)));
+    expect(labels(root)).toEqual([DEPOSITS_ALL]);
+    expect(steps(root).filter(marked)).toHaveLength(8);
+  });
+
+  it('given a readable transfer and a later step it cannot read, then the summary shows with the icon above it', () => {
+    const root = render([approve(SPOKE_POOL), ACROSS_CALLS.prod, cut(ACROSS_CALLS.prod)]);
+    expect(labels(root)).toEqual([DEPOSIT_3]);
+    expect(before(headerIcons(root)[0], box(root, 'You send'))).toBe(true);
+    expect(steps(root).map(marked)).toEqual([false, false, true]);
+  });
+
+  it('given an unreadable call beside notices, then both show and no text line carries the unreadable call', () => {
+    const extra: BridgeCall = { chainId: 8453, to: ATTACKER, data: '0x12345678' };
+    const root = render([approve(SPOKE_POOL), cut(ACROSS_CALLS.prod), RELAY_USDC_DEPOSIT, extra]);
+    expect(notice(root, `Step 4 calls ${ATTACKER} outside the bridge. Check it before you confirm.`)).toBeDefined();
+    expect(labels(root)).toHaveLength(1);
+    expect(visibleText(root)).not.toMatch(RED);
+  });
+
+  it('given a single call it cannot read, then the header icon and its calldata card mark show', () => {
+    const root = render([cut(ACROSS_CALLS.prod)]);
+    expect(labels(root)).toEqual([DEPOSIT_ONLY]);
+    expect(steps(root).map(marked)).toEqual([true]);
+  });
+
+  it('given a single readable call, then there is no icon and no alert', () => {
+    const root = render([approve(SPOKE_POOL)]);
+    expect(steps(root).map(marked)).toEqual([false]);
+    expect(headerIcons(root)).toHaveLength(0);
+    expect(root.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it('given a readable bridge batch, then no icon renders', () => {
+    const root = render([approve(SPOKE_POOL), ACROSS_CALLS.prod]);
+    expect(headerIcons(root)).toHaveLength(0);
+    expect(root.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it('renders no red text line, and the header icon is a labelled button', () => {
+    const root = render([approve(SPOKE_POOL), cut(ACROSS_CALLS.prod)]);
+    expect(root.querySelector('p.text-destructive')).toBeNull();
+    expect(visibleText(root)).not.toMatch(RED);
+    const [icon] = headerIcons(root);
+    expect(icon.tagName.toLowerCase()).toBe('button');
+    expect(icon.querySelector('svg')).not.toBeNull();
+    expect(icon.getAttribute('aria-label')).toBe(DEPOSIT_2);
+    const mark = steps(root)[1].querySelector('[aria-label="Unreadable call"]');
+    expect(mark?.tagName.toLowerCase()).toBe('svg');
+    expect(mark?.getAttribute('role')).toBe('img');
+    expect(mark?.closest('button')).not.toBeNull();
+  });
+
+  it('opens a popover with the explanation when the header icon is clicked', async () => {
+    const root = await renderLive([approve(SPOKE_POOL), cut(ACROSS_CALLS.prod)]);
+    const [icon] = headerIcons(root);
+    await act(async () => {
+      icon.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    const popover = document.querySelector('[data-slot="popover-content"]');
+    expect(popover?.textContent).toBe(icon.getAttribute('aria-label'));
+    expect(popover?.textContent).toContain('step 2');
+    expect(popover?.closest('[role="dialog"]')).not.toBeNull();
+  });
+
+  it('announces the unreadable state to screen readers without showing it', () => {
+    const root = render([
+      paid(approve(SPOKE_POOL)),
+      cut(ACROSS_CALLS.prod),
+      paid(RELAY_USDC_APPROVE),
+      tail(RELAY_USDC_DEPOSIT),
+    ]);
+    const status = root.querySelector('[role="status"]');
+    expect(status?.classList.contains('sr-only')).toBe(true);
+    expect(status?.textContent).toBe(`${APPROVALS_1_3} ${DEPOSITS_2_4}`);
+    expect(render([approve(SPOKE_POOL), ACROSS_CALLS.prod]).querySelector('[role="status"]')).toBeNull();
+  });
+
+  type Kind = { call: BridgeCall; unreadable?: 'across' | 'relay' };
+  const KINDS: Kind[] = [
+    { call: approve(SPOKE_POOL) },
+    { call: paid(approve(SPOKE_POOL)), unreadable: 'across' },
+    { call: ACROSS_CALLS.prod },
+    { call: cut(ACROSS_CALLS.prod), unreadable: 'across' },
+    { call: RELAY_USDC_APPROVE },
+    { call: paid(RELAY_USDC_APPROVE), unreadable: 'relay' },
+    { call: RELAY_USDC_DEPOSIT },
+    { call: tail(RELAY_USDC_DEPOSIT), unreadable: 'relay' },
+    { call: { chainId: 8453, to: ATTACKER, data: '0x12345678' } },
+  ];
+
+  it('for any batch, one header icon when any step is unreadable, and a mark on exactly the unreadable steps', () => {
+    fc.assert(
+      fc.property(fc.array(fc.constantFrom(...KINDS), { minLength: 1, maxLength: 6 }), (batch) => {
+        const root = render(batch.map((kind) => kind.call));
+        expect(headerIcons(root)).toHaveLength(batch.some((kind) => kind.unreadable) ? 1 : 0);
+        expect(steps(root).map(marked)).toEqual(batch.map((kind) => !!kind.unreadable));
+      }),
+      { numRuns: 60 }
+    );
+  }, 30_000);
 });

@@ -1,6 +1,10 @@
 /** The relay's own cap on a frame. Nothing a real client sends through it is larger. */
 export const MAX_FRAME_BYTES = 1_048_576;
 
+// A server re-asks within the 30 minute approval window, so the oldest answers
+// can go once a long session of reads would otherwise keep them all.
+export const ANSWERS_KEPT = 500;
+
 export type BridgeInit = {
   chainId: number;
   ens?: string;
@@ -8,9 +12,23 @@ export type BridgeInit = {
   apiKey?: string;
   paymaster?: { url: string; context?: Record<string, unknown> };
   client?: string;
+  appLogoUrl?: string;
 };
 
 export const BRIDGE_CLIENT_PATTERN = /^[a-z0-9-]{1,32}\/[A-Za-z0-9.+_-]{1,64}$/;
+
+/** Longer than any logo address a client builds, short enough that the field cannot carry an image itself. */
+export const MAX_APP_LOGO_URL_LENGTH = 2048;
+
+/** An https address the dialogs may load the app's logo from. Anything else is dropped, never refused. */
+function isAppLogoUrl(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length > MAX_APP_LOGO_URL_LENGTH) return false;
+  try {
+    return new URL(value).protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
 
 export type BridgeRequest = { id: string; method: string; params: unknown[] };
 
@@ -50,6 +68,7 @@ export function parseInit(inner: Record<string, unknown>, chains: readonly numbe
 
   const init: BridgeInit = { chainId };
   if (typeof inner.client === 'string' && BRIDGE_CLIENT_PATTERN.test(inner.client)) init.client = inner.client;
+  if (isAppLogoUrl(inner.appLogoUrl)) init.appLogoUrl = inner.appLogoUrl;
   if (ens !== undefined) init.ens = ens as string;
   if (appName !== undefined) init.appName = appName as string;
   if (apiKey !== undefined) init.apiKey = apiKey as string;

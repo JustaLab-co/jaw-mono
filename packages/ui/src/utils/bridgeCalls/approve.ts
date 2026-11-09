@@ -31,7 +31,7 @@ export function readBridgeApprove(
   const change = decodeAllowanceChange(call);
   const provider = chain && change && spenderProvider(chain, change.spender);
   if (!provider) return undefined;
-  if (change.amount === undefined || !isPlainApprove(call)) return { kind: 'unreadable', provider };
+  if (change.amount === undefined || !isPlainApprove(call)) return { kind: 'unreadable', what: 'approval' };
 
   return {
     kind: 'approve',

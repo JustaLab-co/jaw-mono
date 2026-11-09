@@ -25,6 +25,12 @@ export interface NetworkFeeRowProps {
   fundsShortfallDetail?: string;
   /** Wording for the `will-fail` state; the transaction screen can explain the simulation. */
   willFailDetail?: string;
+  /** The error behind an `estimation-failed` block, shown in the tooltip. */
+  estimationFailureDetail?: string;
+  /** Re-runs the estimation. The retry link shows for `estimation-failed` only when this is set. */
+  onRetryEstimation?: () => void;
+  /** A fee-token estimation is running, so Retry waits for it. */
+  estimatingTokenCosts?: boolean;
 
   gasFee?: string;
   gasFeeLoading?: boolean;
@@ -54,6 +60,9 @@ export interface NetworkFeeRowProps {
 export function NetworkFeeRow({
   blockReason,
   fundsShortfallDetail,
+  estimationFailureDetail,
+  onRetryEstimation,
+  estimatingTokenCosts = false,
   willFailDetail = 'Simulating this transaction reverted, so the fee can’t be estimated and it can’t be submitted.',
   gasFee,
   gasFeeLoading = false,
@@ -95,6 +104,28 @@ export function NetworkFeeRow({
     }
     if (blockReason === 'will-fail') {
       return <InlineWarning text="Transaction will fail" detail={willFailDetail} />;
+    }
+
+    if (blockReason === 'estimation-failed') {
+      const retrying = gasFeeLoading || estimatingTokenCosts;
+      return (
+        <div className="flex flex-col items-start gap-1">
+          <InlineWarning
+            text="Fee estimation failed"
+            detail={`The network fee couldn't be estimated, so this transaction can't be submitted yet. ${estimationFailureDetail ?? ''}`.trim()}
+          />
+          {onRetryEstimation && (
+            <button
+              type="button"
+              onClick={onRetryEstimation}
+              disabled={disabled || retrying}
+              className="text-muted-foreground text-body-xs font-mono underline disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {retrying ? 'Retrying…' : 'Retry'}
+            </button>
+          )}
+        </div>
+      );
     }
 
     if (sponsored) {

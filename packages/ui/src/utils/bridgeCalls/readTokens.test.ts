@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Address } from 'viem';
+import { stringToHex, type Address, type Hex } from 'viem';
 import { readTokens } from './readTokens';
 import { readKey } from './table';
 import { DECIMALS, SYMBOL, nodeFor, type Answer } from './tokenNode';
@@ -21,6 +21,47 @@ describe('given tokens outside the pinned table', () => {
 
   it('when the symbol is USDC, then it is read as USDC, and it is up to the caller not to trust it', async () => {
     expect(await readOne({ symbol: 'USDC', decimals: 6n })).toEqual({ symbol: 'USDC', decimals: 6 });
+  });
+
+  it('when symbol() reverts, then the bytes32 form is not asked', async () => {
+    const asked: string[] = [];
+    const node = nodeFor(answers({ symbol: 'AAPL', decimals: 18n, revert: 'symbol' }), asked);
+    await readTokens([{ chainId: 4663, address: AAPL }], node);
+    expect(asked.filter((q) => q.endsWith(SYMBOL))).toHaveLength(1);
+  });
+
+  it('when the string decode fails, then the bytes32 form is asked', async () => {
+    const asked: string[] = [];
+    const node = nodeFor(answers({ symbol: 'MKR', decimals: 18n, bytes32: true }), asked);
+    await readTokens([{ chainId: 4663, address: AAPL }], node);
+    expect(asked.filter((q) => q.endsWith(SYMBOL))).toHaveLength(2);
+  });
+
+  it('when the symbol is a bytes32 word, then it is decoded without its null bytes', async () => {
+    expect(await readOne({ symbol: 'MKR', decimals: 18n, bytes32: true })).toEqual({ symbol: 'MKR', decimals: 18 });
+  });
+
+  it('when a bytes32 symbol is not printable text, then the token stays unread', async () => {
+    expect(await readOne({ symbol: 'AA\nPL', decimals: 18n, bytes32: true })).toBeUndefined();
+  });
+
+  it.each([
+    ['all zeros', '0x' + '00'.repeat(32)],
+    ['not ASCII', stringToHex('ÄAPL', { size: 32 })],
+    ['a null byte inside it', stringToHex('AA\u0000PL', { size: 32 })],
+    ['32 printable characters', stringToHex('A'.repeat(32), { size: 32 })],
+    ['bytes that are neither a string nor a word', '0xdeadbeef'],
+  ] as [string, Hex][])('when the symbol is %s, then the token stays unread', async (_, symbolBytes) => {
+    expect(await readOne({ symbolBytes, decimals: 18n })).toBeUndefined();
+  });
+
+  it('when a bytes32 symbol fills 16 characters, then it is read', async () => {
+    const symbolBytes = stringToHex('B'.repeat(16), { size: 32 });
+    expect(await readOne({ symbolBytes, decimals: 18n })).toEqual({ symbol: 'B'.repeat(16), decimals: 18 });
+  });
+
+  it('when decimals is 0, then the token is read with no decimals', async () => {
+    expect(await readOne({ symbol: 'NODEC', decimals: 0n })).toEqual({ symbol: 'NODEC', decimals: 0 });
   });
 
   it.each([

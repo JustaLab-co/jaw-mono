@@ -23,10 +23,10 @@ import { TokenIcon } from '../TokenIcon';
 import { SubText } from '../SubText';
 import { AssetPreview } from './AssetPreview';
 import { callTitle } from './DecodedCalldata';
-import { resolveBlockReason } from '../../utils/transactionFailure';
+import { resolveFeeBlock } from '../../utils/transactionFailure';
 import { allowanceFlag } from '../../utils/allowances';
 import { isBlockingPermissionProblem, PERMISSION_PROBLEM_TEXT } from '../../utils/permissionExecution';
-import { BatchStep, BridgeDetails, BridgeNotices, NAME_SOURCES, SingleCallData } from './CallSections';
+import { BatchStep, BridgeAlerts, BridgeDetails, BridgeNotices, NAME_SOURCES, SingleCallData } from './CallSections';
 import { InlineWarning, PartyRow, Row, ValueAmount } from '../primitives';
 import { NetworkFeeRow } from '../NetworkFeeRow';
 
@@ -39,6 +39,8 @@ export const TransactionDialog = ({
   gasFee,
   gasFeeLoading,
   gasEstimationError,
+  onRetryEstimation,
+  estimatingTokenCosts,
   sponsored,
   assetsOut,
   assetsIn,
@@ -76,10 +78,6 @@ export const TransactionDialog = ({
   const nativeSymbol = nativeToken?.symbol || nativeCurrencySymbol || 'ETH';
   const nativeTokenPrice = useFeeTokenPrice(nativeSymbol);
 
-  // If feeTokens isn't loaded yet (null/undefined/empty), assume there are selectable options.
-  const hasSelectablePaymentOption =
-    !feeTokens || feeTokens.length === 0 ? true : feeTokens.some((t) => t.isSelectable);
-
   // Inside a Radix modal, native wheel scrolling of a nested container can get eaten —
   // drive scrollTop manually (mirrors the signing dialogs).
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -107,8 +105,8 @@ export const TransactionDialog = ({
   });
   const displayWalletAddress = getDisplayAddress(wallet.name, walletAddress);
 
-  const blockReason = resolveBlockReason({
-    hasSelectablePaymentOption,
+  const { blockReason, hasSelectablePaymentOption, feeEstimationFailure } = resolveFeeBlock({
+    feeTokens,
     gasEstimationError,
     sponsored,
     isPayingWithErc20: !!isPayingWithErc20,
@@ -215,7 +213,10 @@ export const TransactionDialog = ({
                 />
               </div>
             )}
-            <h2 className="text-foreground text-title-xl truncate pr-9">{title}</h2>
+            <div className="flex items-center gap-2 pr-9">
+              <h2 className="text-foreground text-title-xl min-w-0 truncate">{title}</h2>
+              {bridge && <BridgeAlerts messages={bridge.alerts} />}
+            </div>
             {totalTransactions > 1 && currentTransaction?.description && (
               <p className="text-muted-foreground text-body mt-1">
                 {currentTransaction.action}: {currentTransaction.description}
@@ -329,12 +330,6 @@ export const TransactionDialog = ({
               </div>
             )}
 
-            {bridge?.alerts.map((alert) => (
-              <div key={alert} role="alert">
-                <InlineWarning text={alert} />
-              </div>
-            ))}
-
             {/* Asset changes — a native send shows the same information in its hero. */}
             {!isNativeSend && (
               <AssetPreview
@@ -432,6 +427,9 @@ export const TransactionDialog = ({
               showFeeTokenSelector={showFeeTokenSelector}
               isPayingWithErc20={isPayingWithErc20}
               hasSelectablePaymentOption={hasSelectablePaymentOption}
+              estimationFailureDetail={feeEstimationFailure}
+              onRetryEstimation={onRetryEstimation}
+              estimatingTokenCosts={estimatingTokenCosts}
               disabled={isProcessing}
             />
 
