@@ -17,16 +17,24 @@ const reason = (raw: unknown) => {
 const BASE_USDC = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 const PROXY = '0x5567954cD026CEbFE486062cb75848e0f1c12E58';
 
+// Approval proxies come only from the build, so a parsed chain is the compiled one without them.
+const parsedOf = (chain: BridgeChain): BridgeChain => {
+  if (!chain.relay) return chain;
+  const relay = { ...chain.relay };
+  delete relay.approvalProxies;
+  return { ...chain, relay };
+};
+
 describe('given the body the proxy serves for the bridge table', () => {
   it('when it is the compiled table, then it reads as a live table of that version', () => {
     const result = parse(body());
     expect(result).toMatchObject({ ok: true, contracts: { version: 2, source: 'live' } });
-    if (result.ok) expect(result.contracts.chain(8453)).toEqual(BRIDGE_CHAINS[8453]);
+    if (result.ok) expect(result.contracts.chain(8453)).toEqual(parsedOf(BRIDGE_CHAINS[8453]));
   });
 
   it('when a chain pins a LiFi diamond, then the live table keeps it', () => {
     const result = parse(body());
-    expect(result.ok && result.contracts.chain(4663)).toEqual(BRIDGE_CHAINS[4663]);
+    expect(result.ok && result.contracts.chain(4663)).toEqual(parsedOf(BRIDGE_CHAINS[4663]));
   });
 
   it('when the LiFi diamond is lowercase, then it is rejected as not checksummed', () => {
