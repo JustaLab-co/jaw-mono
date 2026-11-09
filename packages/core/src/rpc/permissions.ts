@@ -352,7 +352,7 @@ function canonicalSignature(signature: string): string | undefined {
  * hashes) for an innocent-looking one that hashes to one of these, and the grant screen shows the
  * name as sent, so a signature that hashes to one of them must be that function.
  */
-const TOKEN_FUNCTIONS: ReadonlyMap<Hex, string> = new Map(
+export const TOKEN_FUNCTIONS: ReadonlyMap<Hex, string> = new Map(
     [
         'setApprovalForAll(address,bool)',
         'approve(address,uint256)',
