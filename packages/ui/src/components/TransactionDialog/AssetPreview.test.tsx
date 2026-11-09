@@ -334,6 +334,20 @@ describe('AssetPreview bridge send side when the simulation could not read the t
     expect(out).toContain('MKR');
   });
 
+  it('does not price a token outside the pinned table by the symbol the simulation read', async () => {
+    prices.fetch.mockResolvedValue(1);
+    const send = {
+      ...bridge.send,
+      token: { address: MKR, known: false, unverified: true, symbol: 'WETH', decimals: 18 },
+    };
+    const assetsOut = simulatedRows(simulated.address, simulated.diff, simulated.decimals, 'WETH');
+    await mount({ assetsOut, bridge: { ...bridge, send } });
+    await settle();
+    expect(host.textContent).toContain('WETH');
+    expect(prices.fetch).not.toHaveBeenCalledWith('WETH');
+    expect(host.textContent).not.toContain('$');
+  });
+
   it('scales a row the simulation left in base units by the decimals the bridge read', () => {
     const raw = {
       ...simulated,

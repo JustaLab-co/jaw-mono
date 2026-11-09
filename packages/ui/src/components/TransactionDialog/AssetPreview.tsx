@@ -257,19 +257,21 @@ const sentDeltas = ({ amount, token }: TokenAmount): AssetDelta[] =>
       ]
     : [];
 
-// The simulation reads the token on its own and can miss what the bridge's read got, as with a
-// bytes32 symbol. The bridge's read then names and scales the simulated amount.
+// The bridge's read decides whether the sent token is verified: a symbol the token reports about
+// itself is unverified whichever read got it. It also names and scales a row the simulation could
+// not read.
 function withBridgeRead(delta: AssetDelta, { token }: TokenAmount): AssetDelta {
-  if (delta.symbol && !delta.baseUnits) return delta;
   if (!token.known && !token.unverified) return delta;
   if (delta.address.toLowerCase() !== token.address.toLowerCase()) return delta;
+  const unverified = token.known ? undefined : true;
+  if (delta.symbol && !delta.baseUnits) return { ...delta, unverified };
   const magnitude = delta.diff < 0n ? -delta.diff : delta.diff;
   return {
     ...delta,
     symbol: token.symbol,
     decimals: token.decimals,
     amountFormatted: formatUnits(magnitude, token.decimals),
-    unverified: token.known ? undefined : true,
+    unverified,
     baseUnits: undefined,
   };
 }
