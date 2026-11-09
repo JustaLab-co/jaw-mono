@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import type { Address, Hex } from 'viem';
 import type { Account, TokenEstimate, TransactionCall } from '@jaw.id/core';
-import { estimateErc20PaymasterCosts, jawPaymasterUrl } from '@jaw.id/core';
+import { Erc20EstimationError, estimateErc20PaymasterCosts, jawPaymasterUrl } from '@jaw.id/core';
 import type { FeeTokenOption } from '../components/FeeTokenSelector';
 import { classifyRevert, INSUFFICIENT_FUNDS_ERROR, isRevert, messageOf } from '../utils/transactionFailure';
 
@@ -143,7 +143,9 @@ const REVERTED_FAILURE = "The bundler's estimate of this transaction reverted.";
  */
 function markEstimationFailed(tokens: FeeTokenOption[], error: unknown): FeeTokenOption[] {
   const balance = classifyRevert(error) === 'balance';
-  const estimationReverted = !balance && isRevert(error);
+  // A round that throws before estimating has no Erc20EstimationError to read.
+  const reverted = error instanceof Erc20EstimationError ? error.reason === 'call-reverted' : isRevert(error);
+  const estimationReverted = !balance && reverted;
   const estimationFailure = balance ? undefined : estimationReverted ? REVERTED_FAILURE : describeFailure(error);
   return tokens.map((token) => {
     if (token.isNative) return token;
