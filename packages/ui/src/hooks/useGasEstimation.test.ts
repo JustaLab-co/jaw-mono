@@ -87,6 +87,7 @@ const blockNow = () =>
     gasEstimationError: hook.gasEstimationError,
     sponsored: false,
     isPayingWithErc20: hook.isPayingWithErc20,
+    pending: hook.gasFeeLoading || hook.estimatingTokenCosts,
   }).blockReason;
 
 let setTokensExternally: (tokens: FeeTokenOption[]) => void;
