@@ -47,7 +47,7 @@ function spenderProvider(chain: BridgeChain, spender: string): BridgeProvider | 
   if (!isAddress(spender, { strict: false })) return undefined;
   if (across && [across.spokePool, across.periphery].some((address) => isAddressEqual(address, spender)))
     return 'across';
-  const relaySpenders = relay ? [relay.depository, ...relay.approvalProxies] : [];
+  const relaySpenders = relay ? [relay.depository, ...(relay.approvalProxies ?? [])] : [];
   if (relaySpenders.some((address) => isAddressEqual(address, spender))) return 'relay';
   return undefined;
 }
