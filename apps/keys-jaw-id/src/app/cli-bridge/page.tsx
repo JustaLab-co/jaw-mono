@@ -36,7 +36,7 @@ import {
  * 8. A request repeated under the same id gets the answer already given
  */
 
-type BridgeState = 'connecting' | 'connected' | 'disconnected' | 'error';
+type BridgeState = 'connecting' | 'connected' | 'ended' | 'lost' | 'error';
 
 /** Base64 encode a Uint8Array or ArrayBuffer */
 function toBase64(buf: Uint8Array | ArrayBuffer): string {
@@ -94,6 +94,7 @@ function CLIBridgeContent() {
    * neither rename the page nor swap or add a logo.
    */
   const appIdentityRef = useRef<{ name: string; logoUrl?: string } | null>(null);
+  const dialogsRef = useRef(new Set<ReactUIHandler>());
   const wsRef = useRef<WebSocket | null>(null);
   const sharedSecretRef = useRef<CryptoKey | null>(null);
   /**
@@ -128,7 +129,7 @@ function CLIBridgeContent() {
       setCliPublicKeyHex(link.pk);
     } else {
       setState('error');
-      setError(link.kind === 'damaged' ? LINK_DAMAGED : LINK_GONE);
+      setError(link.kind === 'damaged' ? LINK_DAMAGED : LINK_LOST);
     }
   }, []);
 
@@ -162,23 +163,26 @@ function CLIBridgeContent() {
   );
 
   // The wallet keeps the receipt waiter alive only while it is asked, so the page asks until the send ends.
-  const sendId = send?.phase === 'submitted' ? send.id : null;
+  const pendingSendId = send?.phase === 'submitted' ? send.id : null;
   useEffect(() => {
-    if (!sendId) return;
+    if (!pendingSendId) return;
     const stopAt = Date.now() + SEND_POLL_LIMIT_MS;
     const timer = setInterval(async () => {
       const current = sendRef.current;
-      if (current?.id !== sendId) return;
+      if (current?.id !== pendingSendId) return;
       if (Date.now() > stopAt) return trackSend({ ...current, phase: 'stalled' });
       try {
-        const status = await sdkRef.current?.provider.request({ method: 'wallet_getCallsStatus', params: [sendId] });
-        if (sendRef.current?.id === sendId) trackSend(sendFromStatus(current, status));
+        const status = await sdkRef.current?.provider.request({
+          method: 'wallet_getCallsStatus',
+          params: [pendingSendId],
+        });
+        if (sendRef.current?.id === pendingSendId) trackSend(sendFromStatus(current, status));
       } catch (err) {
         console.error('[cli-bridge] Failed to read the send status:', err);
       }
     }, SEND_POLL_MS);
     return () => clearInterval(timer);
-  }, [sendId, trackSend]);
+  }, [pendingSendId, trackSend]);
 
   useEffect(() => {
     if (!sessionId || !relayUrl || !cliPublicKeyHex) return;
@@ -190,6 +194,12 @@ function CLIBridgeContent() {
     answersRef.current = new Map();
     trackSend(null);
     let clientPosted = false;
+    let serverEnded = false;
+
+    const endRequest = (next: 'ended' | 'lost') => {
+      dialogsRef.current.forEach((dialogs) => dialogs.dismiss());
+      setState((s) => (s === 'error' ? s : next));
+    };
 
     (async () => {
       try {
@@ -216,7 +226,6 @@ function CLIBridgeContent() {
 
         ws.onopen = () => {
           if (cancelled) return;
-          setState('connected');
           // Send key_exchange (unencrypted — contains only our public key)
           ws!.send(
             JSON.stringify({
@@ -306,13 +315,15 @@ function CLIBridgeContent() {
                   const signature = JSON.stringify({ chainId, ens, paymaster, apiKey, name, appLogoUrl });
                   if (!sdkRef.current || sdkSignatureRef.current !== signature) {
                     sdkSignatureRef.current = signature;
+                    const dialogs = new ReactUIHandler({ originLabel: 'via JAW bridge' });
+                    dialogsRef.current.add(dialogs);
                     sdkRef.current = JAW.create({
                       appName: name,
                       ...(appLogoUrl ? { appLogoUrl } : {}),
                       defaultChainId: chainId,
                       preference: {
                         mode: Mode.AppSpecific,
-                        uiHandler: new ReactUIHandler({ originLabel: 'via JAW bridge' }),
+                        uiHandler: dialogs,
                         showTestnets: true,
                       },
                       apiKey,
@@ -361,11 +372,10 @@ function CLIBridgeContent() {
                 }
 
                 case 'shutdown':
+                  serverEnded = true;
+                  endRequest('ended');
                   // A send keeps the tab open so the owner can watch it land.
-                  if (sendRef.current) {
-                    setState('disconnected');
-                    break;
-                  }
+                  if (sendRef.current) break;
                   // Direct close is intentional: /cli-bridge is never embedded
                   // (its route keeps frame-ancestors 'none' / X-Frame-Options DENY).
                   // eslint-disable-next-line no-restricted-properties
@@ -405,7 +415,9 @@ function CLIBridgeContent() {
             window.location.replace(REPLACED_URL);
             return;
           }
-          setState('disconnected');
+          // The relay does not close this socket when the server leaves, so a
+          // close without a shutdown leaves the server waiting on the request.
+          endRequest(serverEnded ? 'ended' : 'lost');
         };
 
         ws.onerror = () => {
@@ -486,9 +498,7 @@ function CLIBridgeContent() {
 
         {send && <SendPanel send={send} />}
 
-        {state === 'connecting' && (
-          <p className="text-muted-foreground mb-4 text-sm leading-relaxed">Connecting to relay...</p>
-        )}
+        {state === 'connecting' && <p className="text-muted-foreground mb-4 text-sm leading-relaxed">Connecting...</p>}
 
         {state === 'connected' && (
           <>
@@ -506,11 +516,15 @@ function CLIBridgeContent() {
           </>
         )}
 
-        {state === 'disconnected' && (
+        {state === 'ended' && !pendingSendId && (
           <p className="text-muted-foreground mt-2 text-sm leading-relaxed">
-            {send?.phase === 'submitted'
-              ? 'Keep this tab open until it confirms.'
-              : `${appName} disconnected. You can close this tab.`}
+            This request has ended. You can close this tab.
+          </p>
+        )}
+
+        {state === 'lost' && (
+          <p className="text-muted-foreground mt-2 text-sm leading-relaxed">
+            This tab lost its connection. Open the link from the chat again.
           </p>
         )}
 
@@ -519,6 +533,10 @@ function CLIBridgeContent() {
             <p className="text-destructive text-base font-semibold">Error</p>
             <p className="text-muted-foreground mt-2 text-sm leading-relaxed">{error}</p>
           </>
+        )}
+
+        {pendingSendId && state !== 'connected' && (
+          <p className="text-muted-foreground mt-2 text-sm leading-relaxed">Keep this tab open until it confirms.</p>
         )}
       </div>
     </div>
@@ -564,6 +582,8 @@ function SendPanel({ send }: { send: Send }) {
 }
 
 const LINK_GONE = 'This link is no longer active. Ask the agent for a new one.';
+const LINK_LOST =
+  'This tab lost its link. Open the link from the chat again. If it no longer opens, ask the agent for a new one.';
 const LINK_DAMAGED = 'This link is damaged. Ask the agent for a new one.';
 
 // The relay keeps one browser per session and closes the older socket with
