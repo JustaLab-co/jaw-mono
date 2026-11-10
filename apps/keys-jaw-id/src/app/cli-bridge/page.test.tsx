@@ -486,11 +486,27 @@ describe('cli-bridge page with nobody on the other side', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const ws = await start();
     await act(async () => ws.onerror!());
+    await act(async () => ws.onclose!({ code: 1006 }));
 
     await act(async () => vi.advanceTimersByTime(20_000));
 
     expect(host.textContent).toContain('Relay connection failed');
     expect(host.textContent).not.toContain('no longer active');
+    expect(host.textContent).not.toContain('lost its connection');
+  });
+
+  it('given the relay expires the session and closes with 4004, the page keeps the expiry message and closes its dialog', async () => {
+    const ws = await start();
+    await init(ws, { appName: 'Claude' });
+
+    await act(async () => {
+      await ws.onmessage!({ data: JSON.stringify({ type: 'error', code: 'session_expired' }) });
+    });
+    await act(async () => ws.onclose!({ code: 4004 }));
+
+    expect(created.dismissed).toBe(1);
+    expect(host.textContent).toContain('Session expired. Start a new session to reconnect.');
+    expect(host.textContent).not.toContain('lost its connection');
   });
 
   it('given a link opened under StrictMode, the page keeps its key and connects', async () => {

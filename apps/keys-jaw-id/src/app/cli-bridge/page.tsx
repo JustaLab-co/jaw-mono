@@ -155,7 +155,7 @@ function CLIBridgeContent() {
 
     const endRequest = (next: 'ended' | 'lost') => {
       dialogsRef.current.forEach((dialogs) => dialogs.dismiss());
-      setState(next);
+      setState((s) => (s === 'error' ? s : next));
     };
 
     (async () => {
