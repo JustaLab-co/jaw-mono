@@ -217,6 +217,7 @@ export class ReactUIHandler implements UIHandler {
   private originLabel?: string;
   /** Teardown of the request that resolved but is still holding its success tick. */
   private pendingTeardown: (() => void) | null = null;
+  private dismissers = new Set<() => void>();
 
   constructor(options?: ReactUIHandlerOptions) {
     this.localTheme = options?.theme;
@@ -345,6 +346,7 @@ export class ReactUIHandler implements UIHandler {
             holdTimer = null;
           }
           if (this.pendingTeardown === cleanup) this.pendingTeardown = null;
+          this.dismissers.delete(dismiss);
 
           try {
             document.body.style.removeProperty('pointer-events');
@@ -384,6 +386,11 @@ export class ReactUIHandler implements UIHandler {
             error: (error as UIError) || UIError.userRejected(),
           });
         };
+
+        const dismiss = () => {
+          if (!submissionInFlight && !settled) handleReject();
+        };
+        this.dismissers.add(dismiss);
 
         // Render appropriate dialog based on request type
         const dialog = this.renderDialog(request, handleApprove, handleReject, (inFlight: boolean) => {
@@ -439,6 +446,15 @@ export class ReactUIHandler implements UIHandler {
       'wallet_sign',
       'wallet_addFunds',
     ].includes(request.type);
+  }
+
+  /**
+   * Closes every open dialog and rejects its request, except one whose submission is in
+   * flight, which reports its own outcome, and one already answered, which keeps its
+   * "Signed" tick until its hold ends.
+   */
+  dismiss(): void {
+    [...this.dismissers].forEach((dismiss) => dismiss());
   }
 
   async cleanup(): Promise<void> {
