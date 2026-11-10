@@ -34,7 +34,7 @@ import {
  * 8. A request repeated under the same id gets the answer already given
  */
 
-type BridgeState = 'connecting' | 'connected' | 'disconnected' | 'error';
+type BridgeState = 'connecting' | 'connected' | 'ended' | 'lost' | 'error';
 
 /** Base64 encode a Uint8Array or ArrayBuffer */
 function toBase64(buf: Uint8Array | ArrayBuffer): string {
@@ -151,10 +151,11 @@ function CLIBridgeContent() {
     let unanswered: ReturnType<typeof setTimeout> | undefined;
     answersRef.current = new Map();
     let clientPosted = false;
+    let serverEnded = false;
 
-    const endRequest = () => {
+    const endRequest = (next: 'ended' | 'lost') => {
       dialogsRef.current.forEach((dialogs) => dialogs.dismiss());
-      setState('disconnected');
+      setState(next);
     };
 
     (async () => {
@@ -328,7 +329,8 @@ function CLIBridgeContent() {
                 }
 
                 case 'shutdown':
-                  endRequest();
+                  serverEnded = true;
+                  endRequest('ended');
                   // Direct close is intentional: /cli-bridge is never embedded
                   // (its route keeps frame-ancestors 'none' / X-Frame-Options DENY).
                   // eslint-disable-next-line no-restricted-properties
@@ -368,7 +370,9 @@ function CLIBridgeContent() {
             window.location.replace(REPLACED_URL);
             return;
           }
-          endRequest();
+          // The relay does not close this socket when the server leaves, so a
+          // close without a shutdown leaves the server waiting on the request.
+          endRequest(serverEnded ? 'ended' : 'lost');
         };
 
         ws.onerror = () => {
@@ -465,9 +469,15 @@ function CLIBridgeContent() {
           </>
         )}
 
-        {state === 'disconnected' && (
+        {state === 'ended' && (
           <p className="text-muted-foreground mt-2 text-sm leading-relaxed">
             This request has ended. You can close this tab.
+          </p>
+        )}
+
+        {state === 'lost' && (
+          <p className="text-muted-foreground mt-2 text-sm leading-relaxed">
+            This tab lost its connection. Open the link from the chat again.
           </p>
         )}
 
