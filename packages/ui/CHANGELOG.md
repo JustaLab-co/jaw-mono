@@ -1,3 +1,14 @@
+## 1.12.3 (2026-11-10)
+
+### 🩹 Fixes
+
+- **ui:** keep signed tick when dismissed during its hold ([32c1f57b](https://github.com/JustaLab-co/jaw-mono/commit/32c1f57b))
+- **keys:** close dialog and say so when server ends request ([75100abe](https://github.com/JustaLab-co/jaw-mono/commit/75100abe))
+
+### ❤️ Thank You
+
+- Mariano Aguero @mariano-aguero
+
 ## 1.12.2 (2026-11-09)
 
 ### 🩹 Fixes
