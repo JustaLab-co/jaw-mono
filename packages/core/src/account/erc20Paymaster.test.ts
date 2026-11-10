@@ -476,12 +476,14 @@ describe('estimateErc20PaymasterCosts failures', () => {
 
     it('marks a failed permission lookup as the permission phase', async () => {
         stubNetwork({ code: -32521, message: 'unused' });
-        relayRequest.mockRejectedValue(new Error('permission not found'));
+        const relayError = new Error('permission not found');
+        relayRequest.mockRejectedValue(relayError);
 
         const error = await failure(estimate({ permissionId: `0x${'ab'.repeat(32)}` }));
 
         expect(error.phase).toBe('permission');
         expect(error.reason).toBe('unknown');
-        expect(error.cause).toBeDefined();
+        expect(error.cause).toBe(relayError);
+        expect(error.message).toBe('permission not found');
     });
 });
