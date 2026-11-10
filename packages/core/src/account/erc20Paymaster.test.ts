@@ -435,6 +435,19 @@ describe('estimateErc20PaymasterCosts failures', () => {
         expect(error.reason).toBe('call-reverted');
     });
 
+    it.each([
+        ['a paymaster refusal', 'FailedOp(0,"AA33 reverted")'],
+        ['an account validation failure', 'FailedOp(0,"AA23 reverted")'],
+        ['a failed op with revert data', 'FailedOpWithRevert(0,"AA33 reverted",0x)'],
+    ])('gives no reason for %s the bundler sends as -32521', async (_, message) => {
+        stubNetwork({ code: -32521, message });
+
+        const error = await failure(estimate());
+
+        expect(error.phase).toBe('userOp');
+        expect(error.reason).toBe('unknown');
+    });
+
     it('reads a paymaster validation failure from the bundler code', async () => {
         stubNetwork({ code: -32501, message: 'AA33 reverted' });
 

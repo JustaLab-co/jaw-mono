@@ -123,11 +123,15 @@ export class Erc20EstimationError extends Error {
  * cause chain. The errors wrapping it are picked from the message, so they can
  * name the wrong failure. Only the bundler's errors come wrapped in a
  * UserOperationExecutionError; the paymaster's calls in the same phase do not.
+ *
+ * Our bundler also answers a validation failure (AA23, AA33) with -32521 and a
+ * FailedOp message, so that pair says nothing about which side failed.
  */
 function bundlerReason(error: unknown): Erc20EstimationReason {
     const execution = findInChain(error, UserOperationExecutionError);
     const rpc = findInChain(execution, RpcRequestError);
     if (!rpc) return 'unknown';
+    if (rpc.code === -32521 && /^FailedOp(WithRevert)?\(/.test(rpc.details)) return 'unknown';
     return BUNDLER_REASONS[rpc.code] ?? 'unknown';
 }
 
