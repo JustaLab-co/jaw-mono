@@ -447,9 +447,7 @@ function CLIBridgeContent() {
         <img src="/jaw-logo.png" alt="JAW" className="mx-auto mb-4 block h-12 w-12 opacity-80" />
         <h1 className="text-foreground mb-4 text-xl font-semibold">{appName}</h1>
 
-        {state === 'connecting' && (
-          <p className="text-muted-foreground mb-4 text-sm leading-relaxed">Connecting to relay...</p>
-        )}
+        {state === 'connecting' && <p className="text-muted-foreground mb-4 text-sm leading-relaxed">Connecting...</p>}
 
         {state === 'connected' && (
           <>

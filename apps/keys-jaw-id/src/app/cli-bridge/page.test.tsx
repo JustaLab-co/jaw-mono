@@ -379,7 +379,7 @@ describe('cli-bridge page when the server ends the request', () => {
   it('given the socket opened but no init came, the page is not yet connected', async () => {
     await start();
 
-    expect(host.textContent).toContain('Connecting to relay...');
+    expect(host.textContent).toContain('Connecting...');
     expect(host.textContent).not.toContain('Connected');
   });
 
@@ -490,7 +490,7 @@ describe('cli-bridge page with nobody on the other side', () => {
         </StrictMode>
       )
     );
-    expect(host.textContent).toContain('Connecting to relay...');
+    expect(host.textContent).toContain('Connecting...');
 
     await vi.waitFor(() => expect(FakeSocket.all.length).toBeGreaterThan(0));
     const ws = await connect(FakeSocket.all.length, cli);
