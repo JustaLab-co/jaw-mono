@@ -370,6 +370,7 @@ describe('estimateErc20PaymasterCosts failures', () => {
     afterEach(() => {
         vi.unstubAllGlobals();
         relayRequest.mockReset();
+        delete answers.eth_estimateUserOperationGas;
     });
 
     it('marks a quote the proxy refuses as the quote phase, keeping the original error', async () => {
@@ -498,5 +499,58 @@ describe('estimateErc20PaymasterCosts failures', () => {
         expect(error.reason).toBe('unknown');
         expect(error.cause).toBe(relayError);
         expect(error.message).toBe('permission not found');
+    });
+
+    it('keeps a failure that is not an Error as the cause, with its text as the message', async () => {
+        stubNetwork({ code: -32521, message: 'unused' });
+        relayRequest.mockRejectedValue('relay down');
+
+        const error = await failure(estimate({ permissionId: `0x${'ab'.repeat(32)}` }));
+
+        expect(error.phase).toBe('permission');
+        expect(error.cause).toBe('relay down');
+        expect(error.message).toBe('relay down');
+    });
+
+    it('prices the ceiling from the limits the bundler returns when nothing fails', async () => {
+        answers.eth_estimateUserOperationGas = {
+            preVerificationGas: '0xc350',
+            verificationGasLimit: '0xea60',
+            callGasLimit: '0x11170',
+            paymasterVerificationGasLimit: '0x9c40',
+            paymasterPostOpGasLimit: '0x10d88',
+        };
+        stubNetwork({ code: -32601, message: 'eth_simulateV1 not supported' }, QUOTES, 'eth_simulateV1');
+
+        const [result] = await estimate();
+
+        expect(result.tokenAddress).toBe(TOKEN);
+        expect(result.tokenCostMax).toBeGreaterThan(0n);
+        expect(result.tokenCost).toBeLessThanOrEqual(result.tokenCostMax);
+        expect(result.hasSufficientBalance).toBe(false);
+    });
+
+    it('marks a bundler failure after a permission lookup as the userOp phase', async () => {
+        stubNetwork({ code: -32521, message: 'execution reverted: 0x' });
+        relayRequest.mockResolvedValue({
+            data: {
+                result: {
+                    data: {
+                        account: account.address,
+                        spender: '0x2222222222222222222222222222222222222222',
+                        start: 0,
+                        end: 4_102_444_800,
+                        salt: '0x1',
+                        calls: [{ target: TOKEN, selector: '0xa9059cbb' }],
+                        spends: [],
+                    },
+                },
+            },
+        });
+
+        const error = await failure(estimate({ permissionId: `0x${'ab'.repeat(32)}` }));
+
+        expect(error.phase).toBe('userOp');
+        expect(error.reason).toBe('call-reverted');
     });
 });
