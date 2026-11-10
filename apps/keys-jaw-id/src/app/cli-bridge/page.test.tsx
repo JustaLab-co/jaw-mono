@@ -144,13 +144,13 @@ describe('cli-bridge page app name', () => {
     expect(host.querySelector('h1')!.textContent).toBe('JAW CLI');
   });
 
-  it('when the relay closes, the page says which client disconnected', async () => {
+  it('when the relay closes, the page says the request has ended', async () => {
     const ws = await start();
     await init(ws, { appName: 'Claude' });
 
     await act(async () => ws.onclose!({ code: 1006 }));
 
-    expect(host.textContent).toContain('Claude disconnected. You can close this tab.');
+    expect(host.textContent).toContain('This request has ended. You can close this tab.');
   });
 });
 
@@ -375,6 +375,52 @@ describe('cli-bridge page answers a repeated request', () => {
   });
 });
 
+describe('cli-bridge page when the server ends the request', () => {
+  it('given the socket opened but no init came, the page is not yet connected', async () => {
+    await start();
+
+    expect(host.textContent).toContain('Connecting to relay...');
+    expect(host.textContent).not.toContain('Connected');
+  });
+
+  it('given init arrived, the page is connected', async () => {
+    const ws = await start();
+    await init(ws, { appName: 'Claude' });
+
+    expect(host.textContent).toContain('Connected');
+  });
+
+  it('given a shutdown, the page closes its dialog and says the request ended', async () => {
+    const close = vi.fn();
+    vi.stubGlobal('close', close);
+    const ws = await start();
+    await init(ws, { appName: 'Claude' });
+
+    await deliver(ws, { type: 'shutdown' });
+
+    expect(created.dismissed).toBe(1);
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(host.textContent).toContain('This request has ended. You can close this tab.');
+    expect(host.textContent).not.toContain('Connected');
+  });
+
+  it('given a request still being answered at shutdown, its answer still goes out', async () => {
+    vi.stubGlobal('close', vi.fn());
+    let finish!: (value: unknown) => void;
+    created.request = () => new Promise((resolve) => (finish = resolve));
+    const ws = await start();
+    await init(ws, { appName: 'Claude' });
+    await deliver(ws, { type: 'rpc_request', id: 'r1', method: 'wallet_sendCalls', params: [{ calls: [] }] });
+    await vi.waitFor(() => expect(finish).toBeDefined());
+
+    await deliver(ws, { type: 'shutdown' });
+    await act(async () => finish({ id: '0xabc' }));
+
+    await vi.waitFor(async () => expect(await answers(ws, 'r1')).toHaveLength(1));
+    expect((await answers(ws, 'r1'))[0]).toMatchObject({ success: true, data: { id: '0xabc' } });
+  });
+});
+
 describe('cli-bridge page with nobody on the other side', () => {
   afterEach(() => vi.useRealTimers());
 
@@ -400,12 +446,14 @@ describe('cli-bridge page with nobody on the other side', () => {
     expect(ws.close).not.toHaveBeenCalled();
   });
 
-  it('given a link opened again without its key, the page says the link is no longer active', async () => {
+  it('given a link opened again without its key, the page says the tab lost its link', async () => {
     window.location.hash = '';
 
     await act(async () => root.render(<CLIBridgePage />));
 
-    expect(host.textContent).toContain('This link is no longer active. Ask the agent for a new one.');
+    expect(host.textContent).toContain(
+      'This tab lost its link. Open the link from the chat again. If it no longer opens, ask the agent for a new one.'
+    );
     expect(FakeSocket.all).toHaveLength(0);
   });
 
@@ -416,7 +464,7 @@ describe('cli-bridge page with nobody on the other side', () => {
 
     await act(async () => vi.advanceTimersByTime(20_000));
 
-    expect(host.textContent).toContain('disconnected');
+    expect(host.textContent).toContain('This request has ended.');
     expect(host.textContent).not.toContain('no longer active');
   });
 
@@ -519,7 +567,7 @@ describe('cli-bridge page when the link is opened in another tab', () => {
   });
 
   it.each([1000, 1006, 4004])(
-    'given the relay closes with %i, the tab stays and says the client disconnected',
+    'given the relay closes with %i, the tab stays, closes its dialog and says the request ended',
     async (code) => {
       const ws = await start();
       await init(ws, { appName: 'Claude' });
@@ -529,9 +577,21 @@ describe('cli-bridge page when the link is opened in another tab', () => {
 
       expect(close).not.toHaveBeenCalled();
       expect(replace).not.toHaveBeenCalled();
-      expect(host.textContent).toContain('Claude disconnected. You can close this tab.');
+      expect(created.dismissed).toBe(1);
+      expect(host.textContent).toContain('This request has ended. You can close this tab.');
+      expect(host.textContent).not.toContain('Connected');
     }
   );
+
+  it('given another tab took the link, this tab does not say the request ended', async () => {
+    const ws = await start();
+    await init(ws, { appName: 'Claude' });
+    leaving();
+
+    await act(async () => ws.onclose!({ code: REPLACED }));
+
+    expect(host.textContent).not.toContain('This request has ended');
+  });
 
   it('given an address with the replaced marker and a session, it still connects to nothing', async () => {
     created.query = 'replaced=1&session=s1&relay=ws://relay.test';
@@ -776,11 +836,11 @@ describe('cli-bridge page proves the link secret', () => {
     expect(host.textContent).not.toContain('no longer active');
   });
 
-  it('given a secret and no key, the page says the link is no longer active and clears the fragment', async () => {
+  it('given a secret and no key, the page says the tab lost its link and clears the fragment', async () => {
     window.location.hash = `s=${LINK_SECRET}`;
     await act(async () => root.render(<CLIBridgePage />));
 
-    expect(host.textContent).toContain('This link is no longer active. Ask the agent for a new one.');
+    expect(host.textContent).toContain('This tab lost its link.');
     expect(FakeSocket.all).toHaveLength(0);
     expect(window.location.hash).toBe('');
   });

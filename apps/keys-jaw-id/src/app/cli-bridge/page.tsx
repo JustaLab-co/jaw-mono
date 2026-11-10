@@ -92,6 +92,7 @@ function CLIBridgeContent() {
    * neither rename the page nor swap or add a logo.
    */
   const appIdentityRef = useRef<{ name: string; logoUrl?: string } | null>(null);
+  const dialogsRef = useRef(new Set<ReactUIHandler>());
   const wsRef = useRef<WebSocket | null>(null);
   const sharedSecretRef = useRef<CryptoKey | null>(null);
   /**
@@ -116,7 +117,7 @@ function CLIBridgeContent() {
       setCliPublicKeyHex(link.pk);
     } else {
       setState('error');
-      setError(link.kind === 'damaged' ? LINK_DAMAGED : LINK_GONE);
+      setError(link.kind === 'damaged' ? LINK_DAMAGED : LINK_LOST);
     }
   }, []);
 
@@ -151,6 +152,11 @@ function CLIBridgeContent() {
     answersRef.current = new Map();
     let clientPosted = false;
 
+    const endRequest = () => {
+      dialogsRef.current.forEach((dialogs) => dialogs.dismiss());
+      setState('disconnected');
+    };
+
     (async () => {
       try {
         // Generate browser ECDH keypair
@@ -176,7 +182,6 @@ function CLIBridgeContent() {
 
         ws.onopen = () => {
           if (cancelled) return;
-          setState('connected');
           // Send key_exchange (unencrypted — contains only our public key)
           ws!.send(
             JSON.stringify({
@@ -266,13 +271,15 @@ function CLIBridgeContent() {
                   const signature = JSON.stringify({ chainId, ens, paymaster, apiKey, name, appLogoUrl });
                   if (!sdkRef.current || sdkSignatureRef.current !== signature) {
                     sdkSignatureRef.current = signature;
+                    const dialogs = new ReactUIHandler({ originLabel: 'via JAW bridge' });
+                    dialogsRef.current.add(dialogs);
                     sdkRef.current = JAW.create({
                       appName: name,
                       ...(appLogoUrl ? { appLogoUrl } : {}),
                       defaultChainId: chainId,
                       preference: {
                         mode: Mode.AppSpecific,
-                        uiHandler: new ReactUIHandler({ originLabel: 'via JAW bridge' }),
+                        uiHandler: dialogs,
                         showTestnets: true,
                       },
                       apiKey,
@@ -321,6 +328,7 @@ function CLIBridgeContent() {
                 }
 
                 case 'shutdown':
+                  endRequest();
                   // Direct close is intentional: /cli-bridge is never embedded
                   // (its route keeps frame-ancestors 'none' / X-Frame-Options DENY).
                   // eslint-disable-next-line no-restricted-properties
@@ -360,7 +368,7 @@ function CLIBridgeContent() {
             window.location.replace(REPLACED_URL);
             return;
           }
-          setState('disconnected');
+          endRequest();
         };
 
         ws.onerror = () => {
@@ -461,7 +469,7 @@ function CLIBridgeContent() {
 
         {state === 'disconnected' && (
           <p className="text-muted-foreground mt-2 text-sm leading-relaxed">
-            {appName} disconnected. You can close this tab.
+            This request has ended. You can close this tab.
           </p>
         )}
 
@@ -477,6 +485,8 @@ function CLIBridgeContent() {
 }
 
 const LINK_GONE = 'This link is no longer active. Ask the agent for a new one.';
+const LINK_LOST =
+  'This tab lost its link. Open the link from the chat again. If it no longer opens, ask the agent for a new one.';
 const LINK_DAMAGED = 'This link is damaged. Ask the agent for a new one.';
 
 // The relay keeps one browser per session and closes the older socket with
