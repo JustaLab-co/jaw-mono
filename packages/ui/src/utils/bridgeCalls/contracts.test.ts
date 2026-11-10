@@ -30,6 +30,7 @@ describe('given the pinned bridge table of the signing screen', () => {
         depository: '0x4cD00E387622C35bDDB9b4c962C136462338BC31',
         protocolChain: 'base',
         erc20Routers: ['0x0729E2a4716d9f7dD17858d5d504426D228697f7', '0xb92fe925DC43a0ECdE6c8b1a2709c170Ec4fFf4f'],
+        approvalProxies: ['0x5567954cD026CEbFE486062cb75848e0f1c12E58', '0xCcC88a9d1B4ED6b0EABA998850414b24f1c315bE'],
         solvers: expect.arrayContaining(['0xf70da97812CB96acDF810712Aa562db8dfA3dbEF']),
       },
       tokens: {
@@ -88,6 +89,20 @@ describe('given the pinned bridge table of the signing screen', () => {
       testnet: true,
     });
     expect(BRIDGE_CHAINS[8453]?.relay?.testnet).toBeUndefined();
+  });
+
+  it('then Relay chains pull same-chain swaps through the v3.2 and v3 approval proxies, Linea and the testnets through their own', () => {
+    const proxies = Object.fromEntries(chains.flatMap((c) => (c.relay ? [[c.id, c.relay.approvalProxies]] : [])));
+    const shared = ['0x5567954cD026CEbFE486062cb75848e0f1c12E58', '0xCcC88a9d1B4ED6b0EABA998850414b24f1c315bE'];
+    for (const id of [1, 10, 56, 100, 130, 137, 143, 1868, 4663, 5042, 8453, 42161, 42220, 43114, 57073]) {
+      expect(proxies[id], String(id)).toEqual(shared);
+    }
+    expect(proxies[59144]).toEqual([
+      '0xE4DfBd5E6784dB1058124E2c87554C0591f0Fb7B',
+      '0x8754Bc615047de01228a7527B712806A71A8dc9a',
+    ]);
+    expect(proxies[11155111]).toEqual(['0x77A917df7A084b7B3E43517Ae28373C2a5492625']);
+    expect(proxies[84532]).toEqual(['0xBBbfD134E9b44BfB5123898BA36b01dE7ab93d98']);
   });
 
   it('then BSC USDC has 18 decimals and Arc pays gas in USDC with no wrapped native', () => {
@@ -164,6 +179,6 @@ describe('given the pinned bridge table of the signing screen', () => {
 
   it('then the table matches the reviewed digest, so any changed literal updates this test', () => {
     const digest = createHash('sha256').update(JSON.stringify({ BRIDGE_CHAINS, JAW_FEE_RECIPIENT })).digest('hex');
-    expect(digest).toBe('615d483ace344a15dd0fbdead59b815b11e0da7a521c37ecc2da8d71b0c357ae');
+    expect(digest).toBe('6639530831c6132ef21eeb2102571f3501d1138efadd63a883abe2fdba32a880');
   });
 });

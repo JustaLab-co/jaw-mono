@@ -40,6 +40,7 @@ import {
     buildGrantPermissionCall,
     grantPermissions,
     SPEND_PERMISSIONS_MANAGER_ABI,
+    TOKEN_FUNCTIONS,
     type PermissionsDetail,
 } from './permissions.js';
 
@@ -309,4 +310,83 @@ describe('a call the grant screen could misname', () => {
     ])('still grants a signature written another way that hashes as shown: %s', (functionSignature) => {
         expect(build({ functionSignature })).not.toThrow();
     });
+    // A name searched offline to hash to a token function's selector would read as harmless on the
+    // screen while granting that function, so a signature that hashes to one must be its own name.
+    it.each([
+        ['alone', {}],
+        ['with the selector it hashes to', { selector: '0xa22cb465' }],
+    ])('is refused when an unrelated name hashes to setApprovalForAll, %s', (_label, call) => {
+        expect(build({ ...call, functionSignature: 'niceFunctionHerePlzClick943230089(address,bool)' })).toThrow(
+            expect.objectContaining({
+                code: -32602,
+                message: expect.stringContaining('permissions.calls[0].functionSignature'),
+            })
+        );
+    });
+
+    // Selectors from cast sig, not from the table, so a typo in an entry fails here.
+    const tokenFunctions: [string, Hex, string][] = [
+        ['setApprovalForAll(address,bool)', '0xa22cb465', 'setApprovalForAll(address operator, bool approved)'],
+        ['approve(address,uint256)', '0x095ea7b3', 'approve(address spender, uint256 amount)'],
+        ['transfer(address,uint256)', '0xa9059cbb', 'transfer(address to, uint256 amount)'],
+        [
+            'transferFrom(address,address,uint256)',
+            '0x23b872dd',
+            'transferFrom(address from, address to, uint256 amount)',
+        ],
+        [
+            'safeTransferFrom(address,address,uint256)',
+            '0x42842e0e',
+            'safeTransferFrom(address from, address to, uint256 id)',
+        ],
+        [
+            'safeTransferFrom(address,address,uint256,bytes)',
+            '0xb88d4fde',
+            'safeTransferFrom(address from, address to, uint256 id, bytes data)',
+        ],
+        [
+            'safeTransferFrom(address,address,uint256,uint256,bytes)',
+            '0xf242432a',
+            'safeTransferFrom(address from, address to, uint256 id, uint256 amount, bytes data)',
+        ],
+        [
+            'safeBatchTransferFrom(address,address,uint256[],uint256[],bytes)',
+            '0x2eb2c2d6',
+            'safeBatchTransferFrom(address from, address to, uint256[] ids, uint256[] amounts, bytes data)',
+        ],
+        ['increaseAllowance(address,uint256)', '0x39509351', 'increaseAllowance(address spender, uint256 added)'],
+        ['increaseApproval(address,uint256)', '0xd73dd623', 'increaseApproval(address spender, uint256 added)'],
+        ['approveAndCall(address,uint256)', '0x3177029f', 'approveAndCall(address spender, uint256 amount)'],
+        [
+            'approveAndCall(address,uint256,bytes)',
+            '0xcae9ca51',
+            'approveAndCall(address spender, uint256 amount, bytes data)',
+        ],
+        [
+            'approve(address,address,uint160,uint48)',
+            '0x87517c45',
+            'approve(address token, address spender, uint160 amount, uint48 expiration)',
+        ],
+        [
+            'transferFrom(address,address,uint160,address)',
+            '0x36c78516',
+            'transferFrom(address from, address to, uint160 amount, address token)',
+        ],
+    ];
+
+    it('guards exactly the listed token functions, each under its own selector', () => {
+        expect(Object.fromEntries(TOKEN_FUNCTIONS)).toEqual(
+            Object.fromEntries(tokenFunctions.map(([plain, selector]) => [selector, plain]))
+        );
+    });
+
+    it.each(tokenFunctions)(
+        'still grants the token function %s, with or without parameter names',
+        (plain, selector, named) => {
+            for (const functionSignature of [plain, named]) {
+                expect(build({ functionSignature })).not.toThrow();
+                expect(build({ selector, functionSignature })).not.toThrow();
+            }
+        }
+    );
 });

@@ -31,7 +31,7 @@ export interface TransactionDialogProps {
   gasFeeLoading: boolean;
   gasEstimationError: string;
   /** Re-runs fee estimation; offered when estimation failed rather than the balance falling short. */
-  onRetryEstimation?: () => void;
+  onRetryEstimation?: () => void | Promise<void>;
   /** A fee-token estimation is running; Retry waits for it. */
   estimatingTokenCosts?: boolean;
   sponsored: boolean;
@@ -40,6 +40,10 @@ export interface TransactionDialogProps {
   assetsOut?: AssetDelta[];
   assetsIn?: AssetDelta[];
   assetPreviewError?: boolean;
+  /** The asset simulation is running, so it has no verdict on the calls yet. */
+  assetPreviewLoading?: boolean;
+  /** The asset simulation answered, so `assetPreviewWillRevert` and its cause are its verdict. */
+  assetPreviewSimulated?: boolean;
   assetPreviewWillRevert?: boolean;
   /** Why the simulation reverted, when known — lets a balance shortfall read as insufficient funds. */
   assetPreviewRevertCause?: RevertCause;

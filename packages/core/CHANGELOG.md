@@ -1,3 +1,14 @@
+## 1.10.4 (2026-11-09)
+
+### 🩹 Fixes
+
+- **core:** refuse names colliding with more allowance functions ([8b1523f4](https://github.com/JustaLab-co/jaw-mono/commit/8b1523f4))
+- **core:** refuse a signature that collides with a token function ([13f90bd9](https://github.com/JustaLab-co/jaw-mono/commit/13f90bd9))
+
+### ❤️ Thank You
+
+- Mariano Aguero @mariano-aguero
+
 ## 1.10.3 (2026-10-30)
 
 ### 🩹 Fixes

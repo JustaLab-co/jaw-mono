@@ -6,6 +6,7 @@ import {
   encodeAbiParameters,
   ethAddress,
   pad,
+  stringToHex,
   zeroAddress,
   type Address,
   type Hex,
@@ -43,6 +44,8 @@ const AERO_POS = '0x827922686190790b37229fd06084350e74485b72';
 // A token whose `decimals()` returns 0, which viem's `tokenURI_ || decimals_` guard reads as
 // falsy and reports as `undefined`.
 const ZERO_DEC = '0x0000000000000000000000000000000000000d00';
+// Answers `symbol()` with a bytes32 word, which viem's string decode cannot read.
+const MKR = '0x9f8f72aa9304c8b593d555f12ef6589cc3a579a2';
 
 const ACCOUNT = '0x1111111111111111111111111111111111111111' as Address;
 const BATCH_CALLDATA = '0xfeedface' as Hex;
@@ -120,6 +123,24 @@ describe('mapAssetChanges', () => {
     expect(delta).toMatchObject({ address: USDC, symbol: undefined, amountFormatted: '1', direction: 'out' });
   });
 
+  it.each([
+    ['a zero-width space', 'USDC\u{200b}'],
+    ['a long run of control characters', '\u0001'.repeat(200)],
+  ])('leaves a token whose symbol has %s unnamed', (_, symbol) => {
+    const [delta] = mapAssetChanges([change(USDC, -1_000_000n, { decimals: 6, symbol })]);
+    expect(delta).toMatchObject({ address: USDC, symbol: undefined, amountFormatted: '1', direction: 'out' });
+  });
+
+  it('keeps a symbol with a character past ASCII', () => {
+    const [delta] = mapAssetChanges([change(USDC, -1_000_000n, { decimals: 6, symbol: 'USD₮0' })]);
+    expect(delta.symbol).toBe('USD₮0');
+  });
+
+  it('trims the padding off a symbol', () => {
+    const [delta] = mapAssetChanges([change(USDC, -1_000_000n, { decimals: 6, symbol: ' USDC ' })]);
+    expect(delta.symbol).toBe('USDC');
+  });
+
   it('treats the native pseudo-address as native whatever viem reports', () => {
     const [delta] = mapAssetChanges([change(ethAddress.toUpperCase().replace('0X', '0x'), 1n)]);
 
@@ -163,6 +184,7 @@ describe('mapAssetChanges', () => {
 
 const SUPPORTS_INTERFACE = '0x01ffc9a7';
 const DECIMALS = '0x313ce567';
+const SYMBOL = '0x95d89b41';
 // `supportsInterface(0x80ac58cd)`, written out rather than re-encoded from the source constant:
 // re-encoding would make any interface id agree with itself, including a wrong one.
 const ERC721_QUERY = `0x01ffc9a780ac58cd${'00'.repeat(28)}` as Hex;
@@ -324,6 +346,24 @@ describe('resolveTokenUnits', () => {
     ).rejects.toThrow();
   });
 
+  it('keeps the rows, unnamed, when the request fails and it only asked for symbols', async () => {
+    const { client } = stubClient(() => 'revert', new Error('429 Too Many Requests'));
+    const changes = [change(MKR, -(2n * 10n ** 18n), { decimals: 18 })];
+
+    const units = await resolveTokenUnits(client, changes, BLOCK, BATCH);
+
+    expect(mapAssetChanges(units.changes, units.erc721)).toEqual([
+      expect.objectContaining({ address: MKR, symbol: undefined, amountFormatted: '2', direction: 'out' }),
+    ]);
+  });
+
+  it('still rejects when the failed request also asked for decimals', async () => {
+    const { client } = stubClient(() => 'revert', new Error('429 Too Many Requests'));
+    const changes = [change(MKR, -1n, { decimals: 18 }), change(ZERO_DEC, 42n, { symbol: 'ZERO' })];
+
+    await expect(resolveTokenUnits(client, changes, BLOCK, BATCH)).rejects.toThrow();
+  });
+
   it('keeps the rest of the batch when one token answers with junk', async () => {
     // The other direction of the same guard: a per-call failure is local to its call, so a
     // hostile token cannot empty the preview for the assets beside it.
@@ -461,6 +501,57 @@ describe('resolveTokenUnits', () => {
     expect(blocks.map((b) => b.map((c) => c.data))).toEqual([[BATCH_CALLDATA], [ERC721_QUERY]]);
   });
 
+  it('names a token whose symbol is a bytes32 word, in the same request', async () => {
+    const { client, requestCount } = stubClient((selector) =>
+      selector === SYMBOL ? stringToHex('MKR', { size: 32 }) : 'revert'
+    );
+    const changes = [change(MKR, -(2n * 10n ** 18n), { decimals: 18 })];
+
+    const units = await resolveTokenUnits(client, changes, BLOCK, BATCH);
+
+    expect(requestCount()).toBe(1);
+    expect(mapAssetChanges(units.changes, units.erc721)).toEqual([
+      expect.objectContaining({ address: MKR, symbol: 'MKR', amountFormatted: '2', direction: 'out' }),
+    ]);
+  });
+
+  it.each([
+    ['empty', ''],
+    ['blank', '   '],
+    ['not printable text', 'MKR\u{200b}'],
+  ])('asks a token whose symbol is %s for it again', async (_, symbol) => {
+    const { client } = stubClient((selector) => (selector === SYMBOL ? stringToHex('MKR', { size: 32 }) : 'revert'));
+
+    const units = await resolveTokenUnits(client, [change(MKR, -1n, { decimals: 18, symbol })], BLOCK, BATCH);
+
+    expect(units.changes[0].token.symbol).toBe('MKR');
+  });
+
+  it.each([
+    ['a bytes32 word that is not printable text', stringToHex('AA\nPL', { size: 32 })],
+    ['a bytes32 word of zeros', word(0)],
+    ['an empty string', str('')],
+  ] as [string, Hex][])('leaves a token unnamed when its symbol() answers %s', async (_, answer) => {
+    const { client } = stubClient((selector) => (selector === SYMBOL ? answer : 'revert'));
+
+    const units = await resolveTokenUnits(client, [change(MKR, -1n, { decimals: 18 })], BLOCK, BATCH);
+
+    expect(units.changes[0].token.symbol).toBeUndefined();
+  });
+
+  it('does not ask a token that has a symbol, or the native coin, for one', async () => {
+    const { client, requestCount } = stubClient(() => 'revert');
+
+    await resolveTokenUnits(
+      client,
+      [change(USDC, 5n, { decimals: 6, symbol: 'USDC' }), change(ethAddress, 5n, {})],
+      BLOCK,
+      BATCH
+    );
+
+    expect(requestCount()).toBe(0);
+  });
+
   it('asks nothing when every token reported readable decimals', async () => {
     const { client, requestCount } = stubClient(() => word(1));
     const changes = [change(USDC, 5n, { decimals: 6, symbol: 'USDC' })];
@@ -492,7 +583,8 @@ const ETH_BALANCE = word(10n ** 18n);
  * Answers are keyed off the exact calldata, not just "request 3", so a probe asking the wrong
  * question — a different interface id, the two probe groups swapped — fails here.
  */
-function stubNode({ batchReverts = false, senderRejected = false } = {}) {
+function stubNode({ batchReverts = false, senderRejected = false, bytes32Symbol = false, metadataFails = false } = {}) {
+  const symbolAnswer = bytes32Symbol ? stringToHex('PUNK', { size: 32 }) : str('PUNK');
   const blockParams: unknown[] = [];
   let blockNumberCalls = 0;
   let simulations = 0;
@@ -549,9 +641,11 @@ function stubNode({ batchReverts = false, senderRejected = false } = {}) {
             { number: block, calls: [ok(word(1))] }, // NFT count post: 0 -> 1
             { number: block, calls: [failed()] }, // decimals() reverts
             { number: block, calls: [ok(str('ipfs://1'))] }, // ...but tokenURI answers
-            { number: block, calls: [ok(str('PUNK'))] },
+            { number: block, calls: [ok(symbolAnswer)] },
           ];
         }
+
+        if (metadataFails) throw new Error('metadata probe failed');
 
         // Ours: [batch replay, metadata probes]. A single block means the probes ran with nothing
         // ahead of them, so the fixture's contract is not yet deployed and cannot answer.
@@ -561,7 +655,9 @@ function stubNode({ batchReverts = false, senderRejected = false } = {}) {
           calls: b.calls.map((c) => {
             if (i !== probeBlock) return ok('0x'); // the replayed batch
             if (blockStateCalls.length === 1) return failed(); // no code at the base block
-            return (c as { data: Hex }).data === ERC721_QUERY ? ok(word(1)) : failed();
+            const { data } = c as { data: Hex };
+            if (data === ERC721_QUERY) return ok(word(1));
+            return data === SYMBOL ? ok(symbolAnswer) : failed();
           }),
         }));
       },
@@ -588,6 +684,14 @@ describe('simulateAssetChanges', () => {
     expect(node.simulations()).toBe(3);
   });
 
+  it('names a token whose symbol is a bytes32 word, which viem leaves without one', async () => {
+    stubNode({ bytes32Symbol: true });
+
+    const result = await simulateAssetChanges({ chainId: base.id, account: ACCOUNT, calls });
+
+    expect(result.deltas).toEqual([expect.objectContaining({ address: AERO_POS, symbol: 'PUNK' })]);
+  });
+
   it('pins every simulation and probe to one block, resolved once', async () => {
     const node = stubNode();
 
@@ -606,6 +710,14 @@ describe('simulateAssetChanges', () => {
 
     expect(result).toMatchObject({ willRevert: true, deltas: [], revertCause: 'balance' });
     expect(node.simulations()).toBe(2);
+  });
+
+  it('keeps the clean verdict when the token amounts cannot be read', async () => {
+    stubNode({ metadataFails: true });
+
+    const result = await simulateAssetChanges({ chainId: base.id, account: ACCOUNT, calls });
+
+    expect(result).toEqual({ deltas: [], willRevert: false, unreadable: true });
   });
 
   it('rejects, rather than reporting a revert, when the node refused to run the batch', async () => {

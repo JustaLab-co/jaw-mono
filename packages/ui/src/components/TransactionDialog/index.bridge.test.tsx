@@ -14,6 +14,9 @@ import {
   RELAY_OTHER_RECIPIENT_DEPOSIT,
   RELAY_OTHER_RECIPIENT_DEPOSITOR,
   RELAY_OTHER_RECIPIENT_ORDER,
+  RELAY_SWAP,
+  RELAY_SWAP_ACCOUNT,
+  RELAY_SWAP_APPROVE,
   RELAY_USDC_APPROVE,
   RELAY_USDC_DEPOSIT,
   RELAY_USDC_ORDER,
@@ -527,6 +530,14 @@ describe('BridgeDetails', () => {
     expect([...root.querySelectorAll('dt')].map((e) => e.textContent)).toEqual(['Recipient', 'Fee']);
     expect(root.querySelector('[aria-label="Copy recipient"]')).not.toBeNull();
     expect(root.querySelector('[aria-label="Copy fee"]')).toBeNull();
+  });
+});
+
+describe('TransactionDialog with a same-chain Relay swap', () => {
+  it('shows the swap with no Details section, since it has no terms to list', () => {
+    const root = render([RELAY_SWAP_APPROVE, RELAY_SWAP], { walletAddress: RELAY_SWAP_ACCOUNT });
+    expect(title(root)).toBe('Swap through Relay');
+    expect([...root.querySelectorAll('button')].map((b) => b.textContent)).not.toContain('Details');
   });
 });
 

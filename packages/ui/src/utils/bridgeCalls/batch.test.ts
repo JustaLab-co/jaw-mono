@@ -132,7 +132,7 @@ describe('given the relay-usdc batch the MCP builds, approve then deposit', () =
     expect(batch?.notices).toEqual([RELAY_HIDDEN, approvesSpend(3, OTHER, 'USDC')]);
   });
 
-  it('when a transfer sits between the approve and the deposit, then the approve gets the unpaired wording and the transfer is named', () => {
+  it('when a transfer sits between the approve and the deposit, then only the transfer is named', () => {
     const batch = readBridgeBatch(contracts, [RELAY_USDC_APPROVE, transfer, RELAY_USDC_DEPOSIT], SIGNER);
     expect(batch?.transfer).toBeDefined();
     expect(batch?.notices).toEqual([RELAY_HIDDEN, sendsTo(2, 'USDC', OTHER)]);

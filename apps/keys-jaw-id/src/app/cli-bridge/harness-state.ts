@@ -5,6 +5,7 @@ export const created = {
   appNames: [] as string[],
   configs: [] as Record<string, unknown>[],
   handlerOptions: [] as unknown[],
+  dismissed: 0,
   session: 's1',
   /** The whole query when a test opens the page at another URL than a session link. */
   query: null as string | null,
@@ -19,6 +20,9 @@ export const uiMock = {
   ReactUIHandler: class {
     constructor(options?: unknown) {
       created.handlerOptions.push(options);
+    }
+    dismiss() {
+      created.dismissed += 1;
     }
   },
 };
