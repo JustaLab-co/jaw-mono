@@ -567,6 +567,8 @@ export function OnboardingDialog({
   }
 
   // Welcome-back view — one-tap continue with the last account.
+  const tileLabel =
+    expectedAccount && defaultAccount.credentialId !== lastAuthenticatedCredentialId ? 'Requested' : 'Last used';
   return (
     <DialogShell onClose={isBusy ? undefined : onClose}>
       <div className="flex flex-col p-6">
@@ -585,7 +587,7 @@ export function OnboardingDialog({
               {/* bg override: the default bg-accent token is near-invisible on this white tile */}
               <Skeleton className="bg-primary-foreground/10 rounded-box h-10 w-10 flex-none" />
               <span className="flex min-w-0 flex-1 flex-col gap-1.5">
-                <span className="text-primary-foreground/60 text-label font-mono uppercase">Last used</span>
+                <span className="text-primary-foreground/60 text-label font-mono uppercase">{tileLabel}</span>
                 <Skeleton className="bg-primary-foreground/10 rounded-xs h-3.5 w-36" />
               </span>
             </>
@@ -601,7 +603,7 @@ export function OnboardingDialog({
                 className="rounded-box h-10 w-10"
               />
               <span className="flex min-w-0 flex-1 flex-col gap-1">
-                <span className="text-primary-foreground/60 text-label font-mono uppercase">Last used</span>
+                <span className="text-primary-foreground/60 text-label font-mono uppercase">{tileLabel}</span>
                 <span
                   className={cn(
                     'text-primary-foreground truncate font-semibold',

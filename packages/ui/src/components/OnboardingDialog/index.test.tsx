@@ -165,3 +165,33 @@ describe('OnboardingDialog with an expected account', () => {
     expect(onRetryAccount).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('OnboardingDialog tile label', () => {
+  const render = async (extra: Partial<OnboardingDialogProps>) => {
+    await act(async () => {
+      root.render(createElement(OnboardingDialog, { ...props, ...extra }));
+    });
+    await settle();
+  };
+
+  it('says Requested when the expected account is not the last signed-in one', async () => {
+    await render({ expectedAccount: OTHER });
+
+    expect(container.textContent).toContain('Requested');
+    expect(container.textContent).not.toContain('Last used');
+  });
+
+  it('says Last used when the expected account is the last signed-in one', async () => {
+    await render({ expectedAccount: LAST_USED });
+
+    expect(container.textContent).toContain('Last used');
+    expect(container.textContent).not.toContain('Requested');
+  });
+
+  it('says Last used when no account is expected', async () => {
+    await render({});
+
+    expect(container.textContent).toContain('Last used');
+    expect(container.textContent).not.toContain('Requested');
+  });
+});

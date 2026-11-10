@@ -86,7 +86,7 @@ describe('ReactUIHandler expectedAccount', () => {
     open(ADZ);
 
     expect(text()).toContain('This request is for adz (0x0000...00a1).');
-    await click('Last used');
+    await click('Requested');
     expect(Account.get).toHaveBeenCalledWith(expect.anything(), 'cred-adz');
   });
 
@@ -130,7 +130,7 @@ describe('ReactUIHandler expectedAccount', () => {
     tilePasskeyAnswersAs(ADZ);
     const settled = open(ADZ);
 
-    await click('Last used');
+    await click('Requested');
 
     expect(settled).toHaveBeenCalledWith(
       expect.objectContaining({ approved: true, data: { accounts: [{ address: ADZ }] } })
