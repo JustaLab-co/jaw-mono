@@ -388,7 +388,7 @@ export class ReactUIHandler implements UIHandler {
         };
 
         const dismiss = () => {
-          if (!submissionInFlight) handleReject();
+          if (!submissionInFlight && !settled) handleReject();
         };
         this.dismissers.add(dismiss);
 
@@ -450,7 +450,8 @@ export class ReactUIHandler implements UIHandler {
 
   /**
    * Closes every open dialog and rejects its request, except one whose submission is in
-   * flight: that one reports its own outcome.
+   * flight, which reports its own outcome, and one already answered, which keeps its
+   * "Signed" tick until its hold ends.
    */
   dismiss(): void {
     [...this.dismissers].forEach((dismiss) => dismiss());
