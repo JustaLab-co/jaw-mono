@@ -119,3 +119,67 @@ describe('OnboardingDialog "Continue as" tile', () => {
     ]);
   });
 });
+
+describe('OnboardingDialog account list', () => {
+  const rows = () => Array.from(container.querySelectorAll('li'));
+
+  it('opens on every stored account, the last used first and marked, and connects the one tapped', async () => {
+    const selected: string[] = [];
+    await act(async () => {
+      root.render(
+        createElement(OnboardingDialog, {
+          ...props,
+          startOnAccountList: true,
+          onAccountSelect: async (account) => void selected.push(account.username),
+        })
+      );
+    });
+    await settle();
+
+    expect(container.textContent).toContain('Choose an account.');
+    expect(container.textContent).not.toContain('Welcome back.');
+    expect(rows().map((row) => row.textContent)).toEqual(['Last usedghadi.justan.id', 'other.justan.id']);
+
+    await act(async () => rows()[1].querySelector('button')!.click());
+    expect(selected).toEqual(['other']);
+  });
+
+  it('with no sign-in recorded, marks no account and lists the newest first', async () => {
+    await act(async () => {
+      root.render(
+        createElement(OnboardingDialog, { ...props, startOnAccountList: true, lastAuthenticatedCredentialId: null })
+      );
+    });
+    await settle();
+
+    expect(rows().map((row) => row.textContent)).toEqual(['other.justan.id', 'ghadi.justan.id']);
+  });
+
+  it('leaves out an account with no passkey, and Back from sign in returns to the list', async () => {
+    const legacy: LocalStorageAccount = { username: 'legacy', creationDate: new Date('2026-01-04') };
+    await act(async () => {
+      root.render(
+        createElement(OnboardingDialog, { ...props, accounts: [...accounts, legacy], startOnAccountList: true })
+      );
+    });
+    await settle();
+    expect(rows()).toHaveLength(2);
+
+    const button = (text: string) =>
+      Array.from(container.querySelectorAll('button')).find((b) => b.textContent === text)!;
+    await act(async () => button('Create new account').click());
+    expect(container.textContent).toContain('Sign up.');
+    await act(async () => button('Back').click());
+    expect(container.textContent).toContain('Choose an account.');
+  });
+
+  it('without the option, opens on the one-tap last used account', async () => {
+    await act(async () => {
+      root.render(createElement(OnboardingDialog, props));
+    });
+    await settle();
+
+    expect(container.textContent).toContain('Welcome back.');
+    expect(rows()).toEqual([]);
+  });
+});

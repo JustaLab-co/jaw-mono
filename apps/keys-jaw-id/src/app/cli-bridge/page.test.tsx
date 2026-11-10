@@ -52,10 +52,10 @@ describe('cli-bridge page app name', () => {
     expect(created.appNames).toEqual(['Claude', 'Cursor']);
   });
 
-  it('labels the requester on the transaction screen instead of the wallet host', async () => {
+  it('labels the requester instead of the wallet host and opens connects on the account list', async () => {
     const ws = await start();
     await init(ws, { appName: 'Claude' });
-    expect(created.handlerOptions).toEqual([{ originLabel: 'via JAW bridge' }]);
+    expect(created.handlerOptions).toEqual([{ originLabel: 'via JAW bridge', startOnAccountList: true }]);
   });
 
   it('the page and the SDK carry the name the client gave, cleaned', async () => {

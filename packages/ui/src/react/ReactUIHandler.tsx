@@ -176,6 +176,8 @@ export interface ReactUIHandlerOptions {
   readonly theme?: JawTheme;
   /** Shown under the app name of the transaction screen instead of the page host. */
   readonly originLabel?: string;
+  /** Opens the connect dialog on the list of stored accounts instead of the one-tap last used account. */
+  readonly startOnAccountList?: boolean;
 }
 
 /**
@@ -215,12 +217,14 @@ export class ReactUIHandler implements UIHandler {
   private config: UIHandlerConfig = {} as UIHandlerConfig;
   private localTheme?: JawTheme;
   private originLabel?: string;
+  private startOnAccountList?: boolean;
   /** Teardown of the request that resolved but is still holding its success tick. */
   private pendingTeardown: (() => void) | null = null;
 
   constructor(options?: ReactUIHandlerOptions) {
     this.localTheme = options?.theme;
     this.originLabel = options?.originLabel;
+    this.startOnAccountList = options?.startOnAccountList;
   }
 
   /**
@@ -481,6 +485,7 @@ export class ReactUIHandler implements UIHandler {
             paymasters={this.config.paymasters}
             ens={this.config.ens}
             serverUrl={this.config.serverUrl}
+            startOnAccountList={this.startOnAccountList}
           />
         );
 
@@ -748,6 +753,7 @@ function OnboardingDialogWrapper({
   paymasters,
   ens,
   serverUrl,
+  startOnAccountList,
 }: {
   request: ConnectUIRequest;
   onApprove: (data: any) => void;
@@ -757,6 +763,7 @@ function OnboardingDialogWrapper({
   paymasters?: Record<number, PaymasterConfig>;
   ens?: string;
   serverUrl?: string;
+  startOnAccountList?: boolean;
 }) {
   const [open, setOpen] = useState(true);
   const [accounts, setAccounts] = useState<LocalStorageAccount[]>(() => getStoredLocalAccounts(apiKey));
@@ -1236,6 +1243,7 @@ function OnboardingDialogWrapper({
         mainnetRpcUrl={getMainnetRpcUrl(apiKey)}
         apiKey={apiKey}
         lastAuthenticatedCredentialId={lastAuthenticatedCredentialId}
+        startOnAccountList={startOnAccountList}
         supportedChains={SUPPORTED_CHAINS.map((chain) => ({ id: chain.id }))}
         subnameTextRecords={subnameTextRecords}
       />

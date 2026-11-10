@@ -42,6 +42,9 @@ export interface OnboardingDialogProps {
   /** Open on the sign-in/create view even when a default account exists (popup opened via the Safari create escape). */
   startInCreate?: boolean;
 
+  /** Open on the list of stored accounts, last used first, instead of the one-tap last used account. */
+  startOnAccountList?: boolean;
+
   /**
    * Declines the connect request — the host's existing reject path (userRejected), surfaced as the
    * shell's top-right X. Hidden automatically while a passkey ceremony is running: settling the

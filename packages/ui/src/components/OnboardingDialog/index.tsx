@@ -359,7 +359,7 @@ function CreateAccountForm({
 
 // 'signin' and 'signup' are the same screen with intent-swapped emphasis:
 // sign-in leads with the passkey button, sign-up leads with the create form.
-type OnboardingView = 'welcome' | 'signin' | 'signup';
+type OnboardingView = 'welcome' | 'accounts' | 'signin' | 'signup';
 
 export function OnboardingDialog({
   accounts,
@@ -369,6 +369,7 @@ export function OnboardingDialog({
   isImporting,
   onCreateNewAccount,
   startInCreate,
+  startOnAccountList,
   onClose,
   onCreateAccount,
   onAccountCreationComplete,
@@ -387,7 +388,8 @@ export function OnboardingDialog({
     [accounts, lastAuthenticatedCredentialId]
   );
 
-  const [view, setView] = useState<OnboardingView>(startInCreate ? 'signup' : defaultAccount ? 'welcome' : 'signin');
+  const home: OnboardingView = startOnAccountList ? 'accounts' : 'welcome';
+  const [view, setView] = useState<OnboardingView>(startInCreate ? 'signup' : defaultAccount ? home : 'signin');
   const isBusy = loggingInAccount !== null || isImporting || isCreating;
 
   // Addresses for the switch-account chips and avatar resolution. New records
@@ -481,7 +483,7 @@ export function OnboardingDialog({
   );
 
   // Fresh sign-in / create view — also the "Create new account" destination.
-  if (view !== 'welcome' || !defaultAccount) {
+  if (view === 'signin' || view === 'signup' || !defaultAccount) {
     return (
       <DialogShell onClose={isBusy ? undefined : onClose}>
         <div className="flex flex-col p-6">
@@ -490,7 +492,7 @@ export function OnboardingDialog({
             // mono uppercase label language. -ml-1 optically aligns the chevron
             // with the title's left edge.
             <button
-              onClick={() => setView('welcome')}
+              onClick={() => setView(home)}
               disabled={isBusy}
               className="text-muted-foreground hover:text-foreground text-label -ml-1 mb-4 flex w-fit cursor-pointer items-center gap-1 bg-transparent font-mono uppercase transition-colors"
             >
@@ -516,6 +518,86 @@ export function OnboardingDialog({
               {createForm}
             </>
           )}
+        </div>
+      </DialogShell>
+    );
+  }
+
+  if (view === 'accounts') {
+    // Marked only when a sign-in is recorded for it: the newest account stands in for none.
+    const lastUsed = defaultAccount.credentialId === lastAuthenticatedCredentialId ? defaultAccount : undefined;
+    const listed = accounts
+      .filter((a) => a.credentialId)
+      .sort(
+        (a, b) => Number(b === lastUsed) - Number(a === lastUsed) || b.creationDate.getTime() - a.creationDate.getTime()
+      );
+    return (
+      <DialogShell onClose={isBusy ? undefined : onClose}>
+        <div className="flex flex-col p-6">
+          <h2 className="text-foreground text-title-xl leading-none">Choose an account.</h2>
+          <p className="text-muted-foreground text-body mt-2">Pick the account to connect.</p>
+
+          <ul className="mt-6 flex max-h-80 flex-col gap-2 overflow-y-auto">
+            {listed.map((account) => (
+              <li key={account.credentialId}>
+                <button
+                  onClick={() => onAccountSelect(account)}
+                  disabled={isBusy}
+                  className="bg-secondary hover:bg-secondary/80 rounded-box flex w-full cursor-pointer items-center gap-3 p-3 text-left transition-colors disabled:cursor-default disabled:opacity-70"
+                >
+                  {identityPending(account) ? (
+                    <Skeleton className="rounded-box h-10 w-10 flex-none" />
+                  ) : (
+                    <AccountAvatar
+                      seed={account.address ?? account.username}
+                      avatarUrl={avatarFor(account)}
+                      size={40}
+                      className="rounded-box h-10 w-10"
+                    />
+                  )}
+                  <span className="flex min-w-0 flex-1 flex-col gap-1">
+                    {account === lastUsed && (
+                      <span className="text-muted-foreground text-label font-mono uppercase">Last used</span>
+                    )}
+                    {/* Never a skeleton here: a row that can be tapped always says which account it is. */}
+                    <span
+                      className={cn(
+                        'text-foreground truncate font-semibold',
+                        nameFitClass(displayNameOf(account), 'text-[15px]')
+                      )}
+                    >
+                      {displayNameOf(account) || 'your account'}
+                    </span>
+                  </span>
+                  {loggingInAccount === account.username ? (
+                    <Spinner className="!h-4 !w-4" />
+                  ) : (
+                    <ChevronRight className="text-muted-foreground h-4 w-4 flex-none" />
+                  )}
+                </button>
+              </li>
+            ))}
+          </ul>
+
+          <MonoDivider label="or" className="my-5" />
+
+          <Button
+            onClick={onImportAccount}
+            disabled={isBusy}
+            variant="secondary"
+            className="rounded-box text-button h-11 w-full font-semibold"
+          >
+            <Fingerprint className="!h-4 !w-4" />
+            {isImporting ? 'Opening Passkey...' : 'Use another passkey'}
+          </Button>
+
+          <button
+            onClick={onCreateNewAccount ?? (() => setView('signup'))}
+            disabled={isBusy}
+            className="text-muted-foreground hover:text-foreground mx-auto mt-4 cursor-pointer bg-transparent text-xs font-medium transition-colors"
+          >
+            Create new account
+          </button>
         </div>
       </DialogShell>
     );
