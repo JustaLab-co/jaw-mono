@@ -841,6 +841,17 @@ describe('useGasEstimation fee-token outcome per ERC-20 result', () => {
       expect(blockNow()).toBe('will-fail');
     });
 
+    // Our bundler sends a validation failure as -32521 with a FailedOp message.
+    it.each(['FailedOp(0,"AA33 reverted")', 'FailedOp(0,"AA23 reverted")'])(
+      'keeps a -32521 %s from the bundler retryable',
+      async (message) => {
+        await rejectWith(new Erc20EstimationError('userOp', bundlerError(-32521, message)));
+
+        expect(usdcNow().estimationReverted).toBeFalsy();
+        expect(blockNow()).toBe('estimation-failed');
+      }
+    );
+
     it('keeps a paymaster validation failure retryable, whatever its text', async () => {
       await rejectWith(new Erc20EstimationError('userOp', bundlerError(-32501, 'execution reverted: AA33 reverted')));
 
