@@ -1214,6 +1214,24 @@ describe('cli-bridge page after a send', () => {
       expect(host.textContent).not.toContain('on chain');
     });
 
+    it('keeps a confirmed send confirmed when an older status read answers late', async () => {
+      const reads: ((status: unknown) => void)[] = [];
+      created.request = async ({ method }) =>
+        method === 'wallet_sendCalls' ? { id: '0x1', chainId: 84532 } : new Promise((resolve) => reads.push(resolve));
+      const ws = await start();
+      await init(ws, {});
+      await sent(ws);
+      await tick();
+      await tick();
+      expect(reads).toHaveLength(2);
+
+      await act(async () => reads[1]({ status: 200, receipts: [receipt] }));
+      await act(async () => reads[0]({ status: 100 }));
+
+      expect(host.textContent).toContain('Confirmed');
+      expect(host.textContent).not.toContain('Submitted');
+    });
+
     it('keeps the panel after the socket closes and still answers later requests', async () => {
       sends({ status: 200, receipts: [receipt] });
       const ws = await start();

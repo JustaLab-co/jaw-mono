@@ -176,7 +176,7 @@ function CLIBridgeContent() {
           method: 'wallet_getCallsStatus',
           params: [pendingSendId],
         });
-        if (sendRef.current?.id === pendingSendId) trackSend(sendFromStatus(current, status));
+        if (sendRef.current === current) trackSend(sendFromStatus(current, status));
       } catch (err) {
         console.error('[cli-bridge] Failed to read the send status:', err);
       }
