@@ -859,6 +859,8 @@ describe('cli-bridge page reports its client', () => {
 });
 
 describe('cli-bridge page after a send', () => {
+  const KEEP_OPEN = 'Keep this tab open until it confirms.';
+  const CAN_CLOSE = 'You can close this tab.';
   const sendCalls = { method: 'wallet_sendCalls', params: [{ calls: [] }] };
   const txHash = '0x' + 'ab'.repeat(32);
   const receipt = { transactionHash: txHash };
@@ -947,6 +949,44 @@ describe('cli-bridge page after a send', () => {
     expect(close).toHaveBeenCalledTimes(1);
   });
 
+  it('stops saying it is connected once the client shuts down, and says to wait for the send', async () => {
+    sends({ status: 100 });
+    const ws = await start();
+    await init(ws, {});
+    await sent(ws);
+
+    await deliver(ws, { type: 'shutdown' });
+
+    expect(host.textContent).not.toContain('Connected');
+    expect(host.textContent).not.toContain('Keep it open');
+    expect(host.textContent).toContain(KEEP_OPEN);
+    expect(host.textContent).not.toContain(CAN_CLOSE);
+  });
+
+  it('says to keep the tab open when the socket closes before the send confirms', async () => {
+    sends({ status: 100 });
+    const ws = await start();
+    await init(ws, {});
+    await sent(ws);
+
+    await act(async () => ws.onclose!({ code: 1000 }));
+
+    expect(host.textContent).toContain(KEEP_OPEN);
+    expect(host.textContent).not.toContain(CAN_CLOSE);
+  });
+
+  it('shows a relay error next to the send', async () => {
+    sends({ status: 100 });
+    const ws = await start();
+    await init(ws, {});
+    await sent(ws);
+
+    await act(async () => ws.onmessage!({ data: JSON.stringify({ type: 'error', code: 'session_expired' }) }));
+
+    expect(host.textContent).toContain('Submitted');
+    expect(host.textContent).toContain('Session expired');
+  });
+
   describe('polling', () => {
     beforeEach(() => vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] }));
     afterEach(() => vi.useRealTimers());
@@ -975,6 +1015,7 @@ describe('cli-bridge page after a send', () => {
       await tick();
 
       expect(host.textContent).toContain('Failed');
+      expect(host.textContent).toContain('It reverted on chain.');
       expect(host.textContent).toContain(txHash);
       expect(host.querySelector('a')).not.toBeNull();
     });
@@ -989,6 +1030,7 @@ describe('cli-bridge page after a send', () => {
 
       expect(host.textContent).toContain('Failed');
       expect(host.textContent).toContain('It never landed on chain.');
+      expect(host.textContent).not.toContain('reverted');
       expect(host.querySelector('a')).toBeNull();
     });
 
@@ -1007,6 +1049,71 @@ describe('cli-bridge page after a send', () => {
       expect(host.textContent).toContain('Still pending');
       expect(host.textContent).toContain('0x1');
       expect(status).toHaveBeenCalledTimes(polls);
+    });
+
+    it.each([
+      ['confirmed', 'Confirmed', { status: 200, receipts: [receipt] }],
+      ['reverted', 'Failed', { status: 500, receipts: [receipt] }],
+      ['never landed', 'Failed', { status: 400 }],
+    ])('says a %s send is done and the tab can be closed once the client shuts down', async (_, title, status) => {
+      sends(status);
+      const ws = await start();
+      await init(ws, {});
+      await sent(ws);
+      await tick();
+
+      await deliver(ws, { type: 'shutdown' });
+
+      expect(host.textContent).toContain(title);
+      expect(host.textContent).toContain(CAN_CLOSE);
+      expect(host.textContent).not.toContain('Connected');
+      expect(host.textContent).not.toContain('Keep it open');
+      expect(host.textContent).not.toContain(KEEP_OPEN);
+    });
+
+    it('says the tab can be closed when the send confirms after the client left', async () => {
+      sends({ status: 100 }, { status: 200, receipts: [receipt] });
+      const ws = await start();
+      await init(ws, {});
+      await sent(ws);
+      await deliver(ws, { type: 'shutdown' });
+      await act(async () => ws.onclose!({ code: 1000 }));
+      await tick();
+      expect(host.textContent).toContain(KEEP_OPEN);
+
+      await tick();
+
+      expect(host.textContent).toContain('Confirmed');
+      expect(host.textContent).toContain(CAN_CLOSE);
+      expect(host.textContent).not.toContain(KEEP_OPEN);
+    });
+
+    it('says the tab can be closed once it stops waiting for the send', async () => {
+      sends({ status: 100 });
+      const ws = await start();
+      await init(ws, {});
+      await sent(ws);
+      await act(async () => ws.onclose!({ code: 1000 }));
+
+      await tick(10 * 60_000 + 4000);
+
+      expect(host.textContent).toContain('Still pending');
+      expect(host.textContent).toContain(CAN_CLOSE);
+      expect(host.textContent).not.toContain(KEEP_OPEN);
+    });
+
+    it('stays the connected signing backend after a send while the client stays', async () => {
+      sends({ status: 200, receipts: [receipt] });
+      const ws = await start();
+      await init(ws, {});
+      await sent(ws);
+
+      await tick();
+
+      expect(host.textContent).toContain('Confirmed');
+      expect(host.textContent).toContain('Connected');
+      expect(host.textContent).toContain('Keep it open while it is in use.');
+      expect(host.textContent).not.toContain(CAN_CLOSE);
     });
 
     it('keeps the panel after the socket closes and still answers later requests', async () => {

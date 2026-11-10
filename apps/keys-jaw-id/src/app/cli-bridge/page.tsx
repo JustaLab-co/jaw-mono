@@ -362,7 +362,10 @@ function CLIBridgeContent() {
 
                 case 'shutdown':
                   // A send keeps the tab open so the owner can watch it land.
-                  if (sendRef.current) break;
+                  if (sendRef.current) {
+                    setState('disconnected');
+                    break;
+                  }
                   // Direct close is intentional: /cli-bridge is never embedded
                   // (its route keeps frame-ancestors 'none' / X-Frame-Options DENY).
                   // eslint-disable-next-line no-restricted-properties
@@ -503,13 +506,15 @@ function CLIBridgeContent() {
           </>
         )}
 
-        {state === 'disconnected' && !send && (
+        {state === 'disconnected' && (
           <p className="text-muted-foreground mt-2 text-sm leading-relaxed">
-            {appName} disconnected. You can close this tab.
+            {send?.phase === 'submitted'
+              ? 'Keep this tab open until it confirms.'
+              : `${appName} disconnected. You can close this tab.`}
           </p>
         )}
 
-        {state === 'error' && !send && (
+        {state === 'error' && (
           <>
             <p className="text-destructive text-base font-semibold">Error</p>
             <p className="text-muted-foreground mt-2 text-sm leading-relaxed">{error}</p>
@@ -540,8 +545,10 @@ function SendPanel({ send }: { send: Send }) {
       >
         {title}
       </p>
-      {phase === 'failed' && !txHash && (
-        <p className="text-muted-foreground mt-2 text-sm leading-relaxed">It never landed on chain.</p>
+      {phase === 'failed' && (
+        <p className="text-muted-foreground mt-2 text-sm leading-relaxed">
+          {txHash ? 'It reverted on chain.' : 'It never landed on chain.'}
+        </p>
       )}
       {txHash && (
         <p className="text-muted-foreground bg-muted mt-2 break-all rounded p-2 font-mono text-xs">{txHash}</p>
