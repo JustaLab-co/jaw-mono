@@ -331,9 +331,13 @@ describe('estimateErc20PaymasterCosts failures', () => {
         },
     };
 
-    // The bundler answers eth_estimateUserOperationGas with `bundler`; every other
-    // method gets the canned answer above.
-    function stubNetwork(bundler: { code: number; message: string } | 'down', quotes: unknown = QUOTES) {
+    // `failing` (the bundler's estimation by default) answers with `bundler`; every
+    // other method gets the canned answer above.
+    function stubNetwork(
+        bundler: { code: number; message: string } | 'down',
+        quotes: unknown = QUOTES,
+        failing = 'eth_estimateUserOperationGas'
+    ) {
         vi.stubGlobal(
             'fetch',
             vi.fn(async (_url: string, init: { body: string }) => {
@@ -341,7 +345,7 @@ describe('estimateErc20PaymasterCosts failures', () => {
                 if (method === 'pimlico_getTokenQuotes') {
                     return new Response(JSON.stringify({ jsonrpc: '2.0', id, result: quotes }));
                 }
-                if (method === 'eth_estimateUserOperationGas') {
+                if (method === failing) {
                     if (bundler === 'down') throw new TypeError('fetch failed');
                     return new Response(JSON.stringify({ jsonrpc: '2.0', id, error: bundler }));
                 }
@@ -445,6 +449,15 @@ describe('estimateErc20PaymasterCosts failures', () => {
 
     it('gives no reason for a bundler code outside the three it maps', async () => {
         stubNetwork({ code: -32602, message: 'invalid params' });
+
+        const error = await failure(estimate());
+
+        expect(error.phase).toBe('userOp');
+        expect(error.reason).toBe('unknown');
+    });
+
+    it('gives no reason when the paymaster, not the bundler, answers with a bundler code', async () => {
+        stubNetwork({ code: -32500, message: 'AA23 reverted' }, QUOTES, 'pm_getPaymasterStubData');
 
         const error = await failure(estimate());
 

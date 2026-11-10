@@ -8,7 +8,7 @@ import {
     formatUnits,
     getAddress,
 } from 'viem';
-import { SmartAccount, entryPoint08Address } from 'viem/account-abstraction';
+import { SmartAccount, UserOperationExecutionError, entryPoint08Address } from 'viem/account-abstraction';
 import { getBundlerClient } from './smartAccount.js';
 import { Chain, getClient, store } from '../store/index.js';
 import { ERC20_PAYMASTER_ADDRESS, JAW_PROXY_URL, PERMISSIONS_MANAGER_ADDRESS } from '../constants.js';
@@ -121,17 +121,25 @@ export class Erc20EstimationError extends Error {
 /**
  * viem keeps the code from the response body on the RpcRequestError deep in the
  * cause chain. The errors wrapping it are picked from the message, so they can
- * name the wrong failure.
+ * name the wrong failure. Only the bundler's errors come wrapped in a
+ * UserOperationExecutionError; the paymaster's calls in the same phase do not.
  */
 function bundlerReason(error: unknown): Erc20EstimationReason {
+    const execution = findInChain(error, UserOperationExecutionError);
+    const rpc = findInChain(execution, RpcRequestError);
+    if (!rpc) return 'unknown';
+    return BUNDLER_REASONS[rpc.code] ?? 'unknown';
+}
+
+function findInChain<T>(error: unknown, type: new (...args: never[]) => T): T | undefined {
     const seen = new Set<unknown>();
     let current = error;
     while (current instanceof Error && !seen.has(current)) {
-        if (current instanceof RpcRequestError) return BUNDLER_REASONS[current.code] ?? 'unknown';
+        if (current instanceof type) return current;
         seen.add(current);
         current = current.cause;
     }
-    return 'unknown';
+    return undefined;
 }
 
 async function inPhase<T>(phase: Erc20EstimationPhase, run: () => Promise<T>): Promise<T> {
