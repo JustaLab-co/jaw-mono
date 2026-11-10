@@ -1,13 +1,4 @@
-import {
-  decodeFunctionData,
-  erc20Abi,
-  getAddress,
-  isAddress,
-  isAddressEqual,
-  zeroAddress,
-  type Address,
-  type Hex,
-} from 'viem';
+import { decodeFunctionData, erc20Abi, getAddress, isAddress, type Address, type Hex } from 'viem';
 import { readAcrossCall, type AcrossDeposit } from './across';
 import { readBridgeApprove, type BridgeApprove } from './approve';
 import { readRelayCall, readRelaySwap, type RelayDeposit, type RelaySwap } from './relay';
@@ -15,9 +6,6 @@ import { readRelayOrder } from './relayOrder';
 import type { BridgeContracts } from './table';
 import { transferOf, type BridgeTransfer } from './transfer';
 import { pinnedToken, unreadRefs, type BridgeCall, type Inert, type TokenRef, type Unreadable } from './view';
-
-const OTHER_CONTRACT = 'This approval is for a different contract than the deposit.';
-const OTHER_TOKEN = 'This approval is for a different token than the deposit.';
 
 const CHECK = 'Check it before you confirm.';
 const CHECK_RAW = 'Check the raw details before you confirm.';
@@ -29,7 +17,6 @@ export type BridgeBatch = { transfer?: BridgeTransfer; steps: BridgeStep[]; aler
 
 type Deposit = AcrossDeposit | RelayDeposit | RelaySwap;
 export type BridgeRead = Deposit | BridgeApprove | Inert | Unreadable | undefined;
-type Pull = { token: Address; amount: bigint; spender: Address };
 
 // A lone call has no step number on screen, so the line names no step.
 function cannotRead(what: Unreadable['what'], steps: number[], batchSize: number): string {
@@ -52,7 +39,7 @@ function unreadableAlerts(reads: BridgeRead[]): string[] {
   return [...stepsBy].map(([what, steps]) => cannotRead(what, steps, reads.length));
 }
 
-/** One call on its own, before it is paired with the rest of the batch. */
+/** One call on its own, before the rest of the batch is read. */
 export function readBridgeCall(contracts: BridgeContracts, call: BridgeCall, account: Address): BridgeRead {
   return (
     readAcrossCall(contracts, call) ??
@@ -93,7 +80,6 @@ export function readBridgeBatchWithUnread(
   const approves = reads.flatMap((read, at) =>
     read?.kind === 'approve' ? [{ chainId: calls[at].chainId, read }] : []
   );
-  notices.push(...approveNotices(calls, reads));
   calls.forEach((call, i) => reads[i] === undefined && notices.push(outsideNotice(contracts, call, i + 1)));
   return {
     batch: {
@@ -137,31 +123,6 @@ function erc20Call(data: string | undefined) {
   }
 }
 
-// Each deposit that pulls a token pairs with the approve right before it on the same chain.
-function approveNotices(calls: BridgeCall[], reads: BridgeRead[]): string[] {
-  const notices: string[] = [];
-  reads.forEach((read, at) => {
-    const before = reads[at - 1];
-    if (!isDeposit(read) || before?.kind !== 'approve' || calls[at - 1].chainId !== calls[at].chainId) return;
-    const pull = pullOf(read, calls[at]);
-    if (!pull) return;
-    notices.push(...pairingNotices(before, pull));
-  });
-  return notices;
-}
-
 const isDeposit = (read: BridgeRead): read is Deposit => read?.kind === 'deposit' || read?.kind === 'swap';
 
 const stepOf = (read: BridgeRead): BridgeStep => (read?.kind === 'unreadable' ? { unreadable: true } : null);
-
-function pullOf({ send }: Deposit, call: BridgeCall): Pull | undefined {
-  if (send.token.address === zeroAddress) return undefined;
-  return { token: send.token.address, amount: send.amount, spender: getAddress(call.to) };
-}
-
-function pairingNotices(approve: BridgeApprove, pull: Pull): string[] {
-  const notices: string[] = [];
-  if (!isAddressEqual(approve.spender, pull.spender)) notices.push(OTHER_CONTRACT);
-  if (!isAddressEqual(approve.token.address, pull.token)) notices.push(OTHER_TOKEN);
-  return notices;
-}

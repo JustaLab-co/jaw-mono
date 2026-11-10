@@ -430,9 +430,9 @@ describe('TransactionDialog notices around a bridge deposit', () => {
     expect(root.querySelector('[role="alert"].bg-warning\\/10')).toBeNull();
   });
 
-  it('shows RELAY_HIDDEN and the pairing notices together, none folded', () => {
+  it('shows only RELAY_HIDDEN for an approve to another bridge contract', () => {
     const root = render([approve(SPOKE_POOL), RELAY_USDC_DEPOSIT]);
-    expect(yellow(root)).toEqual([RELAY_HIDDEN, 'This approval is for a different contract than the deposit.']);
+    expect(yellow(root)).toEqual([RELAY_HIDDEN]);
   });
 
   it('names a call outside the bridge next to a clean looking deposit', () => {
