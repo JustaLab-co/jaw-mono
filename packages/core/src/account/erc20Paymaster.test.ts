@@ -331,9 +331,13 @@ describe('estimateErc20PaymasterCosts failures', () => {
         },
     };
 
-    // The bundler answers eth_estimateUserOperationGas with `bundler`; every other
-    // method gets the canned answer above.
-    function stubNetwork(bundler: { code: number; message: string } | 'down', quotes: unknown = QUOTES) {
+    // `failing` (the bundler's estimation by default) answers with `bundler`; every
+    // other method gets the canned answer above.
+    function stubNetwork(
+        bundler: { code: number; message: string } | 'down',
+        quotes: unknown = QUOTES,
+        failing = 'eth_estimateUserOperationGas'
+    ) {
         vi.stubGlobal(
             'fetch',
             vi.fn(async (_url: string, init: { body: string }) => {
@@ -341,7 +345,7 @@ describe('estimateErc20PaymasterCosts failures', () => {
                 if (method === 'pimlico_getTokenQuotes') {
                     return new Response(JSON.stringify({ jsonrpc: '2.0', id, result: quotes }));
                 }
-                if (method === 'eth_estimateUserOperationGas') {
+                if (method === failing) {
                     if (bundler === 'down') throw new TypeError('fetch failed');
                     return new Response(JSON.stringify({ jsonrpc: '2.0', id, error: bundler }));
                 }
@@ -366,6 +370,7 @@ describe('estimateErc20PaymasterCosts failures', () => {
     afterEach(() => {
         vi.unstubAllGlobals();
         relayRequest.mockReset();
+        delete answers.eth_estimateUserOperationGas;
     });
 
     it('marks a quote the proxy refuses as the quote phase, keeping the original error', async () => {
@@ -431,6 +436,19 @@ describe('estimateErc20PaymasterCosts failures', () => {
         expect(error.reason).toBe('call-reverted');
     });
 
+    it.each([
+        ['a paymaster refusal', 'FailedOp(0,"AA33 reverted")'],
+        ['an account validation failure', 'FailedOp(0,"AA23 reverted")'],
+        ['a failed op with revert data', 'FailedOpWithRevert(0,"AA33 reverted",0x)'],
+    ])('gives no reason for %s the bundler sends as -32521', async (_, message) => {
+        stubNetwork({ code: -32521, message });
+
+        const error = await failure(estimate());
+
+        expect(error.phase).toBe('userOp');
+        expect(error.reason).toBe('unknown');
+    });
+
     it('reads a paymaster validation failure from the bundler code', async () => {
         stubNetwork({ code: -32501, message: 'AA33 reverted' });
 
@@ -452,6 +470,15 @@ describe('estimateErc20PaymasterCosts failures', () => {
         expect(error.reason).toBe('unknown');
     });
 
+    it('gives no reason when the paymaster, not the bundler, answers with a bundler code', async () => {
+        stubNetwork({ code: -32500, message: 'AA23 reverted' }, QUOTES, 'pm_getPaymasterStubData');
+
+        const error = await failure(estimate());
+
+        expect(error.phase).toBe('userOp');
+        expect(error.reason).toBe('unknown');
+    });
+
     it('gives no reason when the bundler cannot be reached', async () => {
         stubNetwork('down');
 
@@ -463,12 +490,67 @@ describe('estimateErc20PaymasterCosts failures', () => {
 
     it('marks a failed permission lookup as the permission phase', async () => {
         stubNetwork({ code: -32521, message: 'unused' });
-        relayRequest.mockRejectedValue(new Error('permission not found'));
+        const relayError = new Error('permission not found');
+        relayRequest.mockRejectedValue(relayError);
 
         const error = await failure(estimate({ permissionId: `0x${'ab'.repeat(32)}` }));
 
         expect(error.phase).toBe('permission');
         expect(error.reason).toBe('unknown');
-        expect(error.cause).toBeDefined();
+        expect(error.cause).toBe(relayError);
+        expect(error.message).toBe('permission not found');
+    });
+
+    it('keeps a failure that is not an Error as the cause, with its text as the message', async () => {
+        stubNetwork({ code: -32521, message: 'unused' });
+        relayRequest.mockRejectedValue('relay down');
+
+        const error = await failure(estimate({ permissionId: `0x${'ab'.repeat(32)}` }));
+
+        expect(error.phase).toBe('permission');
+        expect(error.cause).toBe('relay down');
+        expect(error.message).toBe('relay down');
+    });
+
+    it('prices the ceiling from the limits the bundler returns when nothing fails', async () => {
+        answers.eth_estimateUserOperationGas = {
+            preVerificationGas: '0xc350',
+            verificationGasLimit: '0xea60',
+            callGasLimit: '0x11170',
+            paymasterVerificationGasLimit: '0x9c40',
+            paymasterPostOpGasLimit: '0x10d88',
+        };
+        stubNetwork({ code: -32601, message: 'eth_simulateV1 not supported' }, QUOTES, 'eth_simulateV1');
+
+        const [result] = await estimate();
+
+        expect(result.tokenAddress).toBe(TOKEN);
+        expect(result.tokenCostMax).toBeGreaterThan(0n);
+        expect(result.tokenCost).toBeLessThanOrEqual(result.tokenCostMax);
+        expect(result.hasSufficientBalance).toBe(false);
+    });
+
+    it('marks a bundler failure after a permission lookup as the userOp phase', async () => {
+        stubNetwork({ code: -32521, message: 'execution reverted: 0x' });
+        relayRequest.mockResolvedValue({
+            data: {
+                result: {
+                    data: {
+                        account: account.address,
+                        spender: '0x2222222222222222222222222222222222222222',
+                        start: 0,
+                        end: 4_102_444_800,
+                        salt: '0x1',
+                        calls: [{ target: TOKEN, selector: '0xa9059cbb' }],
+                        spends: [],
+                    },
+                },
+            },
+        });
+
+        const error = await failure(estimate({ permissionId: `0x${'ab'.repeat(32)}` }));
+
+        expect(error.phase).toBe('userOp');
+        expect(error.reason).toBe('call-reverted');
     });
 });
