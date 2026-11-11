@@ -1184,6 +1184,26 @@ describe('cli-bridge page after a send', () => {
       expect(host.textContent).not.toContain(KEEP_OPEN);
     });
 
+    it('closes its socket after a send and shutdown, and a later session expiry shows no error', async () => {
+      sends({ status: 100 }, { status: 200, receipts: [receipt] });
+      const ws = await start();
+      await init(ws, {});
+      await sent(ws);
+
+      await deliver(ws, { type: 'shutdown' });
+      expect(ws.close).toHaveBeenCalledWith(1000, 'Request ended');
+
+      await act(async () => ws.onmessage!({ data: JSON.stringify({ type: 'error', code: 'session_expired' }) }));
+      await act(async () => ws.onclose!({ code: 4004 }));
+      await tick();
+      await tick();
+
+      expect(host.textContent).toContain('Confirmed');
+      expect(host.textContent).toContain(CAN_CLOSE);
+      expect(host.textContent).not.toContain('Error');
+      expect(host.textContent).not.toContain('Session expired');
+    });
+
     it('says the tab can be closed once it stops waiting for the send', async () => {
       sends({ status: 100 });
       const ws = await start();

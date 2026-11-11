@@ -374,8 +374,14 @@ function CLIBridgeContent() {
                 case 'shutdown':
                   serverEnded = true;
                   endRequest('ended');
-                  // A send keeps the tab open so the owner can watch it land.
-                  if (sendRef.current) break;
+                  // A send keeps the tab open so the owner can watch it land. The
+                  // socket still closes, or the relay later expires the idle
+                  // session and the page would show that as an error.
+                  if (sendRef.current) {
+                    cancelled = true;
+                    ws?.close(1000, 'Request ended');
+                    break;
+                  }
                   // Direct close is intentional: /cli-bridge is never embedded
                   // (its route keeps frame-ancestors 'none' / X-Frame-Options DENY).
                   // eslint-disable-next-line no-restricted-properties
