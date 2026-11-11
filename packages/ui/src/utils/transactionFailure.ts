@@ -130,14 +130,18 @@ interface FeeTokenFacts {
 
 /**
  * The block reason read from the fee-token list, shared by every dialog with a fee row so a
- * blocked fee reads the same on each. A list that has not loaded yet counts as payable.
+ * blocked fee reads the same on each. A list that has not loaded yet counts as payable, and a fee
+ * shortfall is not reported while `pending`.
  */
 export function resolveFeeBlock({
   feeTokens,
+  pending,
   callsSimulated = false,
   ...input
 }: Omit<BlockReasonInput, 'hasSelectablePaymentOption' | 'feeEstimationFailure'> & {
   feeTokens?: FeeTokenFacts[];
+  /** The fee is still being estimated, so a token that looks unpayable may become selectable. */
+  pending: boolean;
   /**
    * The asset simulation answered on the same path the fee estimation runs, so its `revertCause`
    * is the verdict on the calls.
@@ -150,6 +154,8 @@ export function resolveFeeBlock({
   // Where no asset simulation answered, a reverting fee estimation is the only sign the calls revert.
   const estimationRevert = !callsSimulated && failed?.estimationReverted ? 'other' : undefined;
   const revertCause = input.revertCause ?? estimationRevert;
-  const blockReason = resolveBlockReason({ ...input, revertCause, hasSelectablePaymentOption, feeEstimationFailure });
+  const reason = resolveBlockReason({ ...input, revertCause, hasSelectablePaymentOption, feeEstimationFailure });
+  // A fee shortfall is not final until the estimate lands. A shortfall the simulation saw is.
+  const blockReason = pending && reason === 'funds' && revertCause !== 'balance' ? null : reason;
   return { blockReason, hasSelectablePaymentOption, feeEstimationFailure };
 }

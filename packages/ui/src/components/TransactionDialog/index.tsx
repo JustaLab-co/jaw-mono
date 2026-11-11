@@ -111,6 +111,7 @@ export const TransactionDialog = ({
   // lookup that failed — the extra row and the delegation badge must not flicker in and out.
   const isPermissioned = !!onBehalfOf || !!onBehalfOfLoading || !!permissionProblem;
 
+  const feePending = !!gasFeeLoading || !!estimatingTokenCosts;
   // Under a permission the preview simulates the raw calls from the granter, but the fee estimation
   // runs them through the permissions manager, which can reject what the granter alone would not.
   const { blockReason, hasSelectablePaymentOption } = resolveFeeBlock({
@@ -118,6 +119,7 @@ export const TransactionDialog = ({
     gasEstimationError,
     sponsored,
     isPayingWithErc20: !!isPayingWithErc20,
+    pending: feePending,
     revertCause: assetPreviewRevertCause,
     callsSimulated: !!assetPreviewSimulated && !isPermissioned,
   });
@@ -171,7 +173,7 @@ export const TransactionDialog = ({
   );
   const canConfirm =
     !isProcessing &&
-    !gasFeeLoading &&
+    !feePending &&
     !verdictPending &&
     !blockReason &&
     !erc20CannotPay &&

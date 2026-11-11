@@ -248,7 +248,7 @@ describe('prefund shortfall vs the call reverting on its own terms', () => {
 });
 
 describe('resolveFeeBlock', () => {
-  const base = { gasEstimationError: '', sponsored: false, isPayingWithErc20: false };
+  const base = { gasEstimationError: '', sponsored: false, isPayingWithErc20: false, pending: false };
 
   it('is payable while one token of several can pay', () => {
     const fee = resolveFeeBlock({ ...base, feeTokens: [{ isSelectable: false }, { isSelectable: true }] });
@@ -272,6 +272,38 @@ describe('resolveFeeBlock', () => {
     const feeTokens = [{ isSelectable: false, estimationFailure: 'execution reverted', estimationReverted: true }];
     expect(resolveFeeBlock({ ...base, feeTokens }).blockReason).toBe('will-fail');
     expect(resolveFeeBlock({ ...base, feeTokens, revertCause: 'balance' }).blockReason).toBe('funds');
+  });
+
+  describe('while the fee is still estimating', () => {
+    const unpayable = [{ isSelectable: false }];
+
+    it('holds back the funds block', () => {
+      const fee = resolveFeeBlock({ ...base, feeTokens: unpayable, pending: true });
+      expect(fee).toMatchObject({ blockReason: null, hasSelectablePaymentOption: false });
+    });
+
+    it('still reports the funds block once it settles', () => {
+      expect(resolveFeeBlock({ ...base, feeTokens: unpayable, pending: false }).blockReason).toBe('funds');
+    });
+
+    it('keeps reporting a failure it already knows', () => {
+      const feeTokens = [{ isSelectable: false, estimationFailure: 'reverted' }];
+      expect(resolveFeeBlock({ ...base, feeTokens, pending: true })).toMatchObject({
+        blockReason: 'estimation-failed',
+        feeEstimationFailure: 'reverted',
+      });
+    });
+
+    it('keeps reporting a failed estimation while pending', () => {
+      const feeTokens = [{ isSelectable: true }];
+      const fee = resolveFeeBlock({ ...base, feeTokens, gasEstimationError: 'boom', pending: true });
+      expect(fee.blockReason).toBe('will-fail');
+    });
+
+    it('keeps reporting a balance shortfall the simulation saw', () => {
+      const fee = resolveFeeBlock({ ...base, feeTokens: unpayable, pending: true, revertCause: 'balance' });
+      expect(fee.blockReason).toBe('funds');
+    });
   });
 
   it('keeps a reverted fee estimation retryable when the simulation saw the calls succeed', () => {
