@@ -24,9 +24,6 @@ const BASE_WETH = '0x4200000000000000000000000000000000000006';
 const OTHER = '0x1111111111111111111111111111111111111111';
 const SOLVER = '0xf70da97812CB96acDF810712Aa562db8dfA3dbEF';
 
-const UNPAIRED = 'This batch has an approval that no deposit uses. Check its token, amount and spender.';
-const OTHER_CONTRACT = 'This approval is for a different contract than the deposit.';
-const OTHER_TOKEN = 'This approval is for a different token than the deposit.';
 const CHECK = 'Check it before you confirm.';
 const OUTSIDE = `Step 2 calls ${PROXY} outside the bridge. ${CHECK}`;
 
@@ -160,29 +157,29 @@ describe('given a same-chain Relay swap and an approve before it that does not m
     expect(batch?.alerts).toEqual([]);
   });
 
-  it('when the approve is for another token, then the approval is named as for a different token', () => {
+  it('when the approve is for another token, then the approve adds no notice', () => {
     const batch = read([RELAY_SWAP_APPROVE, swapWith({ tokens: [BASE_WETH] })]);
     expect(batch?.alerts).toEqual([]);
-    expect(batch?.notices).toContain(OTHER_TOKEN);
+    expect(batch?.notices).toEqual([]);
   });
 
-  it('when the approve goes to the other proxy version, then it is named as for a different contract', () => {
+  it('when the approve goes to the other proxy version, then the approve adds no notice', () => {
     const batch = read([approve(OLD_PROXY, 10_000_000n), RELAY_SWAP]);
     expect(batch?.alerts).toEqual([]);
-    expect(batch?.notices).toEqual([OTHER_CONTRACT]);
+    expect(batch?.notices).toEqual([]);
   });
 
-  it('when the approve goes to the depository, then it is named as for a different contract', () => {
+  it('when the approve goes to the depository, then the approve adds no notice', () => {
     const depository = BRIDGE_CHAINS[8453].relay!.depository;
     const batch = read([approve(depository, 10_000_000n), RELAY_SWAP]);
     expect(batch?.alerts).toEqual([]);
-    expect(batch?.notices).toEqual([OTHER_CONTRACT]);
+    expect(batch?.notices).toEqual([]);
   });
 
-  it('when the approve runs on another chain, then nothing pairs with it', () => {
+  it('when the approve runs on another chain, then nothing pairs with it and no notice shows', () => {
     const batch = read([{ ...RELAY_SWAP_APPROVE, chainId: 10 }, RELAY_SWAP]);
     expect(batch?.transfer).toMatchObject({ title: 'Swap through Relay', send: tenUsdc });
-    expect(batch?.notices).toContain(UNPAIRED);
+    expect(batch?.notices).toEqual([]);
   });
 });
 
@@ -216,9 +213,10 @@ describe('given an approve to the Relay approval proxy', () => {
     expect(batch?.alerts).toEqual([]);
   });
 
-  it('when a Relay depository deposit follows it, then the approval is named as for a different contract', () => {
+  it('when a Relay depository deposit follows it, then the approve adds no notice', () => {
     const batch = readBridgeBatch(contracts, [RELAY_SWAP_APPROVE, RELAY_USDC_DEPOSIT], account);
-    expect(batch?.notices).toContain('This approval is for a different contract than the deposit.');
+    const alone = readBridgeBatch(contracts, [RELAY_USDC_DEPOSIT], account);
+    expect(batch?.notices).toEqual(alone?.notices);
   });
 });
 

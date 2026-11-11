@@ -89,14 +89,12 @@ describe('given an approve for a token outside the table', () => {
   const unknown = getAddress(`0x${'ab'.repeat(20)}`);
   const unknownApprove: BridgeCall = { ...approve(BASE_SPOKE_POOL), to: unknown };
 
-  it('when it is read, then the batch asks for the token and the approve notice stays', async () => {
+  it('when it is read, then the batch asks for the token and adds no notice', async () => {
     expect(readBridgeBatchWithUnread(contracts, [unknownApprove], SIGNER)?.unread).toEqual([
       { chainId: 8453, address: unknown },
     ]);
     const batch = await read([unknownApprove], answer(unknown, { symbol: 'AAPL', decimals: 18n }));
-    expect(batch?.notices).toContain(
-      'This batch approves a token this screen does not know. Check its address before you confirm.'
-    );
+    expect(batch?.notices).toEqual([]);
   });
 });
 
