@@ -108,6 +108,10 @@ describe('cli-bridge page handles what clients send', () => {
     expect(config.ens).toBe(e!.ens);
     expect(config.paymasters).toEqual(e!.paymasters);
     expect(config.appLogoUrl).toBe(e!.appLogoUrl);
+    expect(created.handlerOptions[0]).toEqual({
+      originLabel: 'via JAW bridge',
+      ...(e!.account ? { expectedAccount: e!.account } : {}),
+    });
     const posted = fetchMock.mock.calls.filter(([url]) => url === '/api/bridge-client');
     expect(posted.map(([, options]) => options.body)).toEqual(e!.client ? [JSON.stringify({ client: e!.client })] : []);
   });

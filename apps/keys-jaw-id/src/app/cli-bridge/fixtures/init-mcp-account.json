@@ -1,0 +1,25 @@
+{
+  "sentBy": ["@jaw-mono/mcp images built after jaw-agent sends the account in the owner link init"],
+  "clients": [
+    {
+      "family": "mcp",
+      "versions": "images built after jaw-agent sends the account in the owner link init",
+      "current": true
+    }
+  ],
+  "frame": {
+    "type": "init",
+    "chainId": 84532,
+    "appName": "Claude (via JAW MCP)",
+    "client": "jaw-mcp/a1b2c3d",
+    "account": "0x1111111111111111111111111111111111111111"
+  },
+  "expect": {
+    "appName": "Claude (via JAW MCP)",
+    "defaultChainId": 84532,
+    "apiKey": "workspace-key",
+    "readyApiKey": "workspace-key",
+    "client": "jaw-mcp/a1b2c3d",
+    "account": "0x1111111111111111111111111111111111111111"
+  }
+}

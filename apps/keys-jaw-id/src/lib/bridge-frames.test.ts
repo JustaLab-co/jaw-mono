@@ -184,3 +184,37 @@ describe('parseInit appLogoUrl', () => {
     expect(Object.keys(result)).toEqual(['chainId']);
   });
 });
+
+describe('parseInit and the account', () => {
+  const account = '0x1111111111111111111111111111111111111111';
+
+  it('keeps an address', () => {
+    expect(parseInit({ chainId: 1, account }, chains)).toEqual({ chainId: 1, account });
+  });
+
+  it('keeps a checksummed address as sent', () => {
+    const checksummed = '0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed';
+    expect(parseInit({ chainId: 1, account: checksummed }, chains)).toEqual({ chainId: 1, account: checksummed });
+  });
+
+  it.each([null, undefined])('reads %s as no account', (value) => {
+    expect(parseInit({ chainId: 1, account: value }, chains)).toEqual({ chainId: 1 });
+  });
+
+  it('an init without one parses as it did before', () => {
+    expect(Object.keys(parseInit({ chainId: 1, appName: 'Claude' }, chains))).toEqual(['chainId', 'appName']);
+  });
+
+  it.each([
+    ['a name', 'adz.jawbot.eth'],
+    ['a short hex', '0x1234'],
+    ['a number', 5],
+    ['an object', { address: account }],
+    ['an empty string', ''],
+    ['a mixed case address with a bad checksum', '0x5AAeb6053F3E94C9b9A09f33669435E7Ef1BeAed'],
+  ])('refuses %s', (_, value) => {
+    expect(parseInit({ chainId: 1, account: value }, chains)).toEqual({
+      refused: 'Invalid account: expected an address',
+    });
+  });
+});
