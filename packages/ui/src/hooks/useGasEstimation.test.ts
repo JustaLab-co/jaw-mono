@@ -15,13 +15,14 @@ import fc from 'fast-check';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-vi.mock('@jaw.id/core', () => ({
+vi.mock('@jaw.id/core', async (importOriginal) => ({
+  Erc20EstimationError: (await importOriginal<typeof import('@jaw.id/core')>()).Erc20EstimationError,
   estimateErc20PaymasterCosts: vi.fn(),
   jawPaymasterUrl: (chainId: number, apiKey?: string) =>
     `https://paymaster.test?chainId=${chainId}${apiKey ? `&api-key=${apiKey}` : ''}`,
 }));
 
-import { estimateErc20PaymasterCosts } from '@jaw.id/core';
+import { Erc20EstimationError, estimateErc20PaymasterCosts } from '@jaw.id/core';
 import type { Account } from '@jaw.id/core';
 import { useGasEstimation, type UseGasEstimationResult, type TransactionCall } from './useGasEstimation';
 import type { FeeTokenOption } from '../components/FeeTokenSelector';
@@ -821,6 +822,64 @@ describe('useGasEstimation fee-token outcome per ERC-20 result', () => {
 
     expect(usdcNow().estimationReverted).toBe(false);
     expect(blockNow()).toBe('estimation-failed');
+  });
+
+  describe('an Erc20EstimationError from core', () => {
+    const rejectWith = async (error: Erc20EstimationError) => {
+      erc20Mock.mockRejectedValue(error);
+      await mount(
+        makeAccount(async () => {
+          throw new Error("AA21 didn't pay prefund");
+        }),
+        [nativeEth(0n), token({})]
+      );
+    };
+
+    it('reads a call revert as reverted, even with AA33 in its reason', async () => {
+      await rejectWith(new Erc20EstimationError('userOp', bundlerError(-32521, 'execution reverted: AA33 reverted')));
+
+      expect(usdcNow().estimationReverted).toBe(true);
+      expect(blockNow()).toBe('will-fail');
+    });
+
+    // Our bundler sends a validation failure as -32521 with a FailedOp message.
+    it.each(['FailedOp(0,"AA33 reverted")', 'FailedOp(0,"AA23 reverted")'])(
+      'keeps a -32521 %s from the bundler retryable',
+      async (message) => {
+        await rejectWith(new Erc20EstimationError('userOp', bundlerError(-32521, message)));
+
+        expect(usdcNow().estimationReverted).toBeFalsy();
+        expect(blockNow()).toBe('estimation-failed');
+      }
+    );
+
+    it('keeps a paymaster validation failure retryable, whatever its text', async () => {
+      await rejectWith(new Erc20EstimationError('userOp', bundlerError(-32501, 'execution reverted: AA33 reverted')));
+
+      expect(usdcNow().estimationReverted).toBeFalsy();
+      expect(blockNow()).toBe('estimation-failed');
+    });
+
+    it('keeps a quote failure retryable', async () => {
+      await rejectWith(
+        new Erc20EstimationError('quote', new Error('pimlico_getTokenQuotes error: execution reverted'))
+      );
+
+      expect(usdcNow().estimationReverted).toBeFalsy();
+      expect(blockNow()).toBe('estimation-failed');
+    });
+
+    it('reads a call revert on a balance shortfall as insufficient funds', async () => {
+      await rejectWith(
+        new Erc20EstimationError(
+          'userOp',
+          bundlerError(-32521, 'execution reverted: ERC20: transfer amount exceeds balance')
+        )
+      );
+
+      expect(usdcNow().estimationFailure).toBeUndefined();
+      expect(blockNow()).toBe('funds');
+    });
   });
 
   // A round that throws before its legs run still replaces what the previous round recorded.

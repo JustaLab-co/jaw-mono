@@ -1,5 +1,14 @@
-import { Address, Hex, createPublicClient, encodeFunctionData, erc20Abi, formatUnits, getAddress } from 'viem';
-import { SmartAccount, entryPoint08Address } from 'viem/account-abstraction';
+import {
+    Address,
+    Hex,
+    RpcRequestError,
+    createPublicClient,
+    encodeFunctionData,
+    erc20Abi,
+    formatUnits,
+    getAddress,
+} from 'viem';
+import { SmartAccount, UserOperationExecutionError, entryPoint08Address } from 'viem/account-abstraction';
 import { getBundlerClient } from './smartAccount.js';
 import { Chain, getClient, store } from '../store/index.js';
 import { ERC20_PAYMASTER_ADDRESS, JAW_PROXY_URL, PERMISSIONS_MANAGER_ADDRESS } from '../constants.js';
@@ -74,6 +83,75 @@ export interface UserOpGasFields {
     paymasterPostOpGasLimit?: bigint;
     maxFeePerGas: bigint;
     maxPriorityFeePerGas?: bigint;
+}
+
+/** The step of `estimateErc20PaymasterCosts` that failed. */
+export type Erc20EstimationPhase = 'quote' | 'permission' | 'userOp';
+
+/** Why the bundler refused the userOp, read from its JSON-RPC code. */
+export type Erc20EstimationReason = 'call-reverted' | 'account-validation' | 'paymaster-validation' | 'unknown';
+
+/** ERC-7769 codes, set by the bundler rather than by any contract. */
+const BUNDLER_REASONS: Record<number, Erc20EstimationReason> = {
+    [-32521]: 'call-reverted',
+    [-32500]: 'account-validation',
+    [-32501]: 'paymaster-validation',
+};
+
+/**
+ * A failure of `estimateErc20PaymasterCosts`, with the phase it happened in.
+ * The message is the original error's, and the original error is the cause.
+ */
+export class Erc20EstimationError extends Error {
+    readonly phase: Erc20EstimationPhase;
+    /** Read from the bundler only in the `userOp` phase; `'unknown'` in the others. */
+    readonly reason: Erc20EstimationReason;
+
+    constructor(
+        phase: Erc20EstimationPhase,
+        public override readonly cause: unknown
+    ) {
+        super(cause instanceof Error ? cause.message : String(cause));
+        this.name = 'Erc20EstimationError';
+        this.phase = phase;
+        this.reason = phase === 'userOp' ? bundlerReason(cause) : 'unknown';
+    }
+}
+
+/**
+ * viem keeps the code from the response body on the RpcRequestError deep in the
+ * cause chain. The errors wrapping it are picked from the message, so they can
+ * name the wrong failure. Only the bundler's errors come wrapped in a
+ * UserOperationExecutionError; the paymaster's calls in the same phase do not.
+ *
+ * Our bundler also answers a validation failure (AA23, AA33) with -32521 and a
+ * FailedOp message, so that pair says nothing about which side failed.
+ */
+function bundlerReason(error: unknown): Erc20EstimationReason {
+    const execution = findInChain(error, UserOperationExecutionError);
+    const rpc = findInChain(execution, RpcRequestError);
+    if (!rpc) return 'unknown';
+    if (rpc.code === -32521 && /^FailedOp(WithRevert)?\(/.test(rpc.details)) return 'unknown';
+    return BUNDLER_REASONS[rpc.code] ?? 'unknown';
+}
+
+function findInChain<T>(error: unknown, type: new (...args: never[]) => T): T | undefined {
+    const seen = new Set<unknown>();
+    let current = error;
+    while (current instanceof Error && !seen.has(current)) {
+        if (current instanceof type) return current;
+        seen.add(current);
+        current = current.cause;
+    }
+    return undefined;
+}
+
+async function inPhase<T>(phase: Erc20EstimationPhase, run: () => Promise<T>): Promise<T> {
+    try {
+        return await run();
+    } catch (error) {
+        throw new Erc20EstimationError(phase, error);
+    }
 }
 
 /**
@@ -243,11 +321,13 @@ export async function estimateErc20PaymasterCosts(
 
     // 1. Get quotes for all tokens in one call
     const tokenAddresses = tokens.map((t) => t.address);
-    const quotes = await fetchTokenQuotes(paymasterUrl, chain.id, tokenAddresses);
-
-    if (quotes.length === 0) {
-        throw new Error('No token quotes returned from paymaster');
-    }
+    const quotes = await inPhase('quote', async () => {
+        const fetched = await fetchTokenQuotes(paymasterUrl, chain.id, tokenAddresses);
+        if (fetched.length === 0) {
+            throw new Error('No token quotes returned from paymaster');
+        }
+        return fetched;
+    });
 
     // 2. Build calls with dummy approval for estimation
     // Use MaxUint256 for approval - amount doesn't affect gas estimation
@@ -272,8 +352,10 @@ export async function estimateErc20PaymasterCosts(
     // directly — they must be routed through the permissions manager.
     let preparedCalls: Array<{ to: Address; value: bigint; data: Hex }>;
     if (options?.permissionId) {
-        const relayPermission = await getPermissionFromRelay(options.permissionId, options.apiKey);
-        const permission = relayPermissionToPermission(relayPermission);
+        const { permissionId, apiKey } = options;
+        const permission = await inPhase('permission', async () =>
+            relayPermissionToPermission(await getPermissionFromRelay(permissionId, apiKey))
+        );
 
         const formattedCalls = calls.map((call) => ({
             target: getAddress(call.to),
@@ -309,10 +391,12 @@ export async function estimateErc20PaymasterCosts(
     const publicClient = getClient(chain.id) ?? createPublicClient({ transport: jawHttp(chain.rpcUrl) });
     const blockPromise = publicClient.getBlock({ blockTag: 'latest' }).catch(() => null);
 
-    const userOp = await bundlerClient.prepareUserOperation({
-        account: smartAccount,
-        calls: preparedCalls,
-    });
+    const userOp = await inPhase('userOp', () =>
+        bundlerClient.prepareUserOperation({
+            account: smartAccount,
+            calls: preparedCalls,
+        })
+    );
 
     // 4. Extract gas fields from userOp
     const gas: UserOpGasFields = {

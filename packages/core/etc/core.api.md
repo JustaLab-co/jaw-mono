@@ -433,6 +433,22 @@ export type EncryptedData = {
 // @public
 export function ensureIntNumber(num: unknown): IntNumber;
 
+// @public
+export class Erc20EstimationError extends Error {
+    constructor(phase: Erc20EstimationPhase, cause: unknown);
+    // (undocumented)
+    readonly cause: unknown;
+    // (undocumented)
+    readonly phase: Erc20EstimationPhase;
+    readonly reason: Erc20EstimationReason;
+}
+
+// @public
+export type Erc20EstimationPhase = 'quote' | 'permission' | 'userOp';
+
+// @public
+export type Erc20EstimationReason = 'call-reverted' | 'account-validation' | 'paymaster-validation' | 'unknown';
+
 // @public (undocumented)
 export const errorValues: {
     '-32700': {
