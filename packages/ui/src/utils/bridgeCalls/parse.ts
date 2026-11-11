@@ -37,7 +37,7 @@ const chain = z.object({
   across: across.optional(),
   relay: relay.optional(),
   tokens: z.record(address, z.object({ symbol: z.string().min(1), decimals: z.number().int().min(0).max(36) })),
-});
+}) satisfies z.ZodType<BridgeChain>;
 
 const body = z.object({
   version: z.number().int().nonnegative(),
@@ -54,9 +54,10 @@ const hasDuplicate = (list: readonly string[]) => new Set(list.map((a) => a.toLo
 
 function chainProblem({ across, relay }: BridgeChain): string | undefined {
   if (relay && hasDuplicate(relay.solvers)) return 'a Relay solver is listed twice';
+  if (relay && hasDuplicate(relay.approvalProxies ?? [])) return 'a Relay approval proxy is listed twice';
   const roles = [
     ...Object.values(across ?? {}),
-    ...(relay ? [relay.depository, ...relay.solvers, ...relay.erc20Routers] : []),
+    ...(relay ? [relay.depository, ...relay.solvers, ...relay.erc20Routers, ...(relay.approvalProxies ?? [])] : []),
   ];
   if (hasDuplicate(roles)) return 'an address holds two roles';
   if (relay && relay.erc20Routers.length === 0 && !relay.testnet) return 'a Relay chain has no routers';

@@ -8,10 +8,14 @@ const prices = vi.hoisted(() => ({ fetch: vi.fn<(symbol: string) => Promise<numb
 vi.mock('../../utils/tokenPrice', () => ({ fetchTokenPrice: prices.fetch }));
 
 import { AssetPreview } from './AssetPreview';
-import type { AssetDelta } from '../../utils/assetPreview';
+import { mapAssetChanges, type AssetDelta } from '../../utils/assetPreview';
 import type { BridgeTransfer } from '../../utils/bridgeCalls/transfer';
 
 const WARNING = 'Could not simulate this transaction';
+
+// Rows as the simulation builds them, so the symbol is cleaned the way it is in the app.
+const simulatedRows = (address: string, diff: bigint, decimals: number, symbol?: string) =>
+  mapAssetChanges([{ token: { address, decimals, symbol }, value: { pre: 0n, post: diff, diff } }]);
 
 const usdcOut: AssetDelta = {
   address: '0x036cbd53842c5426634e7929541ec2318f3dcf7e',
@@ -320,9 +324,28 @@ describe('AssetPreview bridge send side when the simulation could not read the t
     isNative: false,
   };
 
-  it('names a row the simulation left without a symbol by the symbol the bridge read', () => {
-    const out = html({ assetsOut: [simulated], bridge });
+  it.each([
+    ['no symbol', undefined],
+    ['an empty symbol', ''],
+    ['a blank symbol', '   '],
+  ])('names a row the simulation left with %s by the symbol the bridge read', (_, symbol) => {
+    const assetsOut = simulatedRows(simulated.address, simulated.diff, simulated.decimals, symbol);
+    const out = html({ assetsOut, bridge });
     expect(out).toContain('MKR');
+  });
+
+  it('does not price a token outside the pinned table by the symbol the simulation read', async () => {
+    prices.fetch.mockResolvedValue(1);
+    const send = {
+      ...bridge.send,
+      token: { address: MKR, known: false, unverified: true, symbol: 'WETH', decimals: 18 },
+    };
+    const assetsOut = simulatedRows(simulated.address, simulated.diff, simulated.decimals, 'WETH');
+    await mount({ assetsOut, bridge: { ...bridge, send } });
+    await settle();
+    expect(host.textContent).toContain('WETH');
+    expect(prices.fetch).not.toHaveBeenCalledWith('WETH');
+    expect(host.textContent).not.toContain('$');
   });
 
   it('scales a row the simulation left in base units by the decimals the bridge read', () => {
@@ -356,12 +379,17 @@ describe('AssetPreview simulated rows with unusable decimals', () => {
     expect(prices.fetch).not.toHaveBeenCalled();
   });
 
-  it('labels a token with no symbol by its short address and asks for no price', async () => {
+  it.each([
+    ['no symbol', undefined],
+    ['an empty symbol', ''],
+    ['a blank symbol', '   '],
+    ['a symbol with a zero-width space', 'USDC\u{200b}'],
+  ])('labels a token with %s by its short address and asks for no price', async (_, symbol) => {
     prices.fetch.mockResolvedValue(1);
-    await mount({ assetsOut: [{ ...usdcOut, symbol: undefined }] });
+    await mount({ assetsOut: simulatedRows(usdcOut.address, usdcOut.diff, usdcOut.decimals, symbol) });
     await settle();
     expect(host.textContent).toContain('You send');
-    expect(host.textContent).toContain('0x036c...cf7e');
+    expect(host.querySelector('.text-symbol')?.textContent).toBe('0x036c...cf7e');
     expect(prices.fetch).not.toHaveBeenCalled();
   });
 
@@ -372,4 +400,109 @@ describe('AssetPreview simulated rows with unusable decimals', () => {
     expect(host.textContent).toContain('5000000 base units');
     expect(host.textContent).not.toContain('$');
   });
+});
+
+describe('AssetPreview bridge views and the simulated receive side', () => {
+  const USDC = usdcOut.address as `0x${string}`;
+  const NOTE = 'Simulated, not guaranteed.';
+  const base = { name: 'Base', nativeSymbol: 'ETH' };
+  const send = {
+    chainId: 8453,
+    amount: 5_000_000n,
+    token: { address: USDC, known: true, symbol: 'USDC', decimals: 6 },
+  };
+  const sameChainSwap: BridgeTransfer = {
+    provider: 'relay',
+    title: 'Swap through Relay',
+    send,
+    origin: base,
+    sameChain: true,
+    details: [],
+  };
+  const unorderedDeposit: BridgeTransfer = {
+    provider: 'relay',
+    title: 'Deposit to Relay',
+    send,
+    origin: base,
+    details: [],
+  };
+  const checked = (provider: BridgeTransfer['provider']): BridgeTransfer => ({
+    provider,
+    title: 'Bridge to Arbitrum',
+    send,
+    origin: base,
+    receive: {
+      kind: 'minimum',
+      amount: {
+        chainId: 42161,
+        amount: 4_900_000n,
+        token: { address: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831', known: true, symbol: 'USDC', decimals: 6 },
+      },
+    },
+    destination: { name: 'Arbitrum', nativeSymbol: 'ETH' },
+    details: [],
+  });
+  const getSide = (text: string) => text.slice(text.indexOf('You get'));
+
+  it('a same-chain swap with no checked receive shows the simulated amount, marked as not guaranteed', async () => {
+    await mount({ assetsOut: [usdcOut], assetsIn: [ethIn], bridge: sameChainSwap });
+    const side = getSide(host.textContent!);
+    expect(side).toContain(NOTE);
+    expect(side).toContain('+0.01');
+    expect(host.textContent).not.toContain('≥');
+  });
+
+  it('a same-chain swap prices the simulated native row like the generic screen does', async () => {
+    prices.fetch.mockResolvedValue(2000);
+    await mount({ assetsOut: [usdcOut], assetsIn: [ethIn], bridge: sameChainSwap });
+    await settle();
+    expect(prices.fetch.mock.calls.map((c) => c[0]).sort()).toEqual(['ETH', 'USDC']);
+    expect(host.textContent).toContain('$20.00');
+  });
+
+  it('a same-chain swap does not price a simulated token by the symbol it reports', async () => {
+    prices.fetch.mockResolvedValue(1);
+    const fakeUsdcIn: AssetDelta = {
+      ...usdcOut,
+      address: '0x2222222222222222222222222222222222222222',
+      diff: 5_000_000n,
+      direction: 'in',
+    };
+    await mount({ assetsOut: [usdcOut], assetsIn: [fakeUsdcIn], bridge: sameChainSwap });
+    await settle();
+    const side = getSide(host.textContent!);
+    expect(side).toContain('+5');
+    expect(side).not.toContain('$');
+  });
+
+  it('a same-chain swap under a permission says Receives, never you', () => {
+    const out = html({ assetsOut: [usdcOut], assetsIn: [ethIn], bridge: sameChainSwap, onBehalf: true });
+    expect(out).toContain('Receives');
+    expect(out).toContain(NOTE);
+    expect(out).not.toContain('You get');
+  });
+
+  it('a same-chain swap shows no receive side when the simulation failed', () => {
+    const out = html({ assetsIn: [ethIn], bridge: sameChainSwap, error: true });
+    expect(out).not.toContain('You get');
+    expect(out).not.toContain(NOTE);
+  });
+
+  it('a Relay deposit with no order, which may cross chains, still drops the simulated receive', () => {
+    const out = html({ assetsOut: [usdcOut], assetsIn: [ethIn], bridge: unorderedDeposit });
+    expect(out).toContain('You send');
+    expect(out).not.toContain('You get');
+    expect(out).not.toContain(NOTE);
+  });
+
+  it.each(['across', 'relay'] as const)(
+    'a checked %s bridge shows its minimum and not the simulated amount',
+    async (provider) => {
+      await mount({ assetsOut: [usdcOut], assetsIn: [ethIn], bridge: checked(provider) });
+      const side = getSide(host.textContent!);
+      expect(side).toContain('≥ 4.9');
+      expect(side).not.toContain('0.01');
+      expect(host.textContent).not.toContain(NOTE);
+    }
+  );
 });

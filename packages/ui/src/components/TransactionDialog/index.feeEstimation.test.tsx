@@ -7,6 +7,7 @@ vi.mock('../../hooks', () => ({ useChainIconURI: () => undefined, useFeeTokenPri
 vi.mock('../ShellDialog', () => ({ ShellDialog: ({ children }: { children: ReactNode }) => <div>{children}</div> }));
 
 import { TransactionDialog } from './index';
+import type { TransactionDialogProps } from './types';
 import { INSUFFICIENT_FUNDS_ERROR } from '../../utils/transactionFailure';
 import type { FeeTokenOption } from '../FeeTokenSelector';
 
@@ -38,10 +39,12 @@ const render = (
   feeTokens: FeeTokenOption[],
   onRetryEstimation?: () => void,
   estimatingTokenCosts = false,
+  preview: Partial<TransactionDialogProps> = {},
   gasFeeLoading = false
 ) =>
   renderToStaticMarkup(
     <TransactionDialog
+      {...preview}
       open
       onOpenChange={() => undefined}
       transactions={[{ to: '0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045', value: '0x1', chainId: 8453 }]}
@@ -88,7 +91,7 @@ describe('TransactionDialog fee estimation failure', () => {
 
   it('holds Retry while the fee-token costs are being estimated', () => {
     const failed = [eth(0n), usdc({ gasCostFormatted: 'Estimation failed', estimationFailure: 'HTTP request failed' })];
-    expect(render(failed, () => undefined, true)).toMatch(/<button[^>]* disabled=""[^>]*>Retrying…<\/button>/);
+    expect(render(failed, () => undefined, true)).toMatch(/<button[^>]* disabled=""[^>]*>Retry<\/button>/);
     expect(render(failed, () => undefined)).not.toMatch(/<button[^>]* disabled=""[^>]*>Retry<\/button>/);
   });
 
@@ -102,6 +105,64 @@ describe('TransactionDialog fee estimation failure', () => {
     expect(html).toContain('Transaction will fail');
     expect(html).not.toContain('Retry');
     expect(html).not.toContain('example.xyz');
+  });
+
+  it('offers a retry when only the fee path reverted and the simulation saw the calls succeed', () => {
+    const reverted = usdc({
+      gasCostFormatted: 'Estimation failed',
+      estimationFailure: 'reverted',
+      estimationReverted: true,
+    });
+    const html = render([eth(0n), reverted], () => undefined, false, {
+      assetPreviewSimulated: true,
+      assetPreviewWillRevert: false,
+    });
+    expect(html).toContain('Fee estimation failed');
+    expect(html).toContain('Retry');
+    expect(html).not.toContain('Transaction will fail');
+  });
+
+  it('says the transaction will fail when a permissioned fee estimation reverted though the simulation passed', () => {
+    // The preview simulates from the granter; the permissions manager can still reject the call.
+    const reverted = usdc({
+      gasCostFormatted: 'Estimation failed',
+      estimationFailure: 'reverted',
+      estimationReverted: true,
+    });
+    const html = render([eth(0n), reverted], () => undefined, false, {
+      assetPreviewSimulated: true,
+      assetPreviewWillRevert: false,
+      onBehalfOf: '0x1111111111111111111111111111111111111111',
+    });
+    expect(html).toContain('Transaction will fail');
+    expect(html).not.toContain('Retry');
+  });
+
+  it('says the transaction will fail when the simulation saw the calls revert', () => {
+    const reverted = usdc({
+      gasCostFormatted: 'Estimation failed',
+      estimationFailure: 'reverted',
+      estimationReverted: true,
+    });
+    const html = render([eth(0n), reverted], () => undefined, false, {
+      assetPreviewSimulated: true,
+      assetPreviewWillRevert: true,
+      assetPreviewRevertCause: 'other',
+    });
+    expect(html).toContain('Transaction will fail');
+    expect(html).not.toContain('Retry');
+  });
+
+  it('waits for the simulation before naming a reverted fee estimation', () => {
+    const reverted = usdc({
+      gasCostFormatted: 'Estimation failed',
+      estimationFailure: 'reverted',
+      estimationReverted: true,
+    });
+    const html = render([eth(0n), reverted], () => undefined, false, { assetPreviewLoading: true });
+    expect(html).toContain('Estimating...');
+    expect(html).not.toContain('Transaction will fail');
+    expect(html).not.toContain('Fee estimation failed');
   });
 
   it('still says insufficient funds when ETH and USDC are both empty', () => {
@@ -119,12 +180,12 @@ describe('TransactionDialog fee estimation failure', () => {
     const unpayable = [eth(0n), usdc({ balance: 100_000n, balanceFormatted: '0.1' })];
 
     it('does not read Insufficient Funds while gas loads', () => {
-      const html = render(unpayable, undefined, false, true);
+      const html = render(unpayable, undefined, false, {}, true);
       expect(html).not.toContain('Insufficient Funds');
     });
 
     it('does not read Insufficient Funds while the fee-token costs load', () => {
-      const html = render(unpayable, undefined, true, false);
+      const html = render(unpayable, undefined, true);
       expect(html).not.toContain('Insufficient Funds');
     });
 

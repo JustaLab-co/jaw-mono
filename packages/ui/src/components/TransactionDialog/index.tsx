@@ -45,6 +45,8 @@ export const TransactionDialog = ({
   assetsOut,
   assetsIn,
   assetPreviewError,
+  assetPreviewLoading,
+  assetPreviewSimulated,
   assetPreviewWillRevert,
   assetPreviewRevertCause,
   onBehalfOf,
@@ -105,19 +107,22 @@ export const TransactionDialog = ({
   });
   const displayWalletAddress = getDisplayAddress(wallet.name, walletAddress);
 
+  // A permissioned execution is still "permissioned" while the granter is in flight, and after a
+  // lookup that failed — the extra row and the delegation badge must not flicker in and out.
+  const isPermissioned = !!onBehalfOf || !!onBehalfOfLoading || !!permissionProblem;
+
   const feePending = !!gasFeeLoading || !!estimatingTokenCosts;
-  const { blockReason, hasSelectablePaymentOption, feeEstimationFailure } = resolveFeeBlock({
+  // Under a permission the preview simulates the raw calls from the granter, but the fee estimation
+  // runs them through the permissions manager, which can reject what the granter alone would not.
+  const { blockReason, hasSelectablePaymentOption } = resolveFeeBlock({
     feeTokens,
     gasEstimationError,
     sponsored,
     isPayingWithErc20: !!isPayingWithErc20,
     pending: feePending,
     revertCause: assetPreviewRevertCause,
+    callsSimulated: !!assetPreviewSimulated && !isPermissioned,
   });
-
-  // A permissioned execution is still "permissioned" while the granter is in flight, and after a
-  // lookup that failed — the extra row and the delegation badge must not flicker in and out.
-  const isPermissioned = !!onBehalfOf || !!onBehalfOfLoading || !!permissionProblem;
 
   // A failed lookup is uncertainty about the lookup, not a certain revert — it warns below but
   // must not dead-end the dialog the way a genuinely broken permission does.
@@ -126,6 +131,10 @@ export const TransactionDialog = ({
   // A broken permission fails estimation too, so the fee row would blame the fee for something
   // the banner already explains precisely. Name the cause once, at the top.
   const feeBlockReason = permissionBlocks ? null : blockReason;
+
+  // A reverted estimation waits for the preview's verdict on the calls, so the row doesn't read
+  // "will fail" and then turn into a retry when the preview lands.
+  const verdictPending = !isPermissioned && !!assetPreviewLoading && !!feeTokens?.some((t) => t.estimationReverted);
 
   const { contracts: bridgeContracts, settled: bridgeSettled } = useBridgeContracts(apiKey);
 
@@ -163,7 +172,14 @@ export const TransactionDialog = ({
     apiKey
   );
   const canConfirm =
-    !isProcessing && !feePending && !blockReason && !erc20CannotPay && !permissionBlocks && bridgeSettled && tokensRead;
+    !isProcessing &&
+    !feePending &&
+    !verdictPending &&
+    !blockReason &&
+    !erc20CannotPay &&
+    !permissionBlocks &&
+    bridgeSettled &&
+    tokensRead;
   const transfer = bridge?.transfer;
   const title =
     transfer?.title ?? (isNativeSend ? "You're Sending" : (callTitle(singleCallDecode) ?? 'Review Transaction'));
@@ -345,7 +361,7 @@ export const TransactionDialog = ({
 
             {bridge && <BridgeNotices messages={bridge.notices} />}
 
-            {transfer && (
+            {transfer && transfer.details.length > 0 && (
               <Accordion type="single" collapsible>
                 <BridgeDetails details={transfer.details} />
               </Accordion>
@@ -402,14 +418,14 @@ export const TransactionDialog = ({
           {/* Pinned fee row + actions */}
           <div className="border-border/40 flex-none space-y-2 border-t px-6 pb-5 pt-3">
             <NetworkFeeRow
-              blockReason={feeBlockReason}
+              blockReason={verdictPending ? null : feeBlockReason}
               fundsShortfallDetail={
                 assetPreviewRevertCause === 'balance'
                   ? "This account doesn't hold enough of the asset this transaction spends."
                   : undefined
               }
               gasFee={gasFee}
-              gasFeeLoading={gasFeeLoading}
+              gasFeeLoading={gasFeeLoading || verdictPending}
               sponsored={sponsored}
               nativeSymbol={nativeSymbol}
               nativeTokenPrice={nativeTokenPrice}
@@ -423,7 +439,6 @@ export const TransactionDialog = ({
               showFeeTokenSelector={showFeeTokenSelector}
               isPayingWithErc20={isPayingWithErc20}
               hasSelectablePaymentOption={hasSelectablePaymentOption}
-              estimationFailureDetail={feeEstimationFailure}
               onRetryEstimation={onRetryEstimation}
               estimatingTokenCosts={estimatingTokenCosts}
               disabled={isProcessing}

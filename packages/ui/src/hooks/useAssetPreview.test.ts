@@ -202,3 +202,77 @@ describe('useAssetPreview when the inputs change', () => {
     expect(latest).toMatchObject({ assetsOut: [], assetsIn: [NEW_DELTA] });
   });
 });
+
+describe('useAssetPreview simulated', () => {
+  it('is set once the simulation answers, whether the calls succeed or revert', async () => {
+    simulate.mockResolvedValueOnce({ deltas: [], willRevert: false });
+    const rerender = await render(props());
+    expect(latest).toMatchObject({ simulated: true, willRevert: false });
+
+    simulate.mockResolvedValueOnce({ deltas: [], willRevert: true, revertCause: 'other' });
+    await rerender(props(OTHER_CALLS));
+    expect(latest).toMatchObject({ simulated: true, willRevert: true });
+  });
+
+  it('stays unset while the simulation is in flight', async () => {
+    simulate.mockReturnValueOnce(new Promise(() => undefined));
+    await render(props());
+    expect(latest?.simulated).toBe(false);
+  });
+
+  it('stays unset when the simulation could not run', async () => {
+    simulate.mockRejectedValue(new Error('eth_simulateV1 not supported'));
+    const rerender = await render(props());
+    await advance(13_000);
+    expect(latest).toMatchObject({ simulated: false, error: true });
+
+    await rerender({ ...props(), account: undefined });
+    expect(latest?.simulated).toBe(false);
+  });
+
+  it('is set when the calls ran clean but their amounts could not be read', async () => {
+    simulate.mockResolvedValueOnce({ deltas: [], willRevert: false, unreadable: true });
+    await render(props());
+    expect(latest).toMatchObject({ simulated: true, willRevert: false, error: true });
+  });
+});
+
+describe('useAssetPreview loading', () => {
+  it('is set while the simulation runs and cleared once it answers', async () => {
+    simulate.mockReturnValueOnce(new Promise(() => undefined));
+    const rerender = await render(props());
+    expect(latest?.loading).toBe(true);
+
+    simulate.mockResolvedValueOnce({ deltas: [], willRevert: false });
+    await rerender(props(OTHER_CALLS));
+    expect(latest?.loading).toBe(false);
+
+    await rerender({ ...props(), account: undefined });
+    expect(latest?.loading).toBe(false);
+  });
+
+  it('stays set through the retry waits, since the preview has not answered yet', async () => {
+    simulate.mockRejectedValueOnce(new Error('timeout')).mockResolvedValue(OK);
+    await render(props());
+    expect(latest).toMatchObject({ loading: true, simulated: false, error: false });
+
+    await advance(3_000);
+    expect(latest).toMatchObject({ loading: false, simulated: true, error: false });
+  });
+
+  it('is cleared after the last failed attempt', async () => {
+    simulate.mockRejectedValue(new Error('timeout'));
+    await render(props());
+    await advance(3_000);
+    expect(latest?.loading).toBe(true);
+
+    await advance(10_000);
+    expect(latest).toMatchObject({ loading: false, error: true });
+  });
+
+  it('is cleared at once when the node refuses the batch', async () => {
+    simulate.mockRejectedValue(new SimulationRefusedError());
+    await render(props());
+    expect(latest).toMatchObject({ loading: false, error: true });
+  });
+});

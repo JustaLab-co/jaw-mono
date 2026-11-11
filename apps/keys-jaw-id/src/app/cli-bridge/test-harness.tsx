@@ -110,6 +110,7 @@ export function setUp() {
   created.appNames = [];
   created.configs = [];
   created.handlerOptions = [];
+  created.dismissed = 0;
   created.session = 's1';
   created.query = null;
   created.request = async () => null;

@@ -107,7 +107,7 @@ export const PermissionDialog = ({
   }, [isProcessing]);
 
   const feePending = !!gasFeeLoading || !!estimatingTokenCosts;
-  const { blockReason, hasSelectablePaymentOption, feeEstimationFailure } = resolveFeeBlock({
+  const { blockReason, hasSelectablePaymentOption } = resolveFeeBlock({
     feeTokens,
     gasEstimationError,
     sponsored,
@@ -332,7 +332,6 @@ export const PermissionDialog = ({
               showFeeTokenSelector={showFeeTokenSelector}
               isPayingWithErc20={isPayingWithErc20}
               hasSelectablePaymentOption={hasSelectablePaymentOption}
-              estimationFailureDetail={feeEstimationFailure}
               onRetryEstimation={onRetryEstimation}
               estimatingTokenCosts={estimatingTokenCosts}
               disabled={isProcessing}

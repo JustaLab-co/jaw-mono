@@ -1,6 +1,6 @@
 'use client';
 
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Info } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip';
 import { FeeTokenSelector, type FeeTokenOption } from '../FeeTokenSelector';
@@ -25,10 +25,11 @@ export interface NetworkFeeRowProps {
   fundsShortfallDetail?: string;
   /** Wording for the `will-fail` state; the transaction screen can explain the simulation. */
   willFailDetail?: string;
-  /** The error behind an `estimation-failed` block, shown in the tooltip. */
-  estimationFailureDetail?: string;
-  /** Re-runs the estimation. The retry link shows for `estimation-failed` only when this is set. */
-  onRetryEstimation?: () => void;
+  /**
+   * Re-runs the estimation and settles when it ends. The retry link shows for `estimation-failed`
+   * only when this is set.
+   */
+  onRetryEstimation?: () => void | Promise<void>;
   /** A fee-token estimation is running, so Retry waits for it. */
   estimatingTokenCosts?: boolean;
 
@@ -60,7 +61,6 @@ export interface NetworkFeeRowProps {
 export function NetworkFeeRow({
   blockReason,
   fundsShortfallDetail,
-  estimationFailureDetail,
   onRetryEstimation,
   estimatingTokenCosts = false,
   willFailDetail = 'Simulating this transaction reverted, so the fee can’t be estimated and it can’t be submitted.',
@@ -85,8 +85,41 @@ export function NetworkFeeRow({
   // the block. Suppressed only when nothing can pay, where the choice would change nothing.
   const showSelector = showFeeTokenSelector && !sponsored && !(blockReason && !hasSelectablePaymentOption);
 
+  const running = gasFeeLoading || estimatingTokenCosts;
+  // Held for exactly the run the click started, so a re-estimate the user didn't start reads as one.
+  const [retrying, setRetrying] = useState(false);
+  const retry = () => {
+    if (!onRetryEstimation) return;
+    setRetrying(true);
+    void Promise.resolve(onRetryEstimation()).finally(() => setRetrying(false));
+  };
+
   const feeValue = (() => {
-    if (gasFeeLoading && !isPayingWithErc20) {
+    const estimatingEth = gasFeeLoading && !isPayingWithErc20;
+
+    // A retry the user started keeps the warning on screen and only the button changes.
+    if (blockReason === 'estimation-failed' && (retrying || !estimatingEth)) {
+      return (
+        <div className="flex flex-col items-start gap-1">
+          <InlineWarning
+            text="Fee estimation failed"
+            detail="The network fee couldn't be estimated. Try again in a moment. If it keeps failing, cancel and start again from the app."
+          />
+          {onRetryEstimation && (
+            <button
+              type="button"
+              onClick={retry}
+              disabled={disabled || running || retrying}
+              className="text-muted-foreground text-body-xs font-mono underline disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {retrying ? 'Retrying…' : 'Retry'}
+            </button>
+          )}
+        </div>
+      );
+    }
+
+    if (estimatingEth) {
       return <p className="text-muted-foreground text-body-sm font-mono">Estimating...</p>;
     }
 
@@ -104,28 +137,6 @@ export function NetworkFeeRow({
     }
     if (blockReason === 'will-fail') {
       return <InlineWarning text="Transaction will fail" detail={willFailDetail} />;
-    }
-
-    if (blockReason === 'estimation-failed') {
-      const retrying = gasFeeLoading || estimatingTokenCosts;
-      return (
-        <div className="flex flex-col items-start gap-1">
-          <InlineWarning
-            text="Fee estimation failed"
-            detail={`The network fee couldn't be estimated, so this transaction can't be submitted yet. ${estimationFailureDetail ?? ''}`.trim()}
-          />
-          {onRetryEstimation && (
-            <button
-              type="button"
-              onClick={onRetryEstimation}
-              disabled={disabled || retrying}
-              className="text-muted-foreground text-body-xs font-mono underline disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {retrying ? 'Retrying…' : 'Retry'}
-            </button>
-          )}
-        </div>
-      );
     }
 
     if (sponsored) {

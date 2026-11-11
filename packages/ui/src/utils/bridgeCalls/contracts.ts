@@ -20,12 +20,14 @@ export type AcrossContracts = {
  * protocolChain is Relay's name for the chain in an order, such as `base`. An order is filled
  * through one of erc20Routers by one of the solvers; testnet orders may leave the router out.
  * erc20Routers holds every router Relay lists for the chain, since quotes and older orders
- * name different versions.
+ * name different versions. approvalProxies are the contracts a same-chain swap pulls the token
+ * through. They come only from the build: the live table's are dropped when it is parsed.
  */
 export type RelayContracts = {
   depository: Address;
   protocolChain: string;
   erc20Routers: readonly Address[];
+  approvalProxies?: readonly Address[];
   solvers: readonly Address[];
   testnet?: true;
 };
@@ -56,6 +58,14 @@ const RELAY_ROUTERS = [
 const LINEA_ROUTERS = [
   '0x6328ea02d28131e58B28E55c6258258A30d90E05',
   '0x9EF6d3c2F60d7b9008D74CAb1FC0F899c957C819',
+] as const;
+const RELAY_PROXIES = [
+  '0x5567954cD026CEbFE486062cb75848e0f1c12E58',
+  '0xCcC88a9d1B4ED6b0EABA998850414b24f1c315bE',
+] as const;
+const LINEA_PROXIES = [
+  '0xE4DfBd5E6784dB1058124E2c87554C0591f0Fb7B',
+  '0x8754Bc615047de01228a7527B712806A71A8dc9a',
 ] as const;
 const RELAY_SOLVER = '0xf70da97812CB96acDF810712Aa562db8dfA3dbEF';
 
@@ -208,8 +218,8 @@ const eure = { symbol: 'EURe', decimals: 18 };
 
 /**
  * Across addresses come from across-protocol/contracts (broadcast/deployed-addresses.json and
- * deployments/<network>/AcrossEventEmitter.json). Relay's depository, erc20Routers and solvers
- * come from api.relay.link/chains and api.testnets.relay.link/chains. USDC comes from Circle's
+ * deployments/<network>/AcrossEventEmitter.json). Relay's depository, erc20Routers, approvalProxies
+ * and solvers come from api.relay.link/chains and api.testnets.relay.link/chains. USDC comes from Circle's
  * USDC contract address list.
  */
 export const BRIDGE_CHAINS: Readonly<Record<number, BridgeChain>> = {
@@ -228,6 +238,7 @@ export const BRIDGE_CHAINS: Readonly<Record<number, BridgeChain>> = {
       depository: RELAY_DEPOSITORY,
       protocolChain: 'ethereum',
       erc20Routers: RELAY_ROUTERS,
+      approvalProxies: RELAY_PROXIES,
       solvers: ETHEREUM_SOLVERS,
     },
     tokens: {
@@ -253,6 +264,7 @@ export const BRIDGE_CHAINS: Readonly<Record<number, BridgeChain>> = {
       depository: RELAY_DEPOSITORY,
       protocolChain: 'base',
       erc20Routers: RELAY_ROUTERS,
+      approvalProxies: RELAY_PROXIES,
       solvers: BASE_SOLVERS,
     },
     tokens: { '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913': usdc, [OP_WETH]: weth },
@@ -272,6 +284,7 @@ export const BRIDGE_CHAINS: Readonly<Record<number, BridgeChain>> = {
       depository: RELAY_DEPOSITORY,
       protocolChain: 'optimism',
       erc20Routers: RELAY_ROUTERS,
+      approvalProxies: RELAY_PROXIES,
       solvers: [RELAY_SOLVER],
     },
     // USDT checked on chain by symbol and decimals.
@@ -296,6 +309,7 @@ export const BRIDGE_CHAINS: Readonly<Record<number, BridgeChain>> = {
       depository: RELAY_DEPOSITORY,
       protocolChain: 'arbitrum',
       erc20Routers: RELAY_ROUTERS,
+      approvalProxies: RELAY_PROXIES,
       solvers: [RELAY_SOLVER],
     },
     tokens: {
@@ -317,6 +331,7 @@ export const BRIDGE_CHAINS: Readonly<Record<number, BridgeChain>> = {
       depository: '0x59916DA825D2D2eC1BF878D71c88826F6633ecca',
       protocolChain: 'linea',
       erc20Routers: LINEA_ROUTERS,
+      approvalProxies: LINEA_PROXIES,
       solvers: [RELAY_SOLVER],
     },
     tokens: {
@@ -339,6 +354,7 @@ export const BRIDGE_CHAINS: Readonly<Record<number, BridgeChain>> = {
       depository: RELAY_DEPOSITORY,
       protocolChain: 'avalanche',
       erc20Routers: RELAY_ROUTERS,
+      approvalProxies: RELAY_PROXIES,
       solvers: [RELAY_SOLVER],
     },
     tokens: { '0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E': usdc },
@@ -358,6 +374,7 @@ export const BRIDGE_CHAINS: Readonly<Record<number, BridgeChain>> = {
       depository: RELAY_DEPOSITORY,
       protocolChain: 'bnb',
       erc20Routers: RELAY_ROUTERS,
+      approvalProxies: RELAY_PROXIES,
       solvers: BNB_SOLVERS,
     },
     // Binance-Peg USDC, not Circle's: 18 decimals.
@@ -370,6 +387,7 @@ export const BRIDGE_CHAINS: Readonly<Record<number, BridgeChain>> = {
       depository: RELAY_DEPOSITORY,
       protocolChain: 'celo',
       erc20Routers: RELAY_ROUTERS,
+      approvalProxies: RELAY_PROXIES,
       solvers: [RELAY_SOLVER],
     },
     tokens: { '0xcebA9300f2b948710d2653dD7B07f33A8B32118C': usdc },
@@ -389,6 +407,7 @@ export const BRIDGE_CHAINS: Readonly<Record<number, BridgeChain>> = {
       depository: RELAY_DEPOSITORY,
       protocolChain: 'polygon',
       erc20Routers: RELAY_ROUTERS,
+      approvalProxies: RELAY_PROXIES,
       solvers: POLYGON_SOLVERS,
     },
     tokens: { '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359': usdc },
@@ -407,6 +426,7 @@ export const BRIDGE_CHAINS: Readonly<Record<number, BridgeChain>> = {
       depository: RELAY_DEPOSITORY,
       protocolChain: 'ink',
       erc20Routers: RELAY_ROUTERS,
+      approvalProxies: RELAY_PROXIES,
       solvers: [RELAY_SOLVER],
     },
     tokens: { '0x2D270e6886d130D724215A266106e6832161EAEd': usdc, [OP_WETH]: weth },
@@ -418,6 +438,7 @@ export const BRIDGE_CHAINS: Readonly<Record<number, BridgeChain>> = {
       depository: RELAY_DEPOSITORY,
       protocolChain: 'gnosis',
       erc20Routers: RELAY_ROUTERS,
+      approvalProxies: RELAY_PROXIES,
       solvers: [RELAY_SOLVER],
     },
     tokens: {},
@@ -440,6 +461,7 @@ export const BRIDGE_CHAINS: Readonly<Record<number, BridgeChain>> = {
       depository: RELAY_DEPOSITORY,
       protocolChain: 'robinhood',
       erc20Routers: RELAY_ROUTERS,
+      approvalProxies: RELAY_PROXIES,
       solvers: ROBINHOOD_SOLVERS,
     },
     // Checked on chain by symbol and decimals. The stock tokens are not pinned, so they read by address.
@@ -462,6 +484,7 @@ export const BRIDGE_CHAINS: Readonly<Record<number, BridgeChain>> = {
       depository: RELAY_DEPOSITORY,
       protocolChain: 'soneium',
       erc20Routers: RELAY_ROUTERS,
+      approvalProxies: RELAY_PROXIES,
       solvers: [RELAY_SOLVER],
     },
     tokens: { [OP_WETH]: weth },
@@ -479,6 +502,7 @@ export const BRIDGE_CHAINS: Readonly<Record<number, BridgeChain>> = {
       depository: RELAY_DEPOSITORY,
       protocolChain: 'arc',
       erc20Routers: RELAY_ROUTERS,
+      approvalProxies: RELAY_PROXIES,
       solvers: ARC_SOLVERS,
     },
     tokens: { '0x3600000000000000000000000000000000000000': usdc },
@@ -498,6 +522,7 @@ export const BRIDGE_CHAINS: Readonly<Record<number, BridgeChain>> = {
       depository: RELAY_DEPOSITORY,
       protocolChain: 'unichain',
       erc20Routers: RELAY_ROUTERS,
+      approvalProxies: RELAY_PROXIES,
       solvers: [RELAY_SOLVER],
     },
     tokens: { '0x078D782b760474a361dDA0AF3839290b0EF57AD6': usdc, [OP_WETH]: weth },
@@ -517,6 +542,7 @@ export const BRIDGE_CHAINS: Readonly<Record<number, BridgeChain>> = {
       depository: RELAY_DEPOSITORY,
       protocolChain: 'monad',
       erc20Routers: RELAY_ROUTERS,
+      approvalProxies: RELAY_PROXIES,
       solvers: [RELAY_SOLVER],
     },
     tokens: { '0x754704Bc059F8C67012fEd69BC8A327a5aafb603': usdc },
@@ -534,6 +560,7 @@ export const BRIDGE_CHAINS: Readonly<Record<number, BridgeChain>> = {
       depository: RELAY_TESTNET_DEPOSITORY,
       protocolChain: 'sepolia',
       erc20Routers: ['0xA1BEa5fe917450041748Dbbbe7E9AC57A4bBEBaB'],
+      approvalProxies: ['0x77A917df7A084b7B3E43517Ae28373C2a5492625'],
       solvers: ['0x3e34b27a9bf37D8424e1a58aC7fc4D06914B76B9'],
       testnet: true,
     },
@@ -555,6 +582,7 @@ export const BRIDGE_CHAINS: Readonly<Record<number, BridgeChain>> = {
       depository: RELAY_TESTNET_DEPOSITORY,
       protocolChain: 'base-sepolia',
       erc20Routers: ['0xF5042e6ffaC5a625D4E7848e0b01373D8eB9e222'],
+      approvalProxies: ['0xBBbfD134E9b44BfB5123898BA36b01dE7ab93d98'],
       solvers: ['0x3e34b27a9bf37D8424e1a58aC7fc4D06914B76B9'],
       testnet: true,
     },

@@ -19,6 +19,10 @@ export interface UseAssetPreviewResult {
   assetsOut: AssetDelta[];
   assetsIn: AssetDelta[];
   error: boolean;
+  /** The simulation is running for the current calls. */
+  loading: boolean;
+  /** The simulation answered for the current calls, so `willRevert` is its verdict. */
+  simulated: boolean;
   /** True when the simulation ran and a call in the batch reverted — the batch would fail on-chain. */
   willRevert: boolean;
   /** Set only when `willRevert` — why it reverted, so a balance shortfall can read as "insufficient funds". */
@@ -40,6 +44,8 @@ export function useAssetPreview({
   const [assetsOut, setAssetsOut] = useState<AssetDelta[]>([]);
   const [assetsIn, setAssetsIn] = useState<AssetDelta[]>([]);
   const [error, setError] = useState<boolean>(false);
+  const [loading, setLoading] = useState(false);
+  const [simulated, setSimulated] = useState(false);
   const [willRevert, setWillRevert] = useState<boolean>(false);
   const [revertCause, setRevertCause] = useState<RevertCause | undefined>(undefined);
 
@@ -51,6 +57,8 @@ export function useAssetPreview({
       setAssetsOut([]);
       setAssetsIn([]);
       setError(false);
+      setLoading(false);
+      setSimulated(false);
       setWillRevert(false);
       setRevertCause(undefined);
       return;
@@ -61,13 +69,19 @@ export function useAssetPreview({
     setAssetsOut([]);
     setAssetsIn([]);
     setError(false);
+    setLoading(true);
+    setSimulated(false);
     setWillRevert(false);
     setRevertCause(undefined);
 
+    // `loading` stays true through the retry waits: the preview has not given its verdict yet.
     const run = (attempt: number) => {
       simulateAssetChanges({ chainId, apiKey, account, calls })
-        .then(({ deltas, willRevert, revertCause }) => {
+        .then(({ deltas, willRevert, revertCause, unreadable }) => {
           if (cancelled) return;
+          setLoading(false);
+          setError(!!unreadable);
+          setSimulated(true);
           setWillRevert(willRevert);
           setRevertCause(revertCause);
           setAssetsOut(deltas.filter((d) => d.direction === 'out'));
@@ -81,6 +95,7 @@ export function useAssetPreview({
             retryTimer = setTimeout(() => run(attempt + 1), delay);
             return;
           }
+          setLoading(false);
           setError(true);
           setAssetsOut([]);
           setAssetsIn([]);
@@ -96,5 +111,5 @@ export function useAssetPreview({
     };
   }, [enabled, account, chainId, apiKey, callsKey]);
 
-  return { assetsOut, assetsIn, error, willRevert, revertCause };
+  return { assetsOut, assetsIn, error, loading, simulated, willRevert, revertCause };
 }

@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import type { Hex } from 'viem';
-import type { DecodedParam, DecodeResult } from '../../hooks/useDecodedCalldata';
+import type { DecodedCalldata, DecodedParam, DecodeResult } from '../../hooks/useDecodedCalldata';
 import type { AllowanceFlag } from '../../utils/allowances';
 import { Spinner } from '../ui/spinner';
 import { TriangleAlert } from 'lucide-react';
@@ -59,6 +59,20 @@ function flagPlacement(param: DecodedParam | undefined, flag: AllowanceFlag): 'r
   if (!param || !/^uint\d*$/.test(param.type) || param.value !== flag.amount?.toString()) return null;
   return isUnlimitedAmount(flag.amount) ? 'replace' : 'beside';
 }
+
+/** Bytes the shown arguments do not account for: the suffix when it is known, else only how many. */
+const UndecodedBytes = ({ decoded }: { decoded: DecodedCalldata | null }) => {
+  const count = decoded?.trailing ? (decoded.trailing.length - 2) / 2 : decoded?.extraBytes;
+  if (!count) return null;
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-muted-foreground text-xs font-semibold">{count} bytes not decoded</span>
+      {decoded?.trailing && (
+        <p className="text-foreground break-all font-mono text-xs leading-normal">{decoded.trailing}</p>
+      )}
+    </div>
+  );
+};
 
 /**
  * ERC-8213 Calldata Digest, collapsed behind a disclosure like the raw calldata
@@ -152,6 +166,7 @@ export const DecodedCalldataView = ({
       <div className="flex flex-col gap-2">
         {allowanceFlag && !flaggedInView && <NotedAllowanceFlag flag={allowanceFlag} />}
         <ClearSignedView display={clearSigned} chainId={chainId} mainnetRpcUrl={mainnetRpcUrl} />
+        <UndecodedBytes decoded={decoded} />
         <details className="text-xs">
           <summary className="text-muted-foreground hover:text-foreground cursor-pointer">Show raw details</summary>
           <div className="mt-1 flex flex-col gap-2">
@@ -257,6 +272,7 @@ export const DecodedCalldataView = ({
             </div>
           );
         })}
+        <UndecodedBytes decoded={decoded} />
       </div>
 
       <details className="text-xs">
