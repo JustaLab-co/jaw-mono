@@ -1,3 +1,13 @@
+## 1.10.5 (2026-11-11)
+
+### 🩹 Fixes
+
+- **ui:** read call reverts from the core estimation error ([#636](https://github.com/JustaLab-co/jaw-mono/pull/636))
+
+### ❤️ Thank You
+
+- Mariano Aguero @mariano-aguero
+
 ## 1.10.4 (2026-11-09)
 
 ### 🩹 Fixes

@@ -1,3 +1,23 @@
+## 1.13.0 (2026-11-11)
+
+### 🚀 Features
+
+- **ui:** add expectedAccount option to react ui handler ([#639](https://github.com/JustaLab-co/jaw-mono/pull/639))
+
+### 🩹 Fixes
+
+- **ui:** drop the approve notices on bridge batches ([#637](https://github.com/JustaLab-co/jaw-mono/pull/637))
+- **ui:** read call reverts from the core estimation error ([#636](https://github.com/JustaLab-co/jaw-mono/pull/636))
+- **ui:** retry the asset preview and hold the funds block ([#634](https://github.com/JustaLab-co/jaw-mono/pull/634))
+
+### 🧱 Updated Dependencies
+
+- Updated @jaw.id/core to 1.10.5
+
+### ❤️ Thank You
+
+- Mariano Aguero @mariano-aguero
+
 ## 1.12.3 (2026-11-10)
 
 ### 🩹 Fixes
