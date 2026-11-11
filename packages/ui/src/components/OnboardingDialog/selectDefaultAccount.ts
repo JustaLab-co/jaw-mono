@@ -5,16 +5,23 @@ import type { LocalStorageAccount } from './types';
  *
  * Precedence:
  *   1. No accounts        -> null (caller shows Layout B / "Sign In").
- *   2. Last signed-in     -> the account whose credentialId matches
+ *   2. Expected address   -> the stored account with that address, when the request is for one.
+ *   3. Last signed-in     -> the account whose credentialId matches
  *      `lastAuthenticatedCredentialId` (from jaw:passkey:authState).
- *   3. Fallback           -> the account with the most recent creationDate.
+ *   4. Fallback           -> the account with the most recent creationDate.
  */
 export function selectDefaultAccount(
   accounts: LocalStorageAccount[],
-  lastAuthenticatedCredentialId?: string | null
+  lastAuthenticatedCredentialId?: string | null,
+  expectedAddress?: string
 ): LocalStorageAccount | null {
   const selectable = accounts.filter((a) => a.credentialId);
   if (selectable.length === 0) return null;
+
+  if (expectedAddress) {
+    const expected = selectable.find((a) => a.address?.toLowerCase() === expectedAddress.toLowerCase());
+    if (expected) return expected;
+  }
 
   if (lastAuthenticatedCredentialId) {
     const match = selectable.find((a) => a.credentialId === lastAuthenticatedCredentialId);

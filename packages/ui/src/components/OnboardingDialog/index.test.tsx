@@ -119,3 +119,79 @@ describe('OnboardingDialog "Continue as" tile', () => {
     ]);
   });
 });
+
+describe('OnboardingDialog with an expected account', () => {
+  const dialogProps = { ...props, expectedAccount: OTHER };
+
+  it('offers the expected account instead of the last signed-in one', async () => {
+    await act(async () => {
+      root.render(createElement(OnboardingDialog, dialogProps));
+    });
+    await settle();
+
+    expect(container.textContent).toContain('other.justan.id');
+    expect(container.textContent).toContain('This request is for other.justan.id (0x2222...2222).');
+  });
+
+  it('names the expected account by address when it is not stored here', async () => {
+    const elsewhere = '0x3333333333333333333333333333333333333333';
+    await act(async () => {
+      root.render(createElement(OnboardingDialog, { ...props, expectedAccount: elsewhere }));
+    });
+    await settle();
+
+    expect(container.textContent).toContain('This request is for 0x3333...3333.');
+  });
+
+  it('names both accounts and offers another passkey once the user ended on a different one', async () => {
+    const onRetryAccount = vi.fn();
+    await act(async () => {
+      root.render(
+        createElement(OnboardingDialog, {
+          ...dialogProps,
+          mismatchedAccount: { address: LAST_USED },
+          onRetryAccount,
+        })
+      );
+    });
+    await settle();
+
+    expect(container.textContent).toContain('Signed in as ghadi.justan.id (0x1111...1111).');
+    expect(container.textContent).toContain('This request is for other.justan.id (0x2222...2222).');
+    const retry = Array.from(container.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('Use another passkey')
+    );
+    act(() => retry?.click());
+    expect(onRetryAccount).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('OnboardingDialog tile label', () => {
+  const render = async (extra: Partial<OnboardingDialogProps>) => {
+    await act(async () => {
+      root.render(createElement(OnboardingDialog, { ...props, ...extra }));
+    });
+    await settle();
+  };
+
+  it('says Requested when the expected account is not the last signed-in one', async () => {
+    await render({ expectedAccount: OTHER });
+
+    expect(container.textContent).toContain('Requested');
+    expect(container.textContent).not.toContain('Last used');
+  });
+
+  it('says Last used when the expected account is the last signed-in one', async () => {
+    await render({ expectedAccount: LAST_USED });
+
+    expect(container.textContent).toContain('Last used');
+    expect(container.textContent).not.toContain('Requested');
+  });
+
+  it('says Last used when no account is expected', async () => {
+    await render({});
+
+    expect(container.textContent).toContain('Last used');
+    expect(container.textContent).not.toContain('Requested');
+  });
+});

@@ -46,3 +46,18 @@ describe('selectDefaultAccount', () => {
     expect(selectDefaultAccount([ghost], undefined)).toBeNull();
   });
 });
+
+describe('selectDefaultAccount with an expected address', () => {
+  const alice = { ...acc('alice', 'cred-1', '2024-01-01'), address: '0xAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAa' };
+  const bob = { ...acc('bob', 'cred-2', '2024-02-01'), address: '0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB' };
+
+  it('prefers the stored account with that address over the last signed-in one', () => {
+    expect(selectDefaultAccount([alice, bob], 'cred-2', alice.address.toLowerCase())?.username).toBe('alice');
+  });
+
+  it('keeps the usual choice when no stored account has that address', () => {
+    expect(selectDefaultAccount([alice, bob], 'cred-2', '0xcccccccccccccccccccccccccccccccccccccccc')?.username).toBe(
+      'bob'
+    );
+  });
+});

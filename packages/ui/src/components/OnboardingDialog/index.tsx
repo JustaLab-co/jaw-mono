@@ -17,6 +17,7 @@ import { ENS_ONLY } from '../../utils/addressIdentity';
 import { identityKey } from '../../utils/reverseResolve';
 import { cn } from '../../lib/utils';
 import { toCoinType } from 'viem';
+import { formatAddress } from '../../utils/formatAddress';
 
 // Props needed by the create form — the create-related subset of OnboardingDialogProps.
 type CreateAccountFormProps = Pick<
@@ -56,6 +57,11 @@ function nameFitClass(name: string, base: string): string {
   if (name.length > 26) return 'text-[11px]';
   if (name.length > 20) return 'text-[13px]';
   return base;
+}
+
+/** "name (0x1234...5678)", or the short address alone while no name is known. */
+function namedAddress(address: string, name?: string): string {
+  return name ? `${name} (${formatAddress(address)})` : formatAddress(address);
 }
 
 /** Hairline divider with a small mono uppercase label ("NEW TO JAW?", "OR"). */
@@ -381,10 +387,13 @@ export function OnboardingDialog({
   supportedChains,
   subnameTextRecords,
   lastAuthenticatedCredentialId,
+  expectedAccount,
+  mismatchedAccount,
+  onRetryAccount,
 }: OnboardingDialogProps) {
   const defaultAccount = useMemo(
-    () => selectDefaultAccount(accounts, lastAuthenticatedCredentialId),
-    [accounts, lastAuthenticatedCredentialId]
+    () => selectDefaultAccount(accounts, lastAuthenticatedCredentialId, expectedAccount),
+    [accounts, lastAuthenticatedCredentialId, expectedAccount]
   );
 
   const [view, setView] = useState<OnboardingView>(startInCreate ? 'signup' : defaultAccount ? 'welcome' : 'signin');
@@ -421,12 +430,14 @@ export function OnboardingDialog({
   const knownAddresses = accounts
     .map((account) => addressOf(account))
     .filter((address): address is string => !!address)
+    .concat(expectedAccount ?? [], mismatchedAccount?.address ?? [])
     .map((address) => ({ address, chainId: 1 }));
   const identities = useAddressIdentities(knownAddresses, { mainnetRpcUrl, include: ENS_ONLY });
   const identityOf = (account: LocalStorageAccount) => {
     const address = addressOf(account);
     return address ? identities[identityKey(address, 1)] : undefined;
   };
+  const nameOfAddress = (address: string) => identities[identityKey(address, 1)]?.ensPlainName ?? undefined;
   const avatarFor = (account: LocalStorageAccount) => identityOf(account)?.ensAvatar ?? undefined;
   const displayNameOf = (account: LocalStorageAccount) => identityOf(account)?.ensPlainName ?? account.username;
   /**
@@ -480,6 +491,38 @@ export function OnboardingDialog({
     </Button>
   );
 
+  const expectedName = expectedAccount
+    ? (nameOfAddress(expectedAccount) ??
+      accounts.find((a) => a.address?.toLowerCase() === expectedAccount.toLowerCase())?.username)
+    : undefined;
+  const expectedLine = expectedAccount && `This request is for ${namedAddress(expectedAccount, expectedName)}.`;
+
+  if (mismatchedAccount && expectedAccount) {
+    const signedInAs = mismatchedAccount.name ?? nameOfAddress(mismatchedAccount.address);
+    return (
+      <DialogShell onClose={onClose}>
+        <div className="flex flex-col p-6">
+          <h2 className="text-foreground text-title-xl leading-none">Wrong account.</h2>
+          <p className="text-muted-foreground text-body mt-2">
+            Signed in as {namedAddress(mismatchedAccount.address, signedInAs)}.
+          </p>
+          <p className="text-muted-foreground text-body mt-2">{expectedLine}</p>
+          <Button onClick={onRetryAccount} className="rounded-box text-button mt-6 h-11 w-full font-semibold">
+            <Fingerprint className="!h-4 !w-4" />
+            Use another passkey
+          </Button>
+          <Button
+            onClick={onClose}
+            variant="secondary"
+            className="rounded-box text-button mt-3 h-11 w-full font-semibold"
+          >
+            Cancel
+          </Button>
+        </div>
+      </DialogShell>
+    );
+  }
+
   // Fresh sign-in / create view — also the "Create new account" destination.
   if (view !== 'welcome' || !defaultAccount) {
     return (
@@ -500,7 +543,9 @@ export function OnboardingDialog({
           )}
           <h2 className="text-foreground text-title-xl leading-none">Sign {isSignUp ? 'up.' : 'in.'}</h2>
           <p className="text-muted-foreground text-body mt-2">
-            {isSignUp ? 'Pick a username to create your account.' : 'Use a saved passkey, or create a new account.'}
+            {isSignUp
+              ? 'Pick a username to create your account.'
+              : (expectedLine ?? 'Use a saved passkey, or create a new account.')}
           </p>
 
           {isSignUp ? (
@@ -522,11 +567,13 @@ export function OnboardingDialog({
   }
 
   // Welcome-back view — one-tap continue with the last account.
+  const tileLabel =
+    expectedAccount && defaultAccount.credentialId !== lastAuthenticatedCredentialId ? 'Requested' : 'Last used';
   return (
     <DialogShell onClose={isBusy ? undefined : onClose}>
       <div className="flex flex-col p-6">
         <h2 className="text-foreground text-title-xl leading-none">Welcome back.</h2>
-        <p className="text-muted-foreground text-body mt-2">Pick up where you left off.</p>
+        <p className="text-muted-foreground text-body mt-2">{expectedLine ?? 'Pick up where you left off.'}</p>
 
         <button
           onClick={() => onAccountSelect(defaultAccount)}
@@ -540,7 +587,7 @@ export function OnboardingDialog({
               {/* bg override: the default bg-accent token is near-invisible on this white tile */}
               <Skeleton className="bg-primary-foreground/10 rounded-box h-10 w-10 flex-none" />
               <span className="flex min-w-0 flex-1 flex-col gap-1.5">
-                <span className="text-primary-foreground/60 text-label font-mono uppercase">Last used</span>
+                <span className="text-primary-foreground/60 text-label font-mono uppercase">{tileLabel}</span>
                 <Skeleton className="bg-primary-foreground/10 rounded-xs h-3.5 w-36" />
               </span>
             </>
@@ -556,7 +603,7 @@ export function OnboardingDialog({
                 className="rounded-box h-10 w-10"
               />
               <span className="flex min-w-0 flex-1 flex-col gap-1">
-                <span className="text-primary-foreground/60 text-label font-mono uppercase">Last used</span>
+                <span className="text-primary-foreground/60 text-label font-mono uppercase">{tileLabel}</span>
                 <span
                   className={cn(
                     'text-primary-foreground truncate font-semibold',

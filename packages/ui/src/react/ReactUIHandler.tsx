@@ -176,6 +176,11 @@ export interface ReactUIHandlerOptions {
   readonly theme?: JawTheme;
   /** Shown under the app name of the transaction screen instead of the page host. */
   readonly originLabel?: string;
+  /**
+   * Address of the account connect requests are for. The sign-in dialog preselects it and names it,
+   * and an answer with another account shows a screen naming both instead of approving.
+   */
+  readonly expectedAccount?: string;
 }
 
 /**
@@ -215,6 +220,7 @@ export class ReactUIHandler implements UIHandler {
   private config: UIHandlerConfig = {} as UIHandlerConfig;
   private localTheme?: JawTheme;
   private originLabel?: string;
+  private expectedAccount?: string;
   /** Teardown of the request that resolved but is still holding its success tick. */
   private pendingTeardown: (() => void) | null = null;
   private dismissers = new Set<() => void>();
@@ -222,6 +228,7 @@ export class ReactUIHandler implements UIHandler {
   constructor(options?: ReactUIHandlerOptions) {
     this.localTheme = options?.theme;
     this.originLabel = options?.originLabel;
+    this.expectedAccount = options?.expectedAccount;
   }
 
   /**
@@ -497,6 +504,7 @@ export class ReactUIHandler implements UIHandler {
             paymasters={this.config.paymasters}
             ens={this.config.ens}
             serverUrl={this.config.serverUrl}
+            expectedAccount={this.expectedAccount}
           />
         );
 
@@ -764,6 +772,7 @@ function OnboardingDialogWrapper({
   paymasters,
   ens,
   serverUrl,
+  expectedAccount,
 }: {
   request: ConnectUIRequest;
   onApprove: (data: any) => void;
@@ -773,6 +782,7 @@ function OnboardingDialogWrapper({
   paymasters?: Record<number, PaymasterConfig>;
   ens?: string;
   serverUrl?: string;
+  expectedAccount?: string;
 }) {
   const [open, setOpen] = useState(true);
   const [accounts, setAccounts] = useState<LocalStorageAccount[]>(() => getStoredLocalAccounts(apiKey));
@@ -789,6 +799,17 @@ function OnboardingDialogWrapper({
   const [loggingInAccount, setLoggingInAccount] = useState<string | null>(null);
   const [isImporting, setIsImporting] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
+  const [mismatchedAccount, setMismatchedAccount] = useState<{ address: string; name?: string } | null>(null);
+
+  // True, and the mismatch screen up, when the account the user ended on is not the one the request is for.
+  const isWrongAccount = (address: string, name?: string) => {
+    if (!expectedAccount || address.toLowerCase() === expectedAccount.toLowerCase()) return false;
+    setMismatchedAccount({ address, name });
+    setLoggingInAccount(null);
+    setIsImporting(false);
+    setIsCreating(false);
+    return true;
+  };
 
   // State for ConnectDialog confirmation
   const [showConnectDialog, setShowConnectDialog] = useState(false);
@@ -820,7 +841,10 @@ function OnboardingDialogWrapper({
     // Check if there's an existing authenticated session
     const authenticatedAddress = Account.getAuthenticatedAddress(apiKey);
 
-    if (authenticatedAddress) {
+    if (
+      authenticatedAddress &&
+      (!expectedAccount || authenticatedAddress.toLowerCase() === expectedAccount.toLowerCase())
+    ) {
       // User is already authenticated - approve immediately without showing any UI
       // Use setTimeout to defer the call and avoid unmounting during render
       setTimeout(() => {
@@ -831,7 +855,7 @@ function OnboardingDialogWrapper({
     }
     // If not authenticated, fall back to showing OnboardingDialog
     // (the normal UI flow will handle account creation/login)
-  }, [request.data.silent, apiKey, onApprove]);
+  }, [request.data.silent, apiKey, onApprove, expectedAccount]);
 
   const handleCancel = () => {
     setOpen(false);
@@ -882,6 +906,8 @@ function OnboardingDialogWrapper({
         account.credentialId
       );
 
+      if (isWrongAccount(accountInstance.address, account.username)) return;
+
       // If silent mode, skip ConnectDialog and approve immediately
       if (request.data.silent) {
         onApprove({
@@ -928,6 +954,8 @@ function OnboardingDialogWrapper({
       refreshAccounts();
 
       const metadata = accountInstance.getMetadata();
+
+      if (isWrongAccount(accountInstance.address, metadata?.username)) return;
 
       // If silent mode, skip ConnectDialog and approve immediately
       if (request.data.silent) {
@@ -1014,6 +1042,7 @@ function OnboardingDialogWrapper({
   const handleAccountCreationComplete = async (accountData: CreatedAccountData) => {
     // Creation wrote the account + auth state to storage
     refreshAccounts();
+    if (isWrongAccount(accountData.address, accountData.username)) return;
     // If silent mode, skip ConnectDialog and approve immediately
     if (request.data.silent) {
       setIsCreating(false);
@@ -1254,6 +1283,9 @@ function OnboardingDialogWrapper({
         lastAuthenticatedCredentialId={lastAuthenticatedCredentialId}
         supportedChains={SUPPORTED_CHAINS.map((chain) => ({ id: chain.id }))}
         subnameTextRecords={subnameTextRecords}
+        expectedAccount={expectedAccount}
+        mismatchedAccount={mismatchedAccount ?? undefined}
+        onRetryAccount={() => setMismatchedAccount(null)}
       />
     </DefaultDialogComponent>
   );
