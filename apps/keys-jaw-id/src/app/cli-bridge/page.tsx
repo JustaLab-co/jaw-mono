@@ -4,6 +4,7 @@ import { useSearchParams } from 'next/navigation';
 import { useEffect, useState, Suspense, useRef, useCallback } from 'react';
 import { JAW, Mode, getSupportedChains } from '@jaw.id/core';
 import { ReactUIHandler } from '@jaw.id/ui';
+import { heldAccount, releaseHeldSession, sameAccount } from '../../lib/bridge-session';
 import { ANSWERS_KEPT, MAX_FRAME_BYTES, parseInit, parseRequest } from '../../lib/bridge-frames';
 import { keyProof, readLink, type BridgeLink } from '../../lib/bridge-proof';
 import { resolveBridgeApiKey } from '../../lib/cli-api-key';
@@ -95,6 +96,7 @@ function CLIBridgeContent() {
    */
   const appIdentityRef = useRef<{ name: string; logoUrl?: string } | null>(null);
   const dialogsRef = useRef(new Set<ReactUIHandler>());
+  const accountRef = useRef<string | undefined>(undefined);
   const wsRef = useRef<WebSocket | null>(null);
   const sharedSecretRef = useRef<CryptoKey | null>(null);
   /**
@@ -146,7 +148,7 @@ function CLIBridgeContent() {
       const request = canonical({ method, params });
       let given = answersRef.current.get(id);
       if (!given) {
-        const reply = ask(sdk, id, method, params).then((answer) => {
+        const reply = ask(sdk, id, method, params, accountRef.current).then((answer) => {
           const started = method === 'wallet_sendCalls' && answer.success ? sendFromAnswer(answer.data) : undefined;
           if (started) trackSend(started);
           return answer;
@@ -276,7 +278,8 @@ function CLIBridgeContent() {
                     return;
                   }
                   setState('connected');
-                  const { chainId, ens, paymaster, client } = parsed;
+                  const { chainId, ens, paymaster, client, account } = parsed;
+                  accountRef.current = account;
                   const { name, logoUrl: appLogoUrl } = (appIdentityRef.current ??= {
                     name: resolveBridgeAppName(parsed.appName),
                     logoUrl: parsed.appLogoUrl,
@@ -312,10 +315,15 @@ function CLIBridgeContent() {
                   // first SDK meant the browser kept signing under the key, the
                   // chain and the paymaster of the previous run while the CLI
                   // recorded the new ones, and neither side could see the gap.
-                  const signature = JSON.stringify({ chainId, ens, paymaster, apiKey, name, appLogoUrl });
+                  const signature = JSON.stringify({ chainId, ens, paymaster, apiKey, name, appLogoUrl, account });
                   if (!sdkRef.current || sdkSignatureRef.current !== signature) {
                     sdkSignatureRef.current = signature;
-                    const dialogs = new ReactUIHandler({ originLabel: 'via JAW bridge' });
+                    const held = account && heldAccount();
+                    if (held && !sameAccount(held, account)) releaseHeldSession();
+                    const dialogs = new ReactUIHandler({
+                      originLabel: 'via JAW bridge',
+                      ...(account ? { expectedAccount: account } : {}),
+                    });
                     dialogsRef.current.add(dialogs);
                     sdkRef.current = JAW.create({
                       appName: name,
@@ -631,11 +639,16 @@ async function ask(
   sdk: ReturnType<typeof JAW.create>,
   id: string,
   method: string,
-  params: unknown[]
+  params: unknown[],
+  expected?: string
 ): Promise<RpcResponse> {
   try {
     const result = await sdk.provider.request({ method, params });
     const address = extractAddress(method, result);
+    if (expected && address && !sameAccount(address, expected)) {
+      const message = `This wallet is signed in as ${address}. The request is for ${expected}.`;
+      return { type: 'rpc_response', id, success: false, error: { code: -32000, message } };
+    }
     return { type: 'rpc_response', id, success: true, data: result, ...(address ? { address } : {}) };
   } catch (err) {
     const errObj = err as { code?: number; message?: string };

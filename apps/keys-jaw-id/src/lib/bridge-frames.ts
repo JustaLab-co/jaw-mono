@@ -1,3 +1,5 @@
+import { isAddress, type Address } from 'viem';
+
 /** The relay's own cap on a frame. Nothing a real client sends through it is larger. */
 export const MAX_FRAME_BYTES = 1_048_576;
 
@@ -13,6 +15,7 @@ export type BridgeInit = {
   paymaster?: { url: string; context?: Record<string, unknown> };
   client?: string;
   appLogoUrl?: string;
+  account?: Address;
 };
 
 export const BRIDGE_CLIENT_PATTERN = /^[a-z0-9-]{1,32}\/[A-Za-z0-9.+_-]{1,64}$/;
@@ -58,6 +61,7 @@ export function parseInit(inner: Record<string, unknown>, chains: readonly numbe
   const apiKey = inner.apiKey ?? undefined;
   const paymasterUrl = inner.paymasterUrl ?? undefined;
   const paymasterContext = inner.paymasterContext ?? undefined;
+  const account = inner.account ?? undefined;
 
   if (typeof chainId !== 'number' || !Number.isInteger(chainId) || !chains.includes(chainId)) {
     return { refused: `Unsupported chainId: ${String(chainId)}` };
@@ -66,7 +70,12 @@ export function parseInit(inner: Record<string, unknown>, chains: readonly numbe
     if (value !== undefined && typeof value !== 'string') return { refused: `Invalid ${field}: expected a string` };
   }
 
+  if (account !== undefined && (typeof account !== 'string' || !isAddress(account))) {
+    return { refused: 'Invalid account: expected an address' };
+  }
+
   const init: BridgeInit = { chainId };
+  if (account !== undefined) init.account = account as Address;
   if (typeof inner.client === 'string' && BRIDGE_CLIENT_PATTERN.test(inner.client)) init.client = inner.client;
   if (isAppLogoUrl(inner.appLogoUrl)) init.appLogoUrl = inner.appLogoUrl;
   if (ens !== undefined) init.ens = ens as string;
