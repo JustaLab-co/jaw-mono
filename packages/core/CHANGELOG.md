@@ -1,3 +1,13 @@
+## 1.10.6 (2026-11-12)
+
+### 🩹 Fixes
+
+- **core:** approve the JAW ERC-20 paymaster instead of Pimlico's ([#646](https://github.com/JustaLab-co/jaw-mono/pull/646))
+
+### ❤️ Thank You
+
+- Ghadi @Ghadi8
+
 ## 1.10.5 (2026-11-11)
 
 ### 🩹 Fixes
