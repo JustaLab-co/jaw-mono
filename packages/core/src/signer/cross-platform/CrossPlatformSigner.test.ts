@@ -62,6 +62,18 @@ const mockEncryptedData = {
 const mockCorrelationId = 'test-correlation-id';
 const mockMessageId = '12345678-1234-1234-1234-123456789012' as const;
 
+const CHECKER_DEPLOY_CALL = {
+    // vectors/checker-calls.json, first entry: the deployed factory puts this ArgIn checker at `checker`.
+    target: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+    functionSignature: 'transfer(address,uint256)',
+    checker: '0x4f8365A8A4C6FD48e6f95FA3a089C654061DF765',
+    checkerDeploy: {
+        template: '0x6cA4dcc0D7F56b17ACfc167f3F62650C36Be296A',
+        settings:
+            '0xa9059cbb000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000006000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000001a4d',
+    },
+};
+
 describe('CrossPlatformSigner', () => {
     let signer: CrossPlatformSigner;
     let mockCommunicator: Mocked<Communicator>;
@@ -1702,6 +1714,33 @@ describe('CrossPlatformSigner', () => {
             expect(mockCommunicator.postRequestAndWaitForResponse).not.toHaveBeenCalled();
         });
 
+        it('should reject a grant whose checkerDeploy would create a different checker before opening a popup', async () => {
+            const unauthenticatedSigner = new CrossPlatformSigner({
+                metadata: mockMetadata,
+                communicator: mockCommunicator,
+                callback: mockCallback,
+            });
+
+            const request: RequestArguments = {
+                method: 'wallet_grantPermissions',
+                params: [
+                    {
+                        expiry: 2_000_000_000,
+                        spender: '0x2222222222222222222222222222222222222222',
+                        permissions: {
+                            calls: [{ ...CHECKER_DEPLOY_CALL, checker: '0x398b9d939E7E616E03eA99601c835C920621B2ca' }],
+                        },
+                    },
+                ],
+            };
+
+            await expect(unauthenticatedSigner.request(request)).rejects.toMatchObject({
+                code: -32602,
+                message: expect.stringContaining('permissions.calls[0].checkerDeploy'),
+            });
+            expect(mockCommunicator.postRequestAndWaitForResponse).not.toHaveBeenCalled();
+        });
+
         it('should reject a grant whose selector and functionSignature disagree with -32602 before opening a popup', async () => {
             const unauthenticatedSigner = new CrossPlatformSigner({
                 metadata: mockMetadata,
@@ -2882,6 +2921,47 @@ describe('CrossPlatformSigner', () => {
                 },
                 mockCryptoKey
             );
+        });
+
+        // keys.jaw.id builds the grant batch from the params it receives, so the deploy has to
+        // arrive whole for the grant to deploy the checker it approves.
+        it('should carry a call checkerDeploy to keys.jaw.id unchanged', async () => {
+            vi.spyOn(store, 'getState').mockReturnValue({
+                account: {
+                    accounts: ['0x1234567890123456789012345678901234567890'],
+                    chain: { id: 1 },
+                    capabilities: undefined,
+                },
+                chains: [{ id: 1, rpcUrl: 'https://eth-mainnet.rpc.com' }],
+                config: { metadata: mockMetadata, version: '1.0.0' },
+                keys: {},
+                callStatuses: {},
+            });
+            mockCommunicator.postRequestAndWaitForResponse.mockResolvedValue({
+                id: mockMessageId,
+                requestId: mockMessageId,
+                correlationId: mockCorrelationId,
+                sender: 'peer-public-key-hex',
+                content: { encrypted: mockEncryptedData },
+                timestamp: new Date(),
+            } as RPCResponseMessage);
+            (decryptContent as Mock).mockResolvedValue({ result: { value: {} } } as RPCResponse);
+
+            await signer.request({
+                method: 'wallet_grantPermissions',
+                params: [
+                    {
+                        expiry: 2_000_000_000,
+                        spender: '0x2222222222222222222222222222222222222222',
+                        permissions: { calls: [CHECKER_DEPLOY_CALL] },
+                    },
+                ],
+            });
+
+            const sent = (encryptContent as Mock).mock.calls.at(-1)?.[0] as {
+                action: { params: Array<{ permissions: { calls: unknown[] } }> };
+            };
+            expect(sent.action.params[0].permissions.calls[0]).toEqual(CHECKER_DEPLOY_CALL);
         });
 
         it('should include current chainId in encrypted content', async () => {

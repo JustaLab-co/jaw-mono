@@ -57,6 +57,7 @@ import {
     type CallPermissionDetail,
     type SpendPermissionDetail,
 } from '../rpc/permissions.js';
+import { checkerDeployCalls } from '../rpc/checkerDeploy.js';
 import { JAW_RPC_URL, JAW_PAYMASTER_URL, jawPaymasterUrl, ERC20_PAYMASTER_ADDRESS } from '../constants.js';
 import { type Chain, chains as chainStore, dropChainClients } from '../store/index.js';
 import { logAccountIssuance } from '../analytics/index.js';
@@ -1219,7 +1220,13 @@ export class Account {
               })
             : null;
 
-        const calls = prefundCall ? [prefundCall, permissionCall] : [permissionCall];
+        // A reusable call checker that isn't deployed yet goes out in this same batch, ahead of
+        // the approval that names it, the way the paymaster approval does: nothing for the user
+        // to do, and one signature. Validated in here, so the batch can only deploy the checker
+        // the permission names.
+        const deployCalls = checkerDeployCalls(permissions);
+
+        const calls = [...(prefundCall ? [prefundCall] : []), ...deployCalls, permissionCall];
 
         // Check if we need an ERC-20 approval for the paymaster. A `gas` in the
         // context was sized by the caller over this same batch, transfer
@@ -1235,7 +1242,7 @@ export class Account {
             this._apiKey,
             paymaster.url,
             paymaster.context,
-            [approvalCall, prefundCall].filter((call) => call !== null)
+            [...[approvalCall, prefundCall].filter((call) => call !== null), ...deployCalls]
         );
     }
 

@@ -38,6 +38,7 @@ import { PERMISSIONS_MANAGER_ADDRESS } from '../constants.js';
 import type { Chain } from '../store/index.js';
 import {
     buildGrantPermissionCall,
+    checkGrantPermissionsParams,
     grantPermissions,
     SPEND_PERMISSIONS_MANAGER_ABI,
     TOKEN_FUNCTIONS,
@@ -389,4 +390,89 @@ describe('a call the grant screen could misname', () => {
             }
         }
     );
+});
+
+describe('a call that brings the checker it deploys', () => {
+    // From vectors/checker-calls.json: an ArgIn checker the deployed factory places at CHECKER_TO_DEPLOY.
+    const TEMPLATE: Address = '0x6cA4dcc0D7F56b17ACfc167f3F62650C36Be296A';
+    const SETTINGS: Hex = encodeAbiParameters(
+        [{ type: 'bytes4' }, { type: 'uint256' }, { type: 'bytes32[]' }],
+        ['0xa9059cbb', 0n, ['0x0000000000000000000000000000000000000000000000000000000000001a4d']]
+    );
+    const CHECKER_TO_DEPLOY: Address = '0x4f8365A8A4C6FD48e6f95FA3a089C654061DF765';
+
+    function callWith(checker: unknown, checkerDeploy: unknown) {
+        return { target: TARGET, functionSignature: 'transfer(address,uint256)', checker, checkerDeploy };
+    }
+
+    const refusals: Array<[string, unknown, unknown, string]> = [
+        ['deploys a different address', CHECKER, { template: TEMPLATE, settings: SETTINGS }, 'checkerDeploy deploys'],
+        ['names no checker', undefined, { template: TEMPLATE, settings: SETTINGS }, 'checkerDeploy deploys'],
+        ['is not an object', CHECKER_TO_DEPLOY, '0x1234', 'checkerDeploy must be an object'],
+        [
+            'has a malformed template',
+            CHECKER_TO_DEPLOY,
+            { template: '0x1234', settings: SETTINGS },
+            'checkerDeploy.template',
+        ],
+        [
+            'has settings that are not hex bytes',
+            CHECKER_TO_DEPLOY,
+            { template: TEMPLATE, settings: '0x123' },
+            'checkerDeploy.settings',
+        ],
+        [
+            'has settings longer than a checker can hold',
+            CHECKER_TO_DEPLOY,
+            { template: TEMPLATE, settings: `0x${'00'.repeat(24_532)}` },
+            'more than a checker can hold',
+        ],
+    ];
+
+    it.each(refusals)('is refused before any popup when it %s', (_, checker, checkerDeploy, message) => {
+        expect(() =>
+            checkGrantPermissionsParams([{ permissions: { calls: [callWith(checker, checkerDeploy)] } }])
+        ).toThrow(expect.objectContaining({ code: -32602, message: expect.stringContaining(message) }));
+    });
+
+    it.each(refusals)(
+        'is refused when the screen builds its estimate and it %s',
+        (_, checker, checkerDeploy, message) => {
+            const build = () =>
+                buildGrantPermissionCall(ACCOUNT, SPENDER, 2000000000, {
+                    calls: [callWith(checker, checkerDeploy) as NonNullable<PermissionsDetail['calls']>[number]],
+                });
+            expect(build).toThrow(expect.objectContaining({ code: -32602, message: expect.stringContaining(message) }));
+        }
+    );
+
+    it('passes when the template and settings produce its checker, in any letter case', () => {
+        expect(() =>
+            checkGrantPermissionsParams([
+                {
+                    permissions: {
+                        calls: [
+                            callWith(CHECKER_TO_DEPLOY.toLowerCase(), {
+                                template: TEMPLATE.toLowerCase(),
+                                settings: SETTINGS,
+                            }),
+                        ],
+                    },
+                },
+            ])
+        ).not.toThrow();
+    });
+
+    it('grants the checker address and keeps the deploy out of the relay and the response', async () => {
+        const response = await grant([
+            callWith(CHECKER_TO_DEPLOY, { template: TEMPLATE, settings: SETTINGS }) as NonNullable<
+                PermissionsDetail['calls']
+            >[number],
+        ]);
+
+        expect(approvedPermission().calls[0].checker).toBe(CHECKER_TO_DEPLOY);
+        const relayBody = vi.mocked(restCall).mock.calls[0][2] as { calls: Array<Record<string, unknown>> };
+        expect(relayBody.calls[0]).toEqual({ target: TARGET, selector: '0xa9059cbb', checker: CHECKER_TO_DEPLOY });
+        expect(response.calls[0]).not.toHaveProperty('checkerDeploy');
+    });
 });
