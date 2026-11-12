@@ -1,3 +1,13 @@
+## 1.10.7 (2026-11-12)
+
+### 🩹 Fixes
+
+- **core:** approve the ERC-20 paymaster at 0xcCE758d0 ([#648](https://github.com/JustaLab-co/jaw-mono/pull/648))
+
+### ❤️ Thank You
+
+- Ghadi @Ghadi8
+
 ## 1.10.6 (2026-11-12)
 
 ### 🩹 Fixes
