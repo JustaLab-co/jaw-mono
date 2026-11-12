@@ -316,7 +316,13 @@ grant batch adds for a checker that isn't deployed yet. The `checker` in each
 entry was returned by the deployed `CheckerFactory` itself on Base Sepolia, so it
 is the factory's statement of where that clone lives, not ours. The
 `deployCalldata` comes from `cast calldata` with the signature copied from
-`contracts/call-checkers/src/CheckerFactory.sol`.
+`src/CheckerFactory.sol` in JustaLab-co/call-checkers, checked out at
+`contracts/call-checkers`:
+
+```solidity
+function deploy(address template, bytes calldata settings) external returns (address checker);
+function predict(address template, bytes calldata settings) external view returns (address);
+```
 
 ```bash
 FACTORY=0x9c35a9feb1c3e4de809657CF63d47df8FEEaF43A

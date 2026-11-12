@@ -1206,6 +1206,12 @@ export class Account {
 
         const paymaster = this.resolveEffectivePaymaster(paymasterUrlOverride, paymasterContextOverride);
 
+        // A reusable call checker that isn't deployed yet goes out in this same batch, ahead of
+        // the approval that names it, the way the paymaster approval does: nothing for the user
+        // to do, and one signature. Validated here, before the prefund's reads, so the batch can
+        // only deploy the checker the permission names.
+        const deployCalls = checkerDeployCalls(permissions);
+
         // Ahead of the approval sizing, so the ceiling covers the transfer too.
         // Checked rather than priced: the amount is the one the screen showed,
         // and a grant that cannot send exactly that fails here, before signing.
@@ -1220,17 +1226,11 @@ export class Account {
               })
             : null;
 
-        // A reusable call checker that isn't deployed yet goes out in this same batch, ahead of
-        // the approval that names it, the way the paymaster approval does: nothing for the user
-        // to do, and one signature. Validated in here, so the batch can only deploy the checker
-        // the permission names.
-        const deployCalls = checkerDeployCalls(permissions);
-
         const calls = [...(prefundCall ? [prefundCall] : []), ...deployCalls, permissionCall];
 
         // Check if we need an ERC-20 approval for the paymaster. A `gas` in the
-        // context was sized by the caller over this same batch, transfer
-        // included, since the transfer was known before the screen rendered.
+        // context was sized by the caller over this same batch, transfer and
+        // checker deploys included, since both are known before the screen renders.
         const approvalCall = await this.createErc20ApprovalCall(paymaster.url, paymaster.context, calls, smartAccount);
 
         return await grantSmartAccountPermissions(

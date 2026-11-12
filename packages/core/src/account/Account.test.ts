@@ -2,11 +2,21 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createPublicClient, decodeFunctionData, encodeFunctionData, erc20Abi } from 'viem';
 import { Account } from './Account.js';
 import { spenderPrefundCall } from './spenderPrefund.js';
-import { ERC20_PAYMASTER_ADDRESS, jawPaymasterUrl } from '../constants.js';
 import { readFileSync } from 'node:fs';
-import { CHECKER_FACTORY_ADDRESS } from '../constants.js';
+import { CHECKER_FACTORY_ADDRESS, ERC20_PAYMASTER_ADDRESS, jawPaymasterUrl } from '../constants.js';
 
 // Mock dependencies
+/** From vectors/checker-calls.json: addresses from the deployed factory, calldata from `cast calldata`. */
+const CHECKER_VECTORS: Array<{
+    template: `0x${string}`;
+    settings: `0x${string}`;
+    checker: `0x${string}`;
+    deployCalldata: `0x${string}`;
+}> = JSON.parse(readFileSync(new URL('../../vectors/checker-calls.json', import.meta.url), 'utf8'));
+
+/** `approve(Permission)` on the permission manager, from `cast sig` over the Solidity signature. */
+const APPROVE_PERMISSION_SELECTOR = '0x4afa25af';
+
 vi.mock('../passkey-manager/index.js', async (importOriginal) => {
     const original = await importOriginal<typeof import('../passkey-manager/index.js')>();
     return {
@@ -1917,17 +1927,6 @@ describe('Account — prefunding the spender in the grant', () => {
         expect(vi.mocked(grantPermissions)).not.toHaveBeenCalled();
     });
 });
-
-/** From vectors/checker-calls.json: addresses from the deployed factory, calldata from `cast calldata`. */
-const CHECKER_VECTORS: Array<{
-    template: `0x${string}`;
-    settings: `0x${string}`;
-    checker: `0x${string}`;
-    deployCalldata: `0x${string}`;
-}> = JSON.parse(readFileSync(new URL('../../vectors/checker-calls.json', import.meta.url), 'utf8'));
-
-/** `approve(Permission)` on the permission manager, from `cast sig` over the Solidity signature. */
-const APPROVE_PERMISSION_SELECTOR = '0x4afa25af';
 
 describe('Account — deploying a call checker in the grant', () => {
     // Not the JAW ERC-20 paymaster, so no approval is sized and what is under test

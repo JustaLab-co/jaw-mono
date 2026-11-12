@@ -3,7 +3,7 @@ import type { Address, Hex } from 'viem';
 
 import { CHECKER_FACTORY_ADDRESS } from '../constants.js';
 import { standardErrors } from '../errors/index.js';
-import { isHexString, isRecord, requireHexAddress } from './paramUtils.js';
+import { isRecord, requireHexAddress, requireHexBytes } from './paramUtils.js';
 import type { PermissionsDetail } from './permissions.js';
 
 /**
@@ -17,6 +17,8 @@ export type CheckerDeploy = {
     /** The template's settings, ABI encoded. See the call-checkers README for each layout. */
     settings: Hex;
 };
+
+const GRANT_METHOD = 'wallet_grantPermissions';
 
 /** Longest settings a clone can hold, the EIP-170 code size limit minus the 45-byte proxy. Mirrors `CheckerFactory.MAX_SETTINGS_LENGTH`. */
 const MAX_SETTINGS_LENGTH = 24_531;
@@ -52,38 +54,38 @@ export function predictCheckerAddress(template: Address, settings: Hex): Address
 }
 
 /**
- * Refuses a `checkerDeploy` that is malformed or would deploy a different contract from
- * the call's `checker`. The user approves the checker address, so a deploy that lands
- * anywhere else would leave the permission naming a contract nobody deployed.
+ * A call's `checkerDeploy`, checked, with the checker it deploys. Refused when it is malformed or
+ * would deploy a different contract from the call's `checker`: the user approves the checker
+ * address, so a deploy that lands anywhere else leaves the permission naming a contract nobody
+ * deployed. Undefined when the call has none.
  */
-export function optionalCheckerDeploy(
-    value: unknown,
-    checker: unknown,
-    method: string,
-    field: string,
-    checkerField: string
-): CheckerDeploy | undefined {
-    if (value === undefined || value === null) return undefined;
-    if (!isRecord(value)) {
-        throw standardErrors.rpc.invalidParams(`${method}: ${field} must be an object with template and settings`);
+export function optionalCallCheckerDeploy(
+    call: unknown,
+    index: number
+): (CheckerDeploy & { checker: Address }) | undefined {
+    const { checker, checkerDeploy } = (isRecord(call) ? call : {}) as { checker?: unknown; checkerDeploy?: unknown };
+    if (checkerDeploy === undefined || checkerDeploy === null) return undefined;
+
+    const field = `permissions.calls[${index}].checkerDeploy`;
+    if (!isRecord(checkerDeploy)) {
+        throw standardErrors.rpc.invalidParams(
+            `${GRANT_METHOD}: ${field} must be an object with template and settings`
+        );
     }
-    const template = requireHexAddress(value.template, method, `${field}.template`);
-    const settings = value.settings;
-    if (!isHexString(settings) || settings.length % 2 !== 0) {
-        throw standardErrors.rpc.invalidParams(`${method}: ${field}.settings must be hex bytes`);
-    }
+    const template = requireHexAddress(checkerDeploy.template, GRANT_METHOD, `${field}.template`);
+    const settings = requireHexBytes(checkerDeploy.settings, GRANT_METHOD, `${field}.settings`);
     if (size(settings) > MAX_SETTINGS_LENGTH) {
         throw standardErrors.rpc.invalidParams(
-            `${method}: ${field}.settings is ${size(settings)} bytes, more than a checker can hold (${MAX_SETTINGS_LENGTH})`
+            `${GRANT_METHOD}: ${field}.settings is ${size(settings)} bytes, more than a checker can hold (${MAX_SETTINGS_LENGTH})`
         );
     }
     const predicted = predictCheckerAddress(template, settings);
     if (typeof checker !== 'string' || checker.toLowerCase() !== predicted.toLowerCase()) {
         throw standardErrors.rpc.invalidParams(
-            `${method}: ${field} deploys ${predicted}, so ${checkerField} must be that address`
+            `${GRANT_METHOD}: ${field} deploys ${predicted}, so permissions.calls[${index}].checker must be that address`
         );
     }
-    return { template: getAddress(template), settings };
+    return { template: getAddress(template), settings, checker: predicted };
 }
 
 /**
@@ -96,17 +98,9 @@ export function checkerDeployCalls(permissions: Pick<PermissionsDetail, 'calls'>
     const seen = new Set<string>();
     const deploys: Array<{ to: Address; data: Hex }> = [];
     (permissions.calls ?? []).forEach((call, index) => {
-        const deploy = optionalCheckerDeploy(
-            call.checkerDeploy,
-            call.checker,
-            'wallet_grantPermissions',
-            `permissions.calls[${index}].checkerDeploy`,
-            `permissions.calls[${index}].checker`
-        );
-        if (!deploy) return;
-        const checker = predictCheckerAddress(deploy.template, deploy.settings);
-        if (seen.has(checker)) return;
-        seen.add(checker);
+        const deploy = optionalCallCheckerDeploy(call, index);
+        if (!deploy || seen.has(deploy.checker)) return;
+        seen.add(deploy.checker);
         deploys.push({
             to: CHECKER_FACTORY_ADDRESS,
             data: encodeFunctionData({

@@ -20,7 +20,7 @@ import { restCall } from '../api/index.js';
 import { buildHandleJawRpcUrl, fetchRPCRequest } from '../utils/index.js';
 import type { RequestArguments } from '../provider/index.js';
 import { describeValue, isRecord, optionalHexAddress, requireHexBytes32, requireParamsObject } from './paramUtils.js';
-import { optionalCheckerDeploy, type CheckerDeploy } from './checkerDeploy.js';
+import { optionalCallCheckerDeploy, type CheckerDeploy } from './checkerDeploy.js';
 
 /**
  * ERC-7528 native token address convention
@@ -467,15 +467,12 @@ export function checkGrantPermissionsParams(params: unknown): void {
     const calls = (params as Array<{ permissions?: { calls?: unknown } }> | undefined)?.[0]?.permissions?.calls;
     if (!Array.isArray(calls)) return;
     calls.forEach((call, index) => {
-        const { checker, checkerDeploy } = (call ?? {}) as { checker?: unknown; checkerDeploy?: unknown };
-        optionalHexAddress(checker, GRANT_METHOD, `permissions.calls[${index}].checker`);
-        optionalCheckerDeploy(
-            checkerDeploy,
-            checker,
+        optionalHexAddress(
+            (call as { checker?: unknown } | null)?.checker,
             GRANT_METHOD,
-            `permissions.calls[${index}].checkerDeploy`,
             `permissions.calls[${index}].checker`
         );
+        optionalCallCheckerDeploy(call, index);
         resolveCallSelector(call, index);
     });
 }
@@ -754,13 +751,7 @@ function apiPermissionsToPermission(
         // grant a permission no caller can rebuild.
         const checker = optionalHexAddress(call.checker, GRANT_METHOD, `permissions.calls[${index}].checker`);
         // Checked here too, so the screen's estimate refuses a deploy that would land somewhere else.
-        optionalCheckerDeploy(
-            call.checkerDeploy,
-            call.checker,
-            GRANT_METHOD,
-            `permissions.calls[${index}].checkerDeploy`,
-            `permissions.calls[${index}].checker`
-        );
+        optionalCallCheckerDeploy(call, index);
 
         return {
             target: call.target,

@@ -7,6 +7,7 @@
  * Only the network is mocked: the bundler send, the receipt read and the relay
  * call. The encoder and the event decode are real.
  */
+import { readFileSync } from 'node:fs';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
     decodeFunctionData,
@@ -35,6 +36,7 @@ import { sendTransaction } from '../account/smartAccount.js';
 import { getTransactionReceipt } from 'viem/actions';
 import { restCall } from '../api/index.js';
 import { PERMISSIONS_MANAGER_ADDRESS } from '../constants.js';
+import { predictCheckerAddress } from './checkerDeploy.js';
 import type { Chain } from '../store/index.js';
 import {
     buildGrantPermissionCall,
@@ -393,13 +395,13 @@ describe('a call the grant screen could misname', () => {
 });
 
 describe('a call that brings the checker it deploys', () => {
-    // From vectors/checker-calls.json: an ArgIn checker the deployed factory places at CHECKER_TO_DEPLOY.
-    const TEMPLATE: Address = '0x6cA4dcc0D7F56b17ACfc167f3F62650C36Be296A';
-    const SETTINGS: Hex = encodeAbiParameters(
-        [{ type: 'bytes4' }, { type: 'uint256' }, { type: 'bytes32[]' }],
-        ['0xa9059cbb', 0n, ['0x0000000000000000000000000000000000000000000000000000000000001a4d']]
+    // vectors/checker-calls.json, first entry: the deployed factory places this ArgIn checker at `checker`.
+    const [VECTOR]: Array<{ template: Address; settings: Hex; checker: Address }> = JSON.parse(
+        readFileSync(new URL('../../vectors/checker-calls.json', import.meta.url), 'utf8')
     );
-    const CHECKER_TO_DEPLOY: Address = '0x4f8365A8A4C6FD48e6f95FA3a089C654061DF765';
+    const TEMPLATE = VECTOR.template;
+    const SETTINGS = VECTOR.settings;
+    const CHECKER_TO_DEPLOY = VECTOR.checker;
 
     function callWith(checker: unknown, checkerDeploy: unknown) {
         return { target: TARGET, functionSignature: 'transfer(address,uint256)', checker, checkerDeploy };
@@ -455,6 +457,25 @@ describe('a call that brings the checker it deploys', () => {
                             callWith(CHECKER_TO_DEPLOY.toLowerCase(), {
                                 template: TEMPLATE.toLowerCase(),
                                 settings: SETTINGS,
+                            }),
+                        ],
+                    },
+                },
+            ])
+        ).not.toThrow();
+    });
+
+    // The factory refuses anything longer, so this is the last length a checker can be deployed with.
+    it('passes settings of exactly 24,531 bytes, the most a checker can hold', () => {
+        const longest: Hex = `0x${'00'.repeat(24_531)}`;
+        expect(() =>
+            checkGrantPermissionsParams([
+                {
+                    permissions: {
+                        calls: [
+                            callWith(predictCheckerAddress(TEMPLATE, longest), {
+                                template: TEMPLATE,
+                                settings: longest,
                             }),
                         ],
                     },

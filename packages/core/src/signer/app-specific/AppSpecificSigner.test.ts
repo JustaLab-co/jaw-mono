@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, it, expect, vi, beforeEach, afterEach, Mock } from 'vitest';
 import { AppSpecificSigner } from './AppSpecificSigner.js';
 import { store } from '../../store/index.js';
@@ -39,16 +40,14 @@ vi.mock('../../rpc/permissions.js', async (importOriginal) => {
 
 const mockCorrelationId = 'test-correlation-id';
 
+// vectors/checker-calls.json, first entry: the deployed factory puts this ArgIn checker at `checker`.
+const [CHECKER_VECTOR]: Array<{ template: `0x${string}`; settings: `0x${string}`; checker: `0x${string}` }> =
+    JSON.parse(readFileSync(new URL('../../../vectors/checker-calls.json', import.meta.url), 'utf8'));
 const CHECKER_DEPLOY_CALL = {
-    // vectors/checker-calls.json, first entry: the deployed factory puts this ArgIn checker at `checker`.
     target: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
     functionSignature: 'transfer(address,uint256)',
-    checker: '0x4f8365A8A4C6FD48e6f95FA3a089C654061DF765',
-    checkerDeploy: {
-        template: '0x6cA4dcc0D7F56b17ACfc167f3F62650C36Be296A',
-        settings:
-            '0xa9059cbb000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000006000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000001a4d',
-    },
+    checker: CHECKER_VECTOR.checker,
+    checkerDeploy: { template: CHECKER_VECTOR.template, settings: CHECKER_VECTOR.settings },
 };
 
 describe('AppSpecificSigner', () => {
