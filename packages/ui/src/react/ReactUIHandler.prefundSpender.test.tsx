@@ -250,3 +250,53 @@ describe('ReactUIHandler shows the call checker it signs', () => {
     expect(grantPermissions.mock.calls[0][2].calls[0].checker).toBe(CHECKER);
   });
 });
+
+/**
+ * A reusable checker that isn't deployed yet goes out in the grant batch, ahead of the
+ * approval that names it. The fee is estimated over that same batch, or the estimate runs
+ * an approval whose checker has no code yet and fails.
+ */
+describe('ReactUIHandler estimates the grant with its checker deploy in the batch', () => {
+  // First entry of packages/core/vectors/checker-calls.json: the checker address the deployed
+  // factory returned for these settings, and the deploy calldata from `cast calldata`.
+  const VECTOR = {
+    template: '0x6cA4dcc0D7F56b17ACfc167f3F62650C36Be296A',
+    settings:
+      '0xa9059cbb000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000006000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000001a4d',
+    checker: '0x4f8365A8A4C6FD48e6f95FA3a089C654061DF765',
+    deployCalldata:
+      '0xe97fac050000000000000000000000006ca4dcc0d7f56b17acfc167f3f62650c36be296a000000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000000000000000000000000000000000a0a9059cbb000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000006000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000001a4d',
+  };
+  const FACTORY = '0x9c35a9feb1c3e4de809657CF63d47df8FEEaF43A';
+  const PERMISSIONS = {
+    calls: [
+      {
+        target: TOKEN,
+        functionSignature: 'transfer(address,uint256)',
+        checker: VECTOR.checker,
+        checkerDeploy: { template: VECTOR.template, settings: VECTOR.settings },
+      },
+    ],
+    spends: REQUEST.data.permissions.spends,
+  };
+
+  it('estimates the deploy right before the approval', async () => {
+    await openGrant(undefined, PERMISSIONS);
+
+    expect(estimatedCalls).toHaveLength(2);
+    expect(estimatedCalls[0]).toEqual({ to: FACTORY, data: VECTOR.deployCalldata });
+  });
+
+  it('puts the prefund transfer first, then the deploy, then the approval', async () => {
+    await openGrant({ prefundSpender: true }, PERMISSIONS);
+
+    expect(estimatedCalls.map((call) => call.to)).toEqual([TOKEN, FACTORY, expect.any(String)]);
+  });
+
+  it('hands the grant the checkerDeploy it estimated', async () => {
+    await openGrant(undefined, PERMISSIONS);
+    await act(async () => dialogProps.onConfirm?.());
+
+    expect(grantPermissions.mock.calls[0][2].calls[0].checkerDeploy).toEqual(PERMISSIONS.calls[0].checkerDeploy);
+  });
+});

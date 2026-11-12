@@ -32,6 +32,7 @@ import {
   standardErrorCodes,
   jawPaymasterUrl,
   spenderPrefundCall,
+  checkerDeployCalls,
   JAW_RPC_URL,
   SUPPORTED_CHAINS,
   handleGetCapabilitiesRequest,
@@ -300,8 +301,13 @@ export const PermissionModal = ({
           grantParams!.expiry,
           grantParams!.permissions
         );
-        // The transfer is part of what this transaction costs, so the fee is estimated with it in.
-        return prefund ? [spenderPrefundCall(prefund), permissionCall] : [permissionCall];
+        // The transfer and any checker deploy are part of what this transaction costs, so the fee
+        // is estimated with them in, in the order the grant sends them.
+        return [
+          ...(prefund ? [spenderPrefundCall(prefund)] : []),
+          ...checkerDeployCalls(grantParams!.permissions),
+          permissionCall,
+        ];
       } catch (error) {
         console.warn('[PermissionModal] Failed to build permission grant call:', error);
         return [];
