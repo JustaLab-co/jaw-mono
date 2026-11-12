@@ -1,7 +1,6 @@
 'use client';
 
 import { Info, ShieldCheck, TriangleAlert } from 'lucide-react';
-import { zeroAddress } from 'viem';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '../ui/accordion';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip';
 import { AccountAvatar } from '../AccountAvatar';
@@ -14,7 +13,8 @@ import { isWildcard } from '../../utils/permissionExecution';
 import { getDisplayAddress } from '../../utils';
 import type { AddressIdentity } from '../../hooks/useAddressIdentities';
 import { isLongSpendAmount } from '../../utils/displayFormat';
-import type { CallPermission, SpendPermission, SpenderPrefundDisplay } from './types';
+import type { CallPermission, CheckerView, SpendPermission, SpenderPrefundDisplay } from './types';
+import { hasChecker } from './calls';
 
 export { isWildcard };
 
@@ -208,48 +208,102 @@ export interface CallGroup {
   calls: CallPermission[];
 }
 
-/** A call the permission manager also runs past a checker contract before executing it. */
-export function hasChecker(call: CallPermission): call is CallPermission & { checker: string } {
-  // Typed as a string, but it arrives in a dapp's JSON, so it is checked before it is read as one.
-  return typeof call.checker === 'string' && call.checker.toLowerCase() !== zeroAddress;
-}
+export { hasChecker };
 
 const CHECKER_INFO =
   "Before each call to this function, this contract checks it and can block it. It can't allow anything extra.";
 
+const CUSTOM_CHECK_INFO =
+  "JAW can't read what this contract allows. It runs before each call to this function and can block it.";
+
+/** An explanation behind an info icon, on a button so a keyboard or screen reader can reach it. */
+function InfoTip({ text }: { text: string }) {
+  return (
+    <TooltipProvider delayDuration={0}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button type="button" aria-label={text} className="flex-none cursor-help">
+            <Info className="size-3" aria-hidden />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="top">
+          <p>{text}</p>
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
+
 /**
- * The checker that has to approve each call to a function: a name it is known by when there is one,
- * and its address. The SDK can't say what a given checker enforces, so it never shows a description
- * the checker gives of itself.
+ * The checker that has to approve each call to a function. Until the screen has read it, its
+ * address, and a name it is known by when there is one: the SDK never shows a description the
+ * checker gives of itself. Once read, our rule in words where the address was, or, in amber like
+ * "Any function", a rule of ours that can never pass or a check the screen can't state. None of
+ * them blocks the grant, and the address stays one copy away.
  */
 function CheckerLine({
   checker,
+  view,
   name,
   truncateAddress,
 }: {
   checker: string;
+  view?: CheckerView;
   name?: string;
   truncateAddress: (address: string) => string;
 }) {
-  return (
-    <span className="text-muted-foreground text-body-xs flex items-center gap-1.5 pl-3">
-      <ShieldCheck className="size-3 flex-none" strokeWidth={2.4} />
-      <span className="min-w-0">
+  const warn = view?.tone === 'blocks' || view?.tone === 'custom';
+  const info = !view
+    ? CHECKER_INFO
+    : view.tone === 'rule'
+      ? `${CHECKER_INFO} Checker ${checker}.`
+      : view.tone === 'custom'
+        ? CUSTOM_CHECK_INFO
+        : undefined;
+
+  let text: React.ReactNode;
+  if (!view) {
+    text = (
+      <>
         Checked by {name && <span className="text-foreground font-medium">{name} </span>}
         <span className="font-mono">{truncateAddress(checker)}</span>
-      </span>
-      <TooltipProvider delayDuration={0}>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button type="button" aria-label={CHECKER_INFO} className="flex-none cursor-help">
-              <Info className="size-3" aria-hidden />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="top">
-            <p>{CHECKER_INFO}</p>
-          </TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
+      </>
+    );
+  } else if (view.tone === 'rule') {
+    text = view.parts.map((part, i) =>
+      typeof part === 'string' ? (
+        part
+      ) : 'address' in part ? (
+        <span key={i} className="text-foreground font-mono" title={part.address}>
+          {truncateAddress(part.address)}
+        </span>
+      ) : (
+        <span key={i} className="text-foreground font-medium">
+          this wallet
+        </span>
+      )
+    );
+  } else if (view.tone === 'blocks') {
+    text = 'Blocks every call to this function';
+  } else {
+    text = (
+      <>
+        Custom check <span className="font-mono">{truncateAddress(checker)}</span>
+      </>
+    );
+  }
+
+  return (
+    <span
+      className={`${warn ? 'text-warning font-medium' : 'text-muted-foreground'} text-body-xs flex items-center gap-1.5 pl-3`}
+    >
+      {warn ? (
+        <TriangleAlert className="size-3 flex-none" strokeWidth={2.4} />
+      ) : (
+        <ShieldCheck className="size-3 flex-none" strokeWidth={2.4} />
+      )}
+      <span className="min-w-0">{text}</span>
+      {info && <InfoTip text={info} />}
       <CopyButton value={checker} size={11} label="Copy checker address" />
     </span>
   );
@@ -260,10 +314,12 @@ export function CallRow({
   call,
   truncateAddress,
   checkerNameOf,
+  checkerRuleOf,
 }: {
   call: CallPermission;
   truncateAddress: (address: string) => string;
   checkerNameOf?: (address: string) => string | undefined;
+  checkerRuleOf?: (call: CallPermission) => CheckerView | undefined;
 }) {
   return (
     <li className="flex flex-col gap-1">
@@ -281,7 +337,12 @@ export function CallRow({
         </span>
       )}
       {hasChecker(call) && (
-        <CheckerLine checker={call.checker} name={checkerNameOf?.(call.checker)} truncateAddress={truncateAddress} />
+        <CheckerLine
+          checker={call.checker}
+          view={checkerRuleOf?.(call)}
+          name={checkerNameOf?.(call.checker)}
+          truncateAddress={truncateAddress}
+        />
       )}
     </li>
   );
@@ -310,6 +371,7 @@ function ContractGroup({
   avatarUrl,
   truncateAddress,
   checkerNameOf,
+  checkerRuleOf,
   tokenSymbol,
   chainId,
 }: {
@@ -318,6 +380,7 @@ function ContractGroup({
   avatarUrl?: string;
   truncateAddress: (address: string) => string;
   checkerNameOf?: (address: string) => string | undefined;
+  checkerRuleOf?: (call: CallPermission) => CheckerView | undefined;
   /** Set when the target is a known token — it then reads like the spend rows. */
   tokenSymbol?: string;
   chainId?: number;
@@ -387,7 +450,13 @@ function ContractGroup({
           )}
           <ul className="bg-secondary rounded-chip flex flex-col gap-1 p-2">
             {group.calls.map((call, i) => (
-              <CallRow key={i} call={call} truncateAddress={truncateAddress} checkerNameOf={checkerNameOf} />
+              <CallRow
+                key={i}
+                call={call}
+                truncateAddress={truncateAddress}
+                checkerNameOf={checkerNameOf}
+                checkerRuleOf={checkerRuleOf}
+              />
             ))}
           </ul>
         </div>
@@ -407,6 +476,7 @@ export function AllowedCalls({
   identityOf,
   truncateAddress,
   checkerNameOf,
+  checkerRuleOf,
   tokenMeta,
   chainId,
 }: {
@@ -414,6 +484,8 @@ export function AllowedCalls({
   identityOf: (address: string) => AddressIdentity | undefined;
   truncateAddress: (address: string) => string;
   checkerNameOf?: (address: string) => string | undefined;
+  /** What the screen has read about each call's checker; undefined keeps the plain checker line. */
+  checkerRuleOf?: (call: CallPermission) => CheckerView | undefined;
   tokenMeta?: Record<string, { symbol: string }>;
   chainId?: number;
 }) {
@@ -439,6 +511,7 @@ export function AllowedCalls({
                 avatarUrl={identityOf(group.target)?.ensAvatar ?? undefined}
                 truncateAddress={truncateAddress}
                 checkerNameOf={checkerNameOf}
+                checkerRuleOf={checkerRuleOf}
                 tokenSymbol={tokenMeta?.[group.target]?.symbol}
                 chainId={chainId}
               />

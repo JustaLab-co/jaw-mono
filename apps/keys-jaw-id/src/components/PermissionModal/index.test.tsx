@@ -10,7 +10,7 @@ import type { Chain } from '@jaw.id/core';
 const revokePermission = vi.fn();
 const grantPermissions = vi.fn();
 
-type DialogProps = { onConfirm?: () => void; calls?: Array<{ checker?: string }> };
+type DialogProps = { onConfirm?: () => void; calls?: Array<{ checker?: string; checkerDeploy?: unknown }> };
 let dialogProps: DialogProps = {};
 /** What the modal asked to be estimated, on the last render. */
 let estimatedCalls: Array<{ to: string; data?: string }> = [];
@@ -261,6 +261,8 @@ describe('PermissionModal grant with a checker to deploy', () => {
 
     expect(estimatedCalls).toHaveLength(2);
     expect(estimatedCalls[0]).toEqual({ to: FACTORY, data: VECTOR.deployCalldata });
+    // The screen reads the undeployed checker's rule from the same deploy.
+    expect(dialogProps.calls?.[0]).toMatchObject({ checkerDeploy: CALL.checkerDeploy });
 
     await act(async () => dialogProps.onConfirm?.());
     expect(grantPermissions.mock.calls[0][2].calls[0].checkerDeploy).toEqual(CALL.checkerDeploy);

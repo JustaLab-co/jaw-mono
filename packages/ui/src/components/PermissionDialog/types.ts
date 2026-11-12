@@ -1,3 +1,4 @@
+import type { RuleText } from '../../utils/ruleText';
 import { ReactElement } from 'react';
 import { FeeTokenOption } from '../FeeTokenSelector';
 import type { RevocationProblem } from '../../utils/permissionExecution';
@@ -32,7 +33,21 @@ export interface CallPermission {
   functionSignature: string;
   /** Contract the manager asks to approve each matching call. Absent or zero means none. */
   checker?: string;
+  /** How the grant deploys `checker` when it isn't deployed yet, so its rule can be read before it exists. */
+  checkerDeploy?: CheckerDeployRequest;
 }
+
+/** `checkerDeploy` as a grant request carries it: JSON from the dapp, checked before it is trusted. */
+export interface CheckerDeployRequest {
+  template: string;
+  settings: string;
+}
+
+/**
+ * What the screen says about a call's checker once it has read it: our rule in words, a rule of
+ * ours that can never pass, or a custom check it can't state. Undefined while that is still unknown.
+ */
+export type CheckerView = RuleText;
 
 export interface PermissionDialogProps {
   open: boolean;
