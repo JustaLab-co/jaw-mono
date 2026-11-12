@@ -23,6 +23,7 @@ import {
   JAW_RPC_URL,
   jawPaymasterUrl,
   spenderPrefundCall,
+  checkerDeployCalls,
   SubnameTextRecordCapabilityRequest,
   handleGetCapabilitiesRequest,
   buildGrantPermissionCall,
@@ -2324,8 +2325,13 @@ function PermissionDialogWrapper({
         request.data.expiry,
         request.data.permissions
       );
-      // The transfer is part of what this transaction costs, so the fee is estimated with it in.
-      return prefund ? [spenderPrefundCall(prefund), permissionCall] : [permissionCall];
+      // The transfer and any checker deploy are part of what this transaction costs, so the fee
+      // is estimated with them in, in the order the grant sends them.
+      return [
+        ...(prefund ? [spenderPrefundCall(prefund)] : []),
+        ...checkerDeployCalls(request.data.permissions),
+        permissionCall,
+      ];
     } catch (error) {
       console.warn('[PermissionDialogWrapper] Failed to build permission grant call:', error);
       return [];
