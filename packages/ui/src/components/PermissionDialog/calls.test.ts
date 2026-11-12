@@ -17,6 +17,14 @@ describe('the calls a grant screen shows', () => {
     expect(call.checker).toBe(CHECKER);
   });
 
+  // The grant screen reads an undeployed checker's rule from how the grant will deploy it.
+  it('keeps how the grant deploys the checker', () => {
+    const checkerDeploy = { template: '0x6cA4dcc0D7F56b17ACfc167f3F62650C36Be296A', settings: '0x1234' };
+    const [call] = toDialogCalls([{ target: TARGET, selector: '0xa9059cbb', checker: CHECKER, checkerDeploy }], {});
+
+    expect(call.checkerDeploy).toEqual(checkerDeploy);
+  });
+
   it('names a selector by its resolved signature, and falls back to the raw hex until it resolves', () => {
     const request = [{ target: TARGET, selector: '0xA9059CBB' }];
 

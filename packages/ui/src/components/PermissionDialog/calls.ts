@@ -6,6 +6,7 @@ export interface RequestedCall {
   selector?: string;
   functionSignature?: string;
   checker?: string;
+  checkerDeploy?: { template: string; settings: string };
 }
 
 /**
@@ -24,5 +25,7 @@ export function toDialogCalls(calls: readonly RequestedCall[], signatures: Recor
       call.functionSignature ||
       (call.selector ? (signatures[call.selector.toLowerCase()] ?? call.selector) : 'Unknown Function'),
     checker: call.checker,
+    // How the grant deploys the checker, so its rule can be read before it exists.
+    ...(call.checkerDeploy ? { checkerDeploy: call.checkerDeploy } : {}),
   }));
 }

@@ -46,7 +46,7 @@ vi.mock('../hooks/useGasEstimation', () => ({
 
 type DialogProps = {
   onConfirm?: () => void;
-  calls?: Array<{ checker?: string }>;
+  calls?: Array<{ checker?: string; checkerDeploy?: unknown }>;
   prefund?: { kind: string } | null;
   prefundLoading?: boolean;
 };
@@ -291,6 +291,13 @@ describe('ReactUIHandler estimates the grant with its checker deploy in the batc
     await openGrant({ prefundSpender: true }, PERMISSIONS);
 
     expect(estimatedCalls.map((call) => call.to)).toEqual([TOKEN, FACTORY, expect.any(String)]);
+  });
+
+  // The grant screen reads an undeployed checker's rule from how the grant will deploy it.
+  it('hands the dialog the checkerDeploy, so it can show the rule', async () => {
+    await openGrant(undefined, PERMISSIONS);
+
+    expect(dialogProps.calls?.[0]).toMatchObject({ checkerDeploy: PERMISSIONS.calls[0].checkerDeploy });
   });
 
   it('hands the grant the checkerDeploy it estimated', async () => {

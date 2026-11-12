@@ -32,7 +32,19 @@ vi.mock('../../hooks/useAddressIdentities', () => ({
 
 import { PermissionDialog } from './index';
 
-const render = () =>
+// packages/core/vectors/checker-calls.json, first entry: the address the deployed factory returned.
+const ONLY_LANDLORD = {
+  checker: '0x4f8365A8A4C6FD48e6f95FA3a089C654061DF765',
+  checkerDeploy: {
+    template: '0x6cA4dcc0D7F56b17ACfc167f3F62650C36Be296A',
+    settings:
+      '0xa9059cbb000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000006000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000001a4d',
+  },
+};
+
+const render = (
+  checker: { checker: string; checkerDeploy?: { template: string; settings: string } } = { checker: CHECKER }
+) =>
   renderToStaticMarkup(
     <PermissionDialog
       open
@@ -45,7 +57,7 @@ const render = () =>
           target: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
           selector: '0xa9059cbb',
           functionSignature: 'transfer(address,uint256)',
-          checker: CHECKER,
+          ...checker,
         },
       ]}
       expiryDate="11/19/2026"
@@ -79,6 +91,22 @@ describe('the grant screen and a call checker', () => {
   // hold Confirm.
   it('does not wait on the checker name to enable Confirm', () => {
     const confirm = render().match(/<button[^>]*>[^<]*Grant[^<]*<\/button>/)?.[0] ?? '';
+
+    expect(confirm).not.toBe('');
+    expect(confirm).not.toContain('disabled=""');
+  });
+});
+
+describe('the grant screen and a checker the grant deploys', () => {
+  it('states the checker’s rule in place of its address', () => {
+    const html = render(ONLY_LANDLORD);
+
+    expect(html).toContain('To must be ');
+    expect(html).not.toContain('Checked by');
+  });
+
+  it('does not wait on reading the rule to enable Confirm', () => {
+    const confirm = render(ONLY_LANDLORD).match(/<button[^>]*>[^<]*Grant[^<]*<\/button>/)?.[0] ?? '';
 
     expect(confirm).not.toBe('');
     expect(confirm).not.toContain('disabled=""');
