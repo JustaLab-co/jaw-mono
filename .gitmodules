@@ -4,3 +4,6 @@
 [submodule "contracts/permissions"]
 	path = contracts/permissions
 	url = https://github.com/JustaLab-co/permissions
+[submodule "contracts/call-checkers"]
+	path = contracts/call-checkers
+	url = https://github.com/JustaLab-co/call-checkers
