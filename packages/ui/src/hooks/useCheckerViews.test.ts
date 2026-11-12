@@ -9,15 +9,16 @@ import { concat, type Hex } from 'viem';
 import type { CallPermission, CheckerView } from '../components/PermissionDialog/types';
 
 const getCode = vi.fn();
-const readContract = vi.fn();
 vi.mock('../utils/publicClient', () => ({
   jawRpcUrl: () => 'https://rpc.example',
-  getPublicClient: () => ({ getCode, readContract }),
+  getPublicClient: () => ({ getCode }),
 }));
 const resolveCalldataDescriptor = vi.fn();
+const resolveToken = vi.fn();
 vi.mock('../utils/clearSigning', () => ({
   getDefaultDescriptorSource: () => ({}),
   resolveCalldataDescriptor: (...args: unknown[]) => resolveCalldataDescriptor(...args),
+  createTokenResolver: () => resolveToken,
 }));
 
 const { useCheckerViews } = await import('./useCheckerViews');
@@ -54,15 +55,23 @@ const transferCall = (checker: string, checkerDeploy?: { template: string; setti
 let root: Root | null = null;
 let viewOf: ((call: CallPermission) => CheckerView | undefined) | null = null;
 
-function Probe({ calls }: { calls: CallPermission[] }) {
-  viewOf = useCheckerViews(calls, { chainId: 84532, apiKey: 'test', nativeSymbol: 'ETH' });
+type ProbeProps = {
+  calls: CallPermission[];
+  chainId?: number;
+  tokenMeta?: Record<string, { symbol: string; decimals?: number | null }>;
+};
+
+function Probe({ calls, chainId = 84532, tokenMeta }: ProbeProps) {
+  viewOf = useCheckerViews(calls, { chainId, apiKey: 'test', nativeSymbol: 'ETH', tokenMeta });
   return null;
 }
 
-async function render(calls: CallPermission[]) {
+/** Renders the hook, and returns a rerender for the same root. */
+async function render(calls: CallPermission[], props: Omit<ProbeProps, 'calls'> = {}) {
   const created = createRoot(document.createElement('div'));
   root = created;
-  await act(async () => created.render(createElement(Probe, { calls })));
+  await act(async () => created.render(createElement(Probe, { calls, ...props })));
+  return (next: Omit<ProbeProps, 'calls'>) => act(async () => created.render(createElement(Probe, { calls, ...next })));
 }
 
 /** The view the hook gave `call` on its last render. */
@@ -73,7 +82,7 @@ function view(call: CallPermission) {
 
 beforeEach(() => {
   getCode.mockReset();
-  readContract.mockReset();
+  resolveToken.mockReset().mockResolvedValue(null);
   resolveCalldataDescriptor.mockReset().mockResolvedValue(null);
 });
 afterEach(() => {
@@ -96,9 +105,7 @@ describe('a checker the grant is about to deploy', () => {
 describe('a checker that is already deployed', () => {
   it('reads its code and states its rule, with the cap in the token’s units', async () => {
     getCode.mockResolvedValue(cloneCode(UP_TO_100.template, UP_TO_100.settings));
-    readContract.mockImplementation(async ({ functionName }: { functionName: string }) =>
-      functionName === 'decimals' ? 18 : 'TKN'
-    );
+    resolveToken.mockResolvedValue({ address: TOKEN, decimals: 18, symbol: 'TKN' });
     const call = transferCall(UP_TO_100.checker);
     await render([call]);
 
@@ -142,5 +149,29 @@ describe('the name the rule gives the argument', () => {
     await render([call]);
 
     expect(view(call)).toEqual({ tone: 'rule', parts: ['Recipient must be ', { address: LANDLORD }] });
+  });
+});
+
+describe('what the screen already knows, and what it read on another chain', () => {
+  // The same address on another chain is another contract, so nothing read on one is reused on it.
+  it('reads a checker again when the chain changes', async () => {
+    getCode.mockResolvedValueOnce(cloneCode(UP_TO_100.template, UP_TO_100.settings));
+    const call = transferCall(UP_TO_100.checker);
+    const rerender = await render([call], { chainId: 84532 });
+    expect(view(call)).toMatchObject({ tone: 'rule' });
+
+    getCode.mockReturnValue(new Promise(() => undefined));
+    await rerender({ chainId: 1 });
+
+    expect(view(call)).toBeUndefined();
+  });
+
+  it('states a token cap in the units the host already resolved for the token', async () => {
+    getCode.mockResolvedValue(cloneCode(UP_TO_100.template, UP_TO_100.settings));
+    resolveToken.mockResolvedValue({ address: TOKEN, decimals: 6, symbol: 'FAKE' });
+    const call = transferCall(UP_TO_100.checker);
+    await render([call], { tokenMeta: { [TOKEN]: { symbol: 'USDC', decimals: 18 } } });
+
+    expect(view(call)).toEqual({ tone: 'rule', parts: ['Amount at most 100 USDC per call'] });
   });
 });

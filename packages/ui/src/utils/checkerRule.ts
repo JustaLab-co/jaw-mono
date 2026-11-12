@@ -22,7 +22,7 @@ export type CheckerReading = { status: 'ours'; rule: CheckerRule } | { status: '
 
 /** What the screen knows about a checker: how the grant would deploy it, or the code already there. */
 export interface CheckerSource {
-  checkerDeploy?: { template: string; settings: string };
+  checkerDeploy?: { readonly template: string; readonly settings: string };
   code?: Hex;
 }
 

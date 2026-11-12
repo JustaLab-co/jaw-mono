@@ -91,7 +91,7 @@ export const PermissionDialog = ({
   // Each checker's rule in words, or a custom check. Read from the request, or from the chain for a
   // checker that is already deployed. Never part of what Confirm waits on: the checker address is
   // what gets signed, and it is always on screen.
-  const checkerRuleOf = useCheckerViews(calls, { chainId, apiKey, nativeSymbol });
+  const checkerRuleOf = useCheckerViews(calls, { chainId, apiKey, nativeSymbol, tokenMeta });
   // The confirm button waits until every name is known, so the user approves what they read. Not
   // for a checker's name: its address is what gets signed and is always shown, and a stalled lookup
   // must not hold Confirm.

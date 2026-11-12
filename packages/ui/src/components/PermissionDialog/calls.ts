@@ -1,4 +1,11 @@
-import type { CallPermission } from './types';
+import { zeroAddress } from 'viem';
+import type { CallPermission, CheckerDeployRequest } from './types';
+
+/** A call the permission manager also runs past a checker contract before executing it. */
+export function hasChecker(call: CallPermission): call is CallPermission & { checker: string } {
+  // Typed as a string, but it arrives in a dapp's JSON, so it is checked before it is read as one.
+  return typeof call.checker === 'string' && call.checker.toLowerCase() !== zeroAddress;
+}
 
 /** A call as a grant request carries it: a selector, a signature or both, and an optional checker. */
 export interface RequestedCall {
@@ -6,7 +13,7 @@ export interface RequestedCall {
   selector?: string;
   functionSignature?: string;
   checker?: string;
-  checkerDeploy?: { template: string; settings: string };
+  checkerDeploy?: CheckerDeployRequest;
 }
 
 /**

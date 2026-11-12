@@ -1,7 +1,6 @@
 'use client';
 
 import { Info, ShieldCheck, TriangleAlert } from 'lucide-react';
-import { zeroAddress } from 'viem';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '../ui/accordion';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip';
 import { AccountAvatar } from '../AccountAvatar';
@@ -15,6 +14,7 @@ import { getDisplayAddress } from '../../utils';
 import type { AddressIdentity } from '../../hooks/useAddressIdentities';
 import { isLongSpendAmount } from '../../utils/displayFormat';
 import type { CallPermission, CheckerView, SpendPermission, SpenderPrefundDisplay } from './types';
+import { hasChecker } from './calls';
 
 export { isWildcard };
 
@@ -208,41 +208,10 @@ export interface CallGroup {
   calls: CallPermission[];
 }
 
-/** A call the permission manager also runs past a checker contract before executing it. */
-export function hasChecker(call: CallPermission): call is CallPermission & { checker: string } {
-  // Typed as a string, but it arrives in a dapp's JSON, so it is checked before it is read as one.
-  return typeof call.checker === 'string' && call.checker.toLowerCase() !== zeroAddress;
-}
+export { hasChecker };
 
 const CHECKER_INFO =
   "Before each call to this function, this contract checks it and can block it. It can't allow anything extra.";
-
-/**
- * The checker that has to approve each call to a function: a name it is known by when there is one,
- * and its address. The SDK can't say what a given checker enforces, so it never shows a description
- * the checker gives of itself.
- */
-function CheckerLine({
-  checker,
-  name,
-  truncateAddress,
-}: {
-  checker: string;
-  name?: string;
-  truncateAddress: (address: string) => string;
-}) {
-  return (
-    <span className="text-muted-foreground text-body-xs flex items-center gap-1.5 pl-3">
-      <ShieldCheck className="size-3 flex-none" strokeWidth={2.4} />
-      <span className="min-w-0">
-        Checked by {name && <span className="text-foreground font-medium">{name} </span>}
-        <span className="font-mono">{truncateAddress(checker)}</span>
-      </span>
-      <InfoTip text={CHECKER_INFO} />
-      <CopyButton value={checker} size={11} label="Copy checker address" />
-    </span>
-  );
-}
 
 const CUSTOM_CHECK_INFO =
   "JAW can't read what this contract allows. It runs before each call to this function and can block it.";
@@ -266,57 +235,75 @@ function InfoTip({ text }: { text: string }) {
 }
 
 /**
- * The checker on a call, once the screen has read it. Our rule is stated in words where the address
- * would be; a rule of ours that can never pass and a checker it can't read are both shown in amber,
- * the way "Any function" is. None of them blocks the grant, and the address stays one copy away.
+ * The checker that has to approve each call to a function. Until the screen has read it, its
+ * address, and a name it is known by when there is one: the SDK never shows a description the
+ * checker gives of itself. Once read, our rule in words where the address was, or, in amber like
+ * "Any function", a rule of ours that can never pass or a check the screen can't state. None of
+ * them blocks the grant, and the address stays one copy away.
  */
-function CheckerRuleLine({
+function CheckerLine({
   checker,
   view,
+  name,
   truncateAddress,
 }: {
   checker: string;
-  view: CheckerView;
+  view?: CheckerView;
+  name?: string;
   truncateAddress: (address: string) => string;
 }) {
-  if (view.tone === 'rule') {
-    const checkedBy = `${CHECKER_INFO} Checker ${checker}.`;
-    return (
-      <span className="text-muted-foreground text-body-xs flex items-center gap-1.5 pl-3">
-        <ShieldCheck className="size-3 flex-none" strokeWidth={2.4} />
-        <span className="min-w-0">
-          {view.parts.map((part, i) =>
-            typeof part === 'string' ? (
-              part
-            ) : 'address' in part ? (
-              <span key={i} className="text-foreground font-mono" title={part.address}>
-                {truncateAddress(part.address)}
-              </span>
-            ) : (
-              <span key={i} className="text-foreground font-medium">
-                this wallet
-              </span>
-            )
-          )}
+  const warn = view?.tone === 'blocks' || view?.tone === 'custom';
+  const info = !view
+    ? CHECKER_INFO
+    : view.tone === 'rule'
+      ? `${CHECKER_INFO} Checker ${checker}.`
+      : view.tone === 'custom'
+        ? CUSTOM_CHECK_INFO
+        : undefined;
+
+  let text: React.ReactNode;
+  if (!view) {
+    text = (
+      <>
+        Checked by {name && <span className="text-foreground font-medium">{name} </span>}
+        <span className="font-mono">{truncateAddress(checker)}</span>
+      </>
+    );
+  } else if (view.tone === 'rule') {
+    text = view.parts.map((part, i) =>
+      typeof part === 'string' ? (
+        part
+      ) : 'address' in part ? (
+        <span key={i} className="text-foreground font-mono" title={part.address}>
+          {truncateAddress(part.address)}
         </span>
-        <InfoTip text={checkedBy} />
-        <CopyButton value={checker} size={11} label="Copy checker address" />
-      </span>
+      ) : (
+        <span key={i} className="text-foreground font-medium">
+          this wallet
+        </span>
+      )
+    );
+  } else if (view.tone === 'blocks') {
+    text = 'Blocks every call to this function';
+  } else {
+    text = (
+      <>
+        Custom check <span className="font-mono">{truncateAddress(checker)}</span>
+      </>
     );
   }
+
   return (
-    <span className="text-warning text-body-xs flex items-center gap-1.5 pl-3 font-medium">
-      <TriangleAlert className="size-3 flex-none" strokeWidth={2.4} />
-      <span className="min-w-0">
-        {view.tone === 'blocks' ? (
-          'Blocks every call to this function'
-        ) : (
-          <>
-            Custom check <span className="font-mono">{truncateAddress(checker)}</span>
-          </>
-        )}
-      </span>
-      {view.tone === 'custom' && <InfoTip text={CUSTOM_CHECK_INFO} />}
+    <span
+      className={`${warn ? 'text-warning font-medium' : 'text-muted-foreground'} text-body-xs flex items-center gap-1.5 pl-3`}
+    >
+      {warn ? (
+        <TriangleAlert className="size-3 flex-none" strokeWidth={2.4} />
+      ) : (
+        <ShieldCheck className="size-3 flex-none" strokeWidth={2.4} />
+      )}
+      <span className="min-w-0">{text}</span>
+      {info && <InfoTip text={info} />}
       <CopyButton value={checker} size={11} label="Copy checker address" />
     </span>
   );
@@ -334,7 +321,6 @@ export function CallRow({
   checkerNameOf?: (address: string) => string | undefined;
   checkerRuleOf?: (call: CallPermission) => CheckerView | undefined;
 }) {
-  const checkerView = hasChecker(call) ? checkerRuleOf?.(call) : undefined;
   return (
     <li className="flex flex-col gap-1">
       {isWildcard(call.selector) ? (
@@ -350,12 +336,14 @@ export function CallRow({
           <span className="min-w-0 break-all">{call.functionSignature || call.selector}</span>
         </span>
       )}
-      {hasChecker(call) &&
-        (checkerView ? (
-          <CheckerRuleLine checker={call.checker} view={checkerView} truncateAddress={truncateAddress} />
-        ) : (
-          <CheckerLine checker={call.checker} name={checkerNameOf?.(call.checker)} truncateAddress={truncateAddress} />
-        ))}
+      {hasChecker(call) && (
+        <CheckerLine
+          checker={call.checker}
+          view={checkerRuleOf?.(call)}
+          name={checkerNameOf?.(call.checker)}
+          truncateAddress={truncateAddress}
+        />
+      )}
     </li>
   );
 }
