@@ -133,6 +133,12 @@ export interface AppMetadata {
 }
 
 // @public
+export const ARG_AT_MOST_TEMPLATE_ADDRESS = "0x3AB44b0ad082A2643Ab807c99e738D3e4C7BA60c";
+
+// @public
+export const ARG_IN_TEMPLATE_ADDRESS = "0x6cA4dcc0D7F56b17ACfc167f3F62650C36Be296A";
+
+// @public
 export type Asset = {
     address: string | null;
     balance: string;
@@ -217,6 +223,7 @@ export type CallPermissionDetail = {
     selector?: Hex;
     functionSignature?: string;
     checker?: Address_2;
+    checkerDeploy?: CheckerDeploy;
 };
 
 // @public
@@ -289,6 +296,21 @@ export interface ChainCapabilities {
 export interface ChainMetadataCapability {
     icon?: string;
 }
+
+// @public
+export const CHECKER_FACTORY_ADDRESS = "0x9c35a9feb1c3e4de809657CF63d47df8FEEaF43A";
+
+// @public
+export type CheckerDeploy = {
+    template: Address_2;
+    settings: Hex;
+};
+
+// @public
+export function checkerDeployCalls(permissions: Pick<PermissionsDetail, 'calls'>): Array<{
+    to: Address_2;
+    data: Hex;
+}>;
 
 // @public
 export function checkErrorForInvalidRequestArgs(args: unknown): asserts args is RequestArguments;
@@ -1080,6 +1102,9 @@ export interface PersonalSignRequestData {
     type: '0x45';
 }
 
+// @public
+export function predictCheckerAddress(template: Address_2, settings: Hex): Address_2;
+
 // @public (undocumented)
 export interface ProviderConnectInfo {
     // (undocumented)
@@ -1634,6 +1659,9 @@ export interface UserOpGasFields {
     // (undocumented)
     verificationGasLimit: bigint;
 }
+
+// @public
+export const VALUE_AT_MOST_TEMPLATE_ADDRESS = "0x54f1Ca09e52e0f86Ea9CA4c91458cd1E96CFdA0D";
 
 // @public (undocumented)
 export function viemHttpErrorToProviderError(error: HttpRequestError): EthereumRpcError<any> | null;

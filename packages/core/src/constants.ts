@@ -31,5 +31,18 @@ export const CONTRACT_VERSION = '1';
 
 export const PERMISSIONS_MANAGER_ADDRESS = '0xf1b40E3D5701C04d86F7828f0EB367B9C90901D8';
 
+/**
+ * Reusable call checkers (JustaLab-co/call-checkers). Same addresses on every chain
+ * they are deployed to. A checker is a clone of one of the three templates, made by
+ * the factory from its settings; `predictCheckerAddress` says where.
+ */
+export const CHECKER_FACTORY_ADDRESS = '0x9c35a9feb1c3e4de809657CF63d47df8FEEaF43A';
+/** Checker template: the argument at a slot is one of a list. Settings `abi.encode(bytes4 selector, uint256 slot, bytes32[] allowed)`. */
+export const ARG_IN_TEMPLATE_ADDRESS = '0x6cA4dcc0D7F56b17ACfc167f3F62650C36Be296A';
+/** Checker template: the argument at a slot is at most a number. Settings `abi.encode(bytes4 selector, uint256 slot, uint256 max)`. */
+export const ARG_AT_MOST_TEMPLATE_ADDRESS = '0x3AB44b0ad082A2643Ab807c99e738D3e4C7BA60c';
+/** Checker template: the native value sent is at most a number. Settings `abi.encode(bytes4 selector, uint256 max)`. */
+export const VALUE_AT_MOST_TEMPLATE_ADDRESS = '0x54f1Ca09e52e0f86Ea9CA4c91458cd1E96CFdA0D';
+
 export const EIP7702_CODE_PREFIX = '0xef0100';
 export const ERC20_PAYMASTER_ADDRESS = '0xcCE758d01775d6c9fc822A4e33B70f019DBDc963';

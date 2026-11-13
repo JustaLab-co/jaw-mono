@@ -7,6 +7,7 @@
  * Only the network is mocked: the bundler send, the receipt read and the relay
  * call. The encoder and the event decode are real.
  */
+import { readFileSync } from 'node:fs';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
     decodeFunctionData,
@@ -35,9 +36,11 @@ import { sendTransaction } from '../account/smartAccount.js';
 import { getTransactionReceipt } from 'viem/actions';
 import { restCall } from '../api/index.js';
 import { PERMISSIONS_MANAGER_ADDRESS } from '../constants.js';
+import { predictCheckerAddress } from './checkerDeploy.js';
 import type { Chain } from '../store/index.js';
 import {
     buildGrantPermissionCall,
+    checkGrantPermissionsParams,
     grantPermissions,
     SPEND_PERMISSIONS_MANAGER_ABI,
     TOKEN_FUNCTIONS,
@@ -389,4 +392,108 @@ describe('a call the grant screen could misname', () => {
             }
         }
     );
+});
+
+describe('a call that brings the checker it deploys', () => {
+    // vectors/checker-calls.json, first entry: the deployed factory places this ArgIn checker at `checker`.
+    const [VECTOR]: Array<{ template: Address; settings: Hex; checker: Address }> = JSON.parse(
+        readFileSync(new URL('../../vectors/checker-calls.json', import.meta.url), 'utf8')
+    );
+    const TEMPLATE = VECTOR.template;
+    const SETTINGS = VECTOR.settings;
+    const CHECKER_TO_DEPLOY = VECTOR.checker;
+
+    function callWith(checker: unknown, checkerDeploy: unknown) {
+        return { target: TARGET, functionSignature: 'transfer(address,uint256)', checker, checkerDeploy };
+    }
+
+    const refusals: Array<[string, unknown, unknown, string]> = [
+        ['deploys a different address', CHECKER, { template: TEMPLATE, settings: SETTINGS }, 'checkerDeploy deploys'],
+        ['names no checker', undefined, { template: TEMPLATE, settings: SETTINGS }, 'checkerDeploy deploys'],
+        ['is not an object', CHECKER_TO_DEPLOY, '0x1234', 'checkerDeploy must be an object'],
+        [
+            'has a malformed template',
+            CHECKER_TO_DEPLOY,
+            { template: '0x1234', settings: SETTINGS },
+            'checkerDeploy.template',
+        ],
+        [
+            'has settings that are not hex bytes',
+            CHECKER_TO_DEPLOY,
+            { template: TEMPLATE, settings: '0x123' },
+            'checkerDeploy.settings',
+        ],
+        [
+            'has settings longer than a checker can hold',
+            CHECKER_TO_DEPLOY,
+            { template: TEMPLATE, settings: `0x${'00'.repeat(24_532)}` },
+            'more than a checker can hold',
+        ],
+    ];
+
+    it.each(refusals)('is refused before any popup when it %s', (_, checker, checkerDeploy, message) => {
+        expect(() =>
+            checkGrantPermissionsParams([{ permissions: { calls: [callWith(checker, checkerDeploy)] } }])
+        ).toThrow(expect.objectContaining({ code: -32602, message: expect.stringContaining(message) }));
+    });
+
+    it.each(refusals)(
+        'is refused when the screen builds its estimate and it %s',
+        (_, checker, checkerDeploy, message) => {
+            const build = () =>
+                buildGrantPermissionCall(ACCOUNT, SPENDER, 2000000000, {
+                    calls: [callWith(checker, checkerDeploy) as NonNullable<PermissionsDetail['calls']>[number]],
+                });
+            expect(build).toThrow(expect.objectContaining({ code: -32602, message: expect.stringContaining(message) }));
+        }
+    );
+
+    it('passes when the template and settings produce its checker, in any letter case', () => {
+        expect(() =>
+            checkGrantPermissionsParams([
+                {
+                    permissions: {
+                        calls: [
+                            callWith(CHECKER_TO_DEPLOY.toLowerCase(), {
+                                template: TEMPLATE.toLowerCase(),
+                                settings: SETTINGS,
+                            }),
+                        ],
+                    },
+                },
+            ])
+        ).not.toThrow();
+    });
+
+    // The factory refuses anything longer, so this is the last length a checker can be deployed with.
+    it('passes settings of exactly 24,531 bytes, the most a checker can hold', () => {
+        const longest: Hex = `0x${'00'.repeat(24_531)}`;
+        expect(() =>
+            checkGrantPermissionsParams([
+                {
+                    permissions: {
+                        calls: [
+                            callWith(predictCheckerAddress(TEMPLATE, longest), {
+                                template: TEMPLATE,
+                                settings: longest,
+                            }),
+                        ],
+                    },
+                },
+            ])
+        ).not.toThrow();
+    });
+
+    it('grants the checker address and keeps the deploy out of the relay and the response', async () => {
+        const response = await grant([
+            callWith(CHECKER_TO_DEPLOY, { template: TEMPLATE, settings: SETTINGS }) as NonNullable<
+                PermissionsDetail['calls']
+            >[number],
+        ]);
+
+        expect(approvedPermission().calls[0].checker).toBe(CHECKER_TO_DEPLOY);
+        const relayBody = vi.mocked(restCall).mock.calls[0][2] as { calls: Array<Record<string, unknown>> };
+        expect(relayBody.calls[0]).toEqual({ target: TARGET, selector: '0xa9059cbb', checker: CHECKER_TO_DEPLOY });
+        expect(response.calls[0]).not.toHaveProperty('checkerDeploy');
+    });
 });

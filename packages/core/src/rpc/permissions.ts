@@ -20,6 +20,7 @@ import { restCall } from '../api/index.js';
 import { buildHandleJawRpcUrl, fetchRPCRequest } from '../utils/index.js';
 import type { RequestArguments } from '../provider/index.js';
 import { describeValue, isRecord, optionalHexAddress, requireHexBytes32, requireParamsObject } from './paramUtils.js';
+import { optionalCallCheckerDeploy, type CheckerDeploy } from './checkerDeploy.js';
 
 /**
  * ERC-7528 native token address convention
@@ -131,6 +132,13 @@ export type CallPermissionDetail = {
      * which means no checker. Always present on a grant response.
      */
     checker?: Address;
+    /**
+     * The template and settings `checker` was made from, for a reusable checker that
+     * may not be deployed yet. The grant deploys it through the checker factory in the
+     * same batch, ahead of the approval, so the user still signs once. Refused when they
+     * don't produce `checker`. Not part of the permission or the response.
+     */
+    checkerDeploy?: CheckerDeploy;
 };
 
 /**
@@ -449,8 +457,9 @@ function resolveCallSelector(call: unknown, index: number): Hex {
 }
 
 /**
- * Refuses a grant whose call checker is not a 20-byte address, or whose call the grant screen
- * could misname (see resolveCallSelector), before any popup or dialog opens. A checker is part of
+ * Refuses a grant whose call checker is not a 20-byte address, whose checkerDeploy would not deploy
+ * that checker, or whose call the grant screen could misname (see resolveCallSelector), before any
+ * popup or dialog opens. A checker is part of
  * the permission the user signs, and a malformed one used to reach the grant screen, which drew
  * it, estimated a fee without it and failed only on Confirm.
  */
@@ -463,6 +472,7 @@ export function checkGrantPermissionsParams(params: unknown): void {
             GRANT_METHOD,
             `permissions.calls[${index}].checker`
         );
+        optionalCallCheckerDeploy(call, index);
         resolveCallSelector(call, index);
     });
 }
@@ -740,6 +750,8 @@ function apiPermissionsToPermission(
         // The checker is part of the permission hash, so a malformed one would
         // grant a permission no caller can rebuild.
         const checker = optionalHexAddress(call.checker, GRANT_METHOD, `permissions.calls[${index}].checker`);
+        // Checked here too, so the screen's estimate refuses a deploy that would land somewhere else.
+        optionalCallCheckerDeploy(call, index);
 
         return {
             target: call.target,

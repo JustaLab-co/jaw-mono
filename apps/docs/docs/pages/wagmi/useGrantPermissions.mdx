@@ -131,6 +131,8 @@ interface CallPermissionDetail {
   functionSignature?: string;
   /** Contract that must approve each matching call. Always present in the response. */
   checker?: Address;
+  /** Template and settings that deploy `checker` in the grant, for a checker not deployed yet. */
+  checkerDeploy?: { template: Address; settings: Hex };
 }
 ```
 
@@ -140,6 +142,7 @@ interface CallPermissionDetail {
 | `selector`          | `Hex`     | No\*     | 4-byte function selector (e.g., `'0xa9059cbb'`)                |
 | `functionSignature` | `string`  | No\*     | Human-readable signature (e.g., `'transfer(address,uint256)'`) |
 | `checker`           | `Address` | No       | Contract that must approve each matching call (`canExecute`)   |
+| `checkerDeploy`     | `object`  | No       | `{ template, settings }` that deploy `checker` in the grant    |
 
 \*Either `selector` or `functionSignature` must be provided.
 

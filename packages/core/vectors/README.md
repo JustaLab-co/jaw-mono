@@ -308,3 +308,40 @@ all. The fourth vector pins index 300, which the old declaration threw on.
 Do not regenerate one because a test went red. A red vector means the bytes we
 send no longer match the bytes the contract decodes, which is either a bug in
 the encoder or a change in the contract. Say which, in the PR description.
+
+## Call checker addresses
+
+`checker-calls.json` pins `predictCheckerAddress` and the `factory.deploy` call the
+grant batch adds for a checker that isn't deployed yet. The `checker` in each
+entry was returned by the deployed `CheckerFactory` itself on Base Sepolia, so it
+is the factory's statement of where that clone lives, not ours. The
+`deployCalldata` comes from `cast calldata` with the signature copied from
+`src/CheckerFactory.sol` in JustaLab-co/call-checkers, checked out at
+`contracts/call-checkers`:
+
+```solidity
+function deploy(address template, bytes calldata settings) external returns (address checker);
+function predict(address template, bytes calldata settings) external view returns (address);
+```
+
+```bash
+FACTORY=0x9c35a9feb1c3e4de809657CF63d47df8FEEaF43A
+ARG_IN=0x6cA4dcc0D7F56b17ACfc167f3F62650C36Be296A
+ARG_AT_MOST=0x3AB44b0ad082A2643Ab807c99e738D3e4C7BA60c
+VALUE_AT_MOST=0x54f1Ca09e52e0f86Ea9CA4c91458cd1E96CFdA0D
+
+# Settings, one per entry, in file order
+S1=$(cast abi-encode "f(bytes4,uint256,bytes32[])" 0xa9059cbb 0 "[0x0000000000000000000000000000000000000000000000000000000000001a4d]")
+S2=$(cast abi-encode "f(bytes4,uint256,bytes32[])" 0x04e45aaf 3 "[0x000000000000000000000000acc0acc0acc0acc0acc0acc0acc0acc0acc0acc0]")
+S3=$(cast abi-encode "f(bytes4,uint256,uint256)" 0xa9059cbb 1 100000000000000000000)
+S4=$(cast abi-encode "f(bytes4,uint256)" 0xe0e0e0e0 100000000000000000)
+
+# checker
+cast call $FACTORY 'predict(address,bytes)(address)' $ARG_IN $S1 --rpc-url https://sepolia.base.org
+# deployCalldata
+cast calldata 'deploy(address,bytes)' $ARG_IN $S1
+```
+
+The other entries swap in `$S2` with `$ARG_IN`, `$S3` with `$ARG_AT_MOST` and `$S4`
+with `$VALUE_AT_MOST`. The factory and template addresses are the same on every
+chain, so any chain where they are deployed gives the same answers.

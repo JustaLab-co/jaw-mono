@@ -2,9 +2,21 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createPublicClient, decodeFunctionData, encodeFunctionData, erc20Abi } from 'viem';
 import { Account } from './Account.js';
 import { spenderPrefundCall } from './spenderPrefund.js';
-import { ERC20_PAYMASTER_ADDRESS, jawPaymasterUrl } from '../constants.js';
+import { readFileSync } from 'node:fs';
+import { CHECKER_FACTORY_ADDRESS, ERC20_PAYMASTER_ADDRESS, jawPaymasterUrl } from '../constants.js';
 
 // Mock dependencies
+/** From vectors/checker-calls.json: addresses from the deployed factory, calldata from `cast calldata`. */
+const CHECKER_VECTORS: Array<{
+    template: `0x${string}`;
+    settings: `0x${string}`;
+    checker: `0x${string}`;
+    deployCalldata: `0x${string}`;
+}> = JSON.parse(readFileSync(new URL('../../vectors/checker-calls.json', import.meta.url), 'utf8'));
+
+/** `approve(Permission)` on the permission manager, from `cast sig` over the Solidity signature. */
+const APPROVE_PERMISSION_SELECTOR = '0x4afa25af';
+
 vi.mock('../passkey-manager/index.js', async (importOriginal) => {
     const original = await importOriginal<typeof import('../passkey-manager/index.js')>();
     return {
@@ -1506,6 +1518,35 @@ describe('Account — ERC-20 paymaster approval', () => {
         expect(prepended).toEqual([expectedApproval(), spenderPrefundCall(prefund)]);
     });
 
+    // The deploy is part of what the grant costs, so the approval is sized with it in,
+    // the same way the prefund transfer is.
+    it('sizes the approval over the grant with its checker deploy in it', async () => {
+        const { grantPermissions } = await import('../rpc/permissions.js');
+        vi.mocked(grantPermissions).mockResolvedValue({ permissionId: '0xperm' } as never);
+        const [vector] = CHECKER_VECTORS;
+        const account = await makeAccount();
+
+        await account.grantPermissions(9999999999, '0x2222222222222222222222222222222222222222', {
+            calls: [
+                {
+                    target: '0x3333333333333333333333333333333333333333',
+                    functionSignature: 'transfer(address,uint256)',
+                    checker: vector.checker,
+                    checkerDeploy: { template: vector.template, settings: vector.settings },
+                },
+            ],
+        });
+
+        const estimated = prepareUserOperation.mock.calls[0][0].calls as Array<{ to: string; data?: string }>;
+        const deployAt = estimated.findIndex((call) => call.data === vector.deployCalldata);
+        expect(deployAt).toBeGreaterThanOrEqual(0);
+        expect(estimated[deployAt].to).toBe(CHECKER_FACTORY_ADDRESS);
+        // The approve that names the checker comes after the deploy that creates it.
+        expect(estimated.findIndex((call) => call.data?.startsWith(APPROVE_PERMISSION_SELECTOR))).toBeGreaterThan(
+            deployAt
+        );
+    });
+
     it('sizes a permission send over the permission-manager call, not the raw calls', async () => {
         const account = await makeAccount();
 
@@ -1883,6 +1924,105 @@ describe('Account — prefunding the spender in the grant', () => {
         const elsewhere = { ...PREFUND, spender: '0x3333333333333333333333333333333333333333' as `0x${string}` };
 
         await expect(grant(await makeAccount(), { prefund: elsewhere })).rejects.toThrow(/not to the spender/);
+        expect(vi.mocked(grantPermissions)).not.toHaveBeenCalled();
+    });
+});
+
+describe('Account — deploying a call checker in the grant', () => {
+    // Not the JAW ERC-20 paymaster, so no approval is sized and what is under test
+    // is the call array the grant sends.
+    const PAYMASTER_URL = 'https://api.pimlico.io/v2/1/rpc?apikey=x';
+    const SPENDER = '0x2222222222222222222222222222222222222222' as `0x${string}`;
+    const TOKEN = '0x036CbD53842c5426634e7929541eC2318f3dCF7e' as `0x${string}`;
+    const PREFUND = { token: TOKEN, spender: SPENDER, amount: 6_000n };
+    const [ARG_IN, , ARG_AT_MOST] = CHECKER_VECTORS;
+
+    function call(vector: (typeof CHECKER_VECTORS)[number], withDeploy = true) {
+        return {
+            target: TOKEN,
+            functionSignature: 'transfer(address,uint256)',
+            checker: vector.checker,
+            ...(withDeploy ? { checkerDeploy: { template: vector.template, settings: vector.settings } } : {}),
+        };
+    }
+
+    async function makeAccount() {
+        const { createSmartAccount } = await import('./smartAccount.js');
+        const { grantPermissions } = await import('../rpc/permissions.js');
+        const { fetchTokenQuotes } = await import('./erc20Paymaster.js');
+
+        vi.mocked(createSmartAccount).mockResolvedValue({
+            address: '0x1234567890123456789012345678901234567890',
+            getAddress: vi.fn().mockResolvedValue('0x1234567890123456789012345678901234567890'),
+            signMessage: vi.fn(),
+            signTypedData: vi.fn(),
+        } as never);
+        // Enough for the prefund, which is checked rather than priced at the grant.
+        vi.mocked(createPublicClient).mockReturnValue({
+            readContract: vi.fn(async ({ args }: { args?: unknown[] }) =>
+                (args?.[0] as string)?.toLowerCase() === SPENDER.toLowerCase() ? 0n : 5_000_000n
+            ),
+            getGasPrice: vi.fn().mockResolvedValue(1_000_000n),
+        } as never);
+        vi.mocked(fetchTokenQuotes).mockResolvedValue([{ tokenAddress: TOKEN, exchangeRate: 3_000_000_000n }] as never);
+        vi.mocked(grantPermissions).mockResolvedValue({ permissionId: '0xperm' } as never);
+
+        return await Account.fromLocalAccount(
+            { chainId: 1, apiKey: 'test', paymasterUrl: PAYMASTER_URL } as never,
+            { address: '0xabcdef1234567890abcdef1234567890abcdef12', type: 'local', sign: vi.fn() } as never
+        );
+    }
+
+    async function prepended(calls: unknown[], options?: Parameters<Account['grantPermissions']>[6]) {
+        const { grantPermissions } = await import('../rpc/permissions.js');
+        await (
+            await makeAccount()
+        ).grantPermissions(
+            9999999999,
+            SPENDER,
+            { calls, spends: [{ token: TOKEN, allowance: '10000000', unit: 'day' }] } as never,
+            undefined,
+            undefined,
+            undefined,
+            options
+        );
+        const sent = vi.mocked(grantPermissions).mock.calls.at(-1)?.[8] ?? [];
+        return Array.isArray(sent) ? sent : [sent];
+    }
+
+    beforeEach(() => {
+        vi.clearAllMocks();
+    });
+
+    it('adds the factory deploy ahead of the approval, the way it adds the paymaster approval', async () => {
+        expect(await prepended([call(ARG_IN)])).toEqual([{ to: CHECKER_FACTORY_ADDRESS, data: ARG_IN.deployCalldata }]);
+    });
+
+    it('deploys a checker once, however many calls name it', async () => {
+        const sent = await prepended([call(ARG_IN), call(ARG_IN), call(ARG_AT_MOST)]);
+
+        expect(sent).toEqual([
+            { to: CHECKER_FACTORY_ADDRESS, data: ARG_IN.deployCalldata },
+            { to: CHECKER_FACTORY_ADDRESS, data: ARG_AT_MOST.deployCalldata },
+        ]);
+    });
+
+    it('adds nothing for a checker that comes without a checkerDeploy', async () => {
+        expect(await prepended([call(ARG_IN, false)])).toEqual([]);
+    });
+
+    it('puts the deploys after the prefund transfer, right before the approval', async () => {
+        expect(await prepended([call(ARG_IN)], { prefund: PREFUND })).toEqual([
+            spenderPrefundCall(PREFUND),
+            { to: CHECKER_FACTORY_ADDRESS, data: ARG_IN.deployCalldata },
+        ]);
+    });
+
+    it('refuses a deploy that would create a different checker, before anything is sent', async () => {
+        const { grantPermissions } = await import('../rpc/permissions.js');
+        const mismatched = { ...call(ARG_IN), checker: ARG_AT_MOST.checker };
+
+        await expect(prepended([mismatched])).rejects.toMatchObject({ code: -32602 });
         expect(vi.mocked(grantPermissions)).not.toHaveBeenCalled();
     });
 });
