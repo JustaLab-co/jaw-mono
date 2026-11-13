@@ -1,3 +1,13 @@
+## 1.13.3 (2026-11-13)
+
+### 🩹 Fixes
+
+- **ui:** stop flagging a signature's start date as past ([#650](https://github.com/JustaLab-co/jaw-mono/pull/650))
+
+### ❤️ Thank You
+
+- Ghadi @Ghadi8
+
 ## 1.13.2 (2026-11-12)
 
 ### 🧱 Updated Dependencies
