@@ -125,17 +125,27 @@ export function isUnixTimestamp(n: bigint): boolean {
 
 export type DateTone = 'expired' | 'far' | 'normal';
 
+/** A deadline bounds when a signature can be used; a start is when it begins to be valid. */
+export type DateKind = 'deadline' | 'start';
+
+/** True when a field, by name or dotted path, is when a signature starts being valid (`validAfter`, `notBefore`, …). */
+export function isStartField(name: string): boolean {
+  const last = name.split('.').pop() ?? name;
+  return /^(validafter|validfrom|notbefore|starttime)$/.test(last.toLowerCase().replace(/_/g, ''));
+}
+
 // A deadline more than ~1 year out is "far" — a soft warning for unusually long-lived
 // approvals/permits (a max-uint sentinel is handled separately as "No expiry").
 const ONE_YEAR_SECONDS = 31_536_000n;
 
 /**
- * Classify a unix-seconds deadline relative to now:
- *  - `expired` — already in the past (a signature with this deadline is unexecutable → warn)
+ * Classify a unix-seconds date relative to now:
+ *  - `expired` — a deadline already in the past (a signature with this deadline is unexecutable → warn).
+ *                A start in the past is `normal`: the signature is already valid.
  *  - `far`     — more than a year out (soft warn)
  *  - `normal`  — within the next year
  */
-export function dateTone(raw: string | bigint): DateTone {
+export function dateTone(raw: string | bigint, kind: DateKind = 'deadline'): DateTone {
   let n: bigint;
   try {
     n = typeof raw === 'bigint' ? raw : BigInt(raw);
@@ -143,7 +153,7 @@ export function dateTone(raw: string | bigint): DateTone {
     return 'normal';
   }
   const now = BigInt(Math.floor(Date.now() / 1000));
-  if (n < now) return 'expired';
+  if (n < now) return kind === 'start' ? 'normal' : 'expired';
   if (n > now + ONE_YEAR_SECONDS) return 'far';
   return 'normal';
 }

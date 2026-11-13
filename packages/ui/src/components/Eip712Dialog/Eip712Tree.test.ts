@@ -7,6 +7,36 @@ import { formatValue } from './Eip712Tree';
 
 const MAX_U256 = (2n ** 256n - 1n).toString();
 
+describe('formatValue — a start date is not a warning', () => {
+  const twoDaysAgo = String(Math.floor(Date.now() / 1000) - 2 * 24 * 60 * 60);
+
+  it('shows a start in the past as a plain date', () => {
+    for (const name of ['validAfter', 'notBefore']) {
+      const leaf = formatValue('uint256', twoDaysAgo, name);
+      expect(leaf.copyValue, name).toBe(twoDaysAgo);
+      expect(leaf.tone, name).toBeUndefined();
+      expect(leaf.note, name).toBeUndefined();
+    }
+  });
+
+  it('still warns on a deadline in the past', () => {
+    expect(formatValue('uint256', twoDaysAgo, 'validBefore')).toMatchObject({
+      tone: 'expired',
+      note: 'This date is in the past.',
+    });
+  });
+
+  it('shows a start of 0 as "Immediately", not the number 0', () => {
+    const leaf = formatValue('uint256', '0', 'validAfter');
+    expect(leaf.text).toBe('Immediately');
+    expect(leaf.tone).toBeUndefined();
+  });
+
+  it('keeps a deadline of 0 as it was: never "Immediately"', () => {
+    expect(formatValue('uint256', '0', 'validBefore').text).toBe('0');
+  });
+});
+
 describe('formatValue — amount name heuristic', () => {
   it('labels max-uint as "Unlimited" for shares/qty fields, not just amount/value', () => {
     expect(formatValue('uint256', MAX_U256, 'shares')).toMatchObject({ text: 'Unlimited', tone: 'far' });

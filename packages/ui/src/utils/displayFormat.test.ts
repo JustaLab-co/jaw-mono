@@ -11,6 +11,7 @@ import {
   subscriptDecimal,
   formatSpendAmount,
   isLongSpendAmount,
+  isStartField,
 } from './displayFormat';
 
 describe('subscriptDecimal', () => {
@@ -139,6 +140,26 @@ describe('dateTone', () => {
   });
   it('classifies near-future as normal', () => {
     expect(dateTone(now + 60 * 60 * 24 * 30)).toBe('normal');
+  });
+  it('never classifies a start in the past as expired: a signature valid since then can still be used', () => {
+    expect(dateTone(now - 2 * 24 * 60 * 60, 'start')).toBe('normal');
+    expect(dateTone('1000000000', 'start')).toBe('normal'); // 2001
+  });
+  it('still classifies a start more than a year out as far', () => {
+    expect(dateTone(now + 60 * 60 * 24 * 400, 'start')).toBe('far');
+  });
+});
+
+describe('isStartField', () => {
+  it('recognizes the fields a signature starts being valid at, by name or path', () => {
+    for (const name of ['validAfter', 'notBefore', 'validFrom', 'startTime', 'valid_after', 'details.validAfter']) {
+      expect(isStartField(name), name).toBe(true);
+    }
+  });
+  it('leaves deadlines and other timestamps out', () => {
+    for (const name of ['validBefore', 'validUntil', 'notAfter', 'deadline', 'expiry', 'timestamp', 'startTimeout']) {
+      expect(isStartField(name), name).toBe(false);
+    }
   });
 });
 
