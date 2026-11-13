@@ -35,7 +35,7 @@ import {
 import { SUPPORTED_CHAINS } from '@jaw.id/core';
 import { getJawPublicClient } from '../publicClient';
 import { resolvePath } from './path';
-import { isUnlimitedAmount } from '../displayFormat';
+import { isStartField, isUnlimitedAmount } from '../displayFormat';
 import type {
   ClearSigningDisplay,
   Descriptor,
@@ -275,9 +275,18 @@ async function formatField(
     case 'date': {
       const n = toBigInt(value);
       if (n === null || field.params?.encoding === 'blockheight') return rawRow(label, value);
+      const start = isStartField(field.path);
+      // A start of 0 means valid from the first block, not from 1 Jan 1970.
+      if (start && n === 0n) return { label, value: 'Immediately', kind: 'text' };
       const date = new Date(Number(n) * 1000);
       if (Number.isNaN(date.getTime())) return rawRow(label, value);
-      return { label, value: date.toLocaleString(), kind: 'date', rawValue: n.toString() };
+      return {
+        label,
+        value: date.toLocaleString(),
+        kind: 'date',
+        rawValue: n.toString(),
+        ...(start && { dateKind: 'start' as const }),
+      };
     }
 
     case 'unit': {

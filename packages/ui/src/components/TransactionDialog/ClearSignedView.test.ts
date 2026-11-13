@@ -79,3 +79,30 @@ describe('ClearSignedView address rows', () => {
     expect(ensRequests[0].searchParams.getAll('address')).toEqual([`${SPENDER}@eip155:${BASE}`]);
   });
 });
+
+describe('ClearSignedView date rows', () => {
+  const twoDaysAgo = String(Math.floor(Date.now() / 1000) - 2 * 24 * 60 * 60);
+  const PAST = 'This date is in the past.';
+
+  async function rowsShown(rows: ClearSigningDisplay['rows']) {
+    await act(async () => {
+      root.render(createElement(ClearSignedView, { display: { intent: 'Transfer', rows }, chainId: BASE }));
+    });
+    await settle();
+    return [...container.querySelectorAll('div.flex.items-baseline')].map((row) => ({
+      label: row.firstElementChild?.textContent,
+      warns: row.querySelector(`[aria-label="${PAST}"]`) !== null,
+    }));
+  }
+
+  it('does not flag a start in the past, and still flags a deadline in the past', async () => {
+    const shown = await rowsShown([
+      { label: 'Valid after', value: '', kind: 'date', rawValue: twoDaysAgo, dateKind: 'start' },
+      { label: 'Valid before', value: '', kind: 'date', rawValue: twoDaysAgo },
+    ]);
+    expect(shown).toEqual([
+      { label: 'Valid after', warns: false },
+      { label: 'Valid before', warns: true },
+    ]);
+  });
+});

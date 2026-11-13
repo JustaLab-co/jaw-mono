@@ -3,7 +3,7 @@ import type { ClearSigningDisplay, DisplayRow } from '../../utils/clearSigning';
 import { useAddressIdentities } from '../../hooks/useAddressIdentities';
 import { formatAddress, identityKey } from '../../utils';
 import { ENS_ONLY } from '../../utils/addressIdentity';
-import { dateTone, formatUnixDate, groupNumber, isUnlimitedAmount } from '../../utils/displayFormat';
+import { dateTone, formatUnixDate, groupNumber, isUnlimitedAmount, type DateKind } from '../../utils/displayFormat';
 import { TriangleAlert } from 'lucide-react';
 import { IdentityAvatar } from '../IdentityAvatar';
 import { TokenIcon } from '../TokenIcon';
@@ -41,9 +41,9 @@ function TokenAmountValue({ row, chainId }: { row: DisplayRow; chainId: number }
   );
 }
 
-/** Deadline/expiry value: "1 Jan 2030", tinted + a hover ⚠ when expired (past) or far-future. */
-function DateValue({ raw }: { raw: string }) {
-  const tone = dateTone(raw);
+/** Date value: "1 Jan 2030", tinted + a hover ⚠ when a deadline has passed or a date is far-future. */
+function DateValue({ raw, kind }: { raw: string; kind?: DateKind }) {
+  const tone = dateTone(raw, kind);
   const toneClass = tone === 'expired' ? 'text-destructive' : tone === 'far' ? 'text-warning' : 'text-foreground';
   const note =
     tone === 'expired' ? 'This date is in the past.' : tone === 'far' ? 'More than a year in the future.' : undefined;
@@ -115,7 +115,7 @@ export const ClearSignedView = ({ display, chainId, mainnetRpcUrl }: ClearSigned
                   ) : row.kind === 'address' ? (
                     <AddressValue row={row} resolvedName={resolvedName} avatarSrc={avatarSrc} />
                   ) : row.kind === 'date' && row.rawValue ? (
-                    <DateValue raw={row.rawValue} />
+                    <DateValue raw={row.rawValue} kind={row.dateKind} />
                   ) : (
                     <span className="text-foreground text-body-sm break-all font-mono">{row.value}</span>
                   )}

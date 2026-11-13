@@ -100,3 +100,41 @@ describe('applyFormat — MappingFailure', () => {
     expect(out).toBeNull();
   });
 });
+
+describe('applyFormat — start dates', () => {
+  // Circle's EIP-3009 descriptor in the ERC-7730 registry: both bounds are dates.
+  const format = {
+    fields: [
+      { path: 'validAfter', label: 'Valid after', format: 'date', params: { encoding: 'timestamp' } },
+      { path: 'validBefore', label: 'Valid before', format: 'date', params: { encoding: 'timestamp' } },
+    ],
+  } as any;
+  const ctx = (validAfter: string, validBefore: string) =>
+    ({ args: { validAfter, validBefore }, tx: {}, chainId: 8453 }) as any;
+
+  it('marks the start as a start and leaves the deadline a deadline', async () => {
+    const out = await applyFormat({ context: {} } as any, format, ctx('1762800000', '1762900000'));
+    if (!out) throw new Error('expected a clear-signing display');
+    expect(out.rows[0]).toMatchObject({
+      label: 'Valid after',
+      kind: 'date',
+      rawValue: '1762800000',
+      dateKind: 'start',
+    });
+    expect(out.rows[1]).toMatchObject({ label: 'Valid before', kind: 'date', rawValue: '1762900000' });
+    expect(out.rows[1].dateKind).not.toBe('start');
+  });
+
+  it('shows a start of 0 as "Immediately" rather than 1 Jan 1970', async () => {
+    const out = await applyFormat({ context: {} } as any, format, ctx('0', '1762900000'));
+    if (!out) throw new Error('expected a clear-signing display');
+    expect(out.rows[0]).toMatchObject({ label: 'Valid after', value: 'Immediately' });
+    expect(out.rows[0].kind).not.toBe('date');
+  });
+
+  it('keeps a deadline of 0 a date, so it is still flagged as past', async () => {
+    const out = await applyFormat({ context: {} } as any, format, ctx('0', '0'));
+    if (!out) throw new Error('expected a clear-signing display');
+    expect(out.rows[1]).toMatchObject({ label: 'Valid before', kind: 'date', rawValue: '0' });
+  });
+});

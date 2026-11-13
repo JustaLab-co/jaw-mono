@@ -9,6 +9,7 @@ import {
   dateTone,
   formatUnixDate,
   groupNumber,
+  isStartField,
   isUnixTimestamp,
   maxUintFor,
   type DateTone,
@@ -93,9 +94,9 @@ export function formatValue(type: string, value: unknown, fieldName = ''): Forma
 
     if (name === 'chainid' || name.endsWith('chainid')) return { text: networkLabel(Number(big)) };
 
-    const isTimestamp = /(deadline|expir|validuntil|validafter|validbefore|validto|notbefore|notafter|timestamp)/.test(
-      name
-    );
+    const isStart = isStartField(name);
+    const isTimestamp =
+      isStart || /(deadline|expir|validuntil|validafter|validbefore|validto|notbefore|notafter|timestamp)/.test(name);
     const isAmount = /(amount|value|allowance|limit|balance|price|cost|fee|total|wad|shares|qty)/.test(name);
 
     const mx = maxUintFor(type);
@@ -104,8 +105,10 @@ export function formatValue(type: string, value: unknown, fieldName = ''): Forma
       if (isTimestamp) return { text: 'No expiry', tone: 'far' };
       if (isAmount) return { text: 'Unlimited', tone: 'far' };
     }
+    // A start of 0 means valid from the first block, not from 1 Jan 1970.
+    if (isStart && big === 0n) return { text: 'Immediately', copyValue: '0' };
     if (isTimestamp && isUnixTimestamp(big)) {
-      const tone = dateTone(big);
+      const tone = dateTone(big, isStart ? 'start' : 'deadline');
       return {
         text: formatUnixDate(big),
         tone: tone === 'normal' ? undefined : tone,

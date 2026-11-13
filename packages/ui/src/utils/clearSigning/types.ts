@@ -7,6 +7,7 @@
 // ============================================================================
 
 import type { AbiFunction, Hex } from 'viem';
+import type { DateKind } from '../displayFormat';
 
 export type FieldFormatKind =
   | 'raw'
@@ -126,6 +127,8 @@ export interface DisplayRow {
   symbol?: string;
   /** When kind === 'tokenAmount': the underlying ERC-20 address (for icon lookup). */
   tokenAddress?: string;
+  /** When kind === 'date': a start (`validAfter`, …) is never flagged as past. A deadline when absent. */
+  dateKind?: DateKind;
 }
 
 export interface ClearSigningDisplay {
