@@ -104,6 +104,8 @@ const logos = (symbol: string) => [...document.querySelectorAll<HTMLImageElement
 const amountRow = (t: string) => [...document.querySelectorAll('p')].find((p) => p.textContent === t)?.parentElement;
 const tokenRow = () =>
   [...document.querySelectorAll('span')].find((s) => s.textContent?.trim() === 'Token')?.parentElement;
+const rowOf = (label: string) =>
+  [...document.querySelectorAll('span')].find((s) => s.textContent?.trim() === label)?.parentElement;
 const rowValue = (label: string) => {
   const labelEl = [...document.querySelectorAll('span')].find((s) => s.textContent?.trim() === label);
   return labelEl?.parentElement?.textContent?.slice(label.length) ?? '';
@@ -124,6 +126,15 @@ describe('Eip712Dialog, ERC-3009 payment', () => {
     await vi.waitFor(() => expect(line('1 USDC')).toBe(true));
     expect(line('on Base')).toBe(false);
     expect(text()).not.toContain('Signing sends');
+  });
+
+  // A small heading over the amount says what the signature does (Leo, 2026-11-16).
+  it('heads the amount with "Authorizing"', async () => {
+    chain.tokens.set(USDC_BASE.toLowerCase(), { decimals: 6, symbol: 'USDC' });
+    await render(erc3009TypedData());
+    await vi.waitFor(() => expect(line('1 USDC')).toBe(true));
+    const heading = [...document.querySelectorAll('span')].find((s) => s.textContent?.trim() === 'Authorizing');
+    expect(heading?.nextElementSibling).toBe(amountRow('1 USDC'));
   });
 
   it('marks the token verified when the registry knows it', async () => {
@@ -166,6 +177,60 @@ describe('Eip712Dialog, ERC-3009 payment', () => {
     await act(async () => logos('TKN').forEach((img) => img.dispatchEvent(new Event('error'))));
     expect(amountRow('1.5 TKN')?.querySelector(IDENTICON)).not.toBeNull();
     expect(tokenRow()?.querySelector(IDENTICON)).not.toBeNull();
+  });
+
+  // Ghadi on #652: the payee can hold the signature and submit it any time inside its window,
+  // so the window stays on the card instead of only in the raw details.
+  it('shows when the authorization stops being usable, with the time', async () => {
+    // Midday UTC, so the date is the same in any timezone the tests run in.
+    await render(erc3009TypedData({ message: { validBefore: '1893499200' } }));
+    expect(rowValue('Valid until')).toContain('1 Jan 2030');
+    expect(rowValue('Valid until')).toMatch(/\d{2}:\d{2}/);
+  });
+
+  it('says when the authorization never expires', async () => {
+    await render(erc3009TypedData({ message: { validBefore: (2n ** 256n - 1n).toString() } }));
+    expect(rowValue('Valid until')).toContain('Never expires');
+    expect(
+      rowOf('Valid until')?.querySelector('[aria-label="Whoever holds this signature can use it at any time."]')
+    ).toBeTruthy();
+  });
+
+  it('flags a deadline already in the past', async () => {
+    await render(erc3009TypedData({ message: { validBefore: '1700000000' } }));
+    expect(rowOf('Valid until')?.querySelector('[aria-label="This date is in the past."]')).toBeTruthy();
+  });
+
+  it('shows a start date only when the authorization is not usable yet', async () => {
+    await render(erc3009TypedData({ message: { validAfter: '4000000000' } }));
+    expect(rowValue('Valid from')).toMatch(/20\d\d/);
+    act(() => root?.unmount());
+    root = null;
+    await render(erc3009TypedData());
+    expect(text()).not.toContain('Valid from');
+  });
+
+  // Ghadi on #652: an unknown contract picks its own decimals and symbol, so its amount is
+  // shown in a secondary style rather than as a confident headline.
+  it('mutes the amount of a token the registry does not know, not of one it does', async () => {
+    chain.tokens.set(OTHER_TOKEN, { decimals: 18, symbol: 'TKN' });
+    await render(
+      erc3009TypedData({
+        domain: { name: 'Token', version: '1', verifyingContract: OTHER_TOKEN },
+        message: { value: '1500000000000000000' },
+      })
+    );
+    await vi.waitFor(() => expect(rowValue('Token')).toContain('Unverified'));
+    const unverified = [...document.querySelectorAll('p')].find((p) => p.textContent === '1.5 TKN');
+    expect(unverified?.className).toContain('text-muted-foreground');
+    expect(unverified?.className).not.toContain('text-foreground ');
+    act(() => root?.unmount());
+    root = null;
+    chain.tokens.set(USDC_BASE.toLowerCase(), { decimals: 6, symbol: 'USDC' });
+    await render(erc3009TypedData());
+    await vi.waitFor(() => expect(rowValue('Token')).toContain('Verified'));
+    const verified = [...document.querySelectorAll('p')].find((p) => p.textContent === '1 USDC');
+    expect(verified?.className).not.toContain('text-muted-foreground');
   });
 
   it('shows ReceiveWithAuthorization as the same payment', async () => {

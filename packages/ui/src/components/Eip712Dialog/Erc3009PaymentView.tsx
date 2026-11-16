@@ -11,13 +11,15 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/
 import { useAddressIdentities } from '../../hooks/useAddressIdentities';
 import { ENS_ONLY } from '../../utils/addressIdentity';
 import { createTokenResolver, type TokenInfo } from '../../utils/clearSigning';
-import { groupNumber } from '../../utils/displayFormat';
+import { dateTone, formatUnixDateTime, groupNumber, TS_MAX, type DateKind } from '../../utils/displayFormat';
 import { formatAddress, identityKey } from '../../utils';
 import { sanitizeDisplayName } from '../../utils/sanitize';
 import type { Erc3009Authorization } from '../../utils/erc3009';
 
 // "Couldn't confirm", not "isn't listed": an unreachable registry also lands here.
 const UNVERIFIED_NOTE = "Couldn't confirm this is the real token. Its name and decimals come from the token contract.";
+
+const NEVER_EXPIRES_NOTE = 'Whoever holds this signature can use it at any time.';
 
 type TokenRead = { status: 'loading' } | { status: 'read'; info: TokenInfo } | { status: 'unreadable' };
 
@@ -81,41 +83,47 @@ export function Erc3009PaymentView({
     />
   );
   return (
-    <div className="border-border rounded-box flex flex-col gap-3 border p-3">
-      {/* The amount leads; one authorization moves one token. The network is left to the
+    <TooltipProvider delayDuration={0}>
+      <div className="border-border rounded-box flex flex-col gap-3 border p-3">
+        {/* The amount leads; one authorization moves one token. The network is left to the
           domain card below, so it is not repeated here. */}
-      <div className="flex min-w-0 items-center gap-2">
-        {tokenLogo(24, 'size-token flex-none')}
-        <p className="text-foreground text-amount-lg min-w-0 break-all">{`${amount}${symbol ? ` ${symbol}` : ''}`}</p>
-      </div>
-      {token.status === 'unreadable' && (
-        <p className="text-warning text-body-xs">
-          Couldn&apos;t read this token, so the amount is in its smallest unit.
-        </p>
-      )}
+        <div className="min-w-0">
+          <Eyebrow>Authorizing</Eyebrow>
+          <div className="mt-1 flex min-w-0 items-center gap-2">
+            {tokenLogo(24, 'size-token flex-none')}
+            {/* An unknown contract picks its own decimals and symbol, so its amount is muted. */}
+            <p
+              className={`${verified === true ? 'text-foreground' : 'text-muted-foreground'} text-amount-lg min-w-0 break-all`}
+            >{`${amount}${symbol ? ` ${symbol}` : ''}`}</p>
+          </div>
+        </div>
+        {token.status === 'unreadable' && (
+          <p className="text-warning text-body-xs">
+            Couldn&apos;t read this token, so the amount is in its smallest unit.
+          </p>
+        )}
 
-      <PartyRow
-        label="To"
-        value={payee?.ensName ?? formatAddress(payment.to)}
-        address={payment.to}
-        avatarUrl={payee?.ensAvatar ?? undefined}
-      />
+        <PartyRow
+          label="To"
+          value={payee?.ensName ?? formatAddress(payment.to)}
+          address={payment.to}
+          avatarUrl={payee?.ensAvatar ?? undefined}
+        />
 
-      <div className="min-w-0">
-        <Eyebrow>Token</Eyebrow>
-        <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1.5">
-          {tokenLogo(16, 'size-4 flex-none')}
-          {symbol && <span className="text-foreground text-body-sm font-mono font-medium">{symbol}</span>}
-          <span className="text-muted-foreground text-body-sm font-mono">{formatAddress(payment.token)}</span>
-          <CopyButton value={payment.token} size={12} resetAfterMs={1500} label="Copy token address" />
-          {verified === true && (
-            <span className="text-positive text-body-xs flex items-center gap-1">
-              <ShieldCheck className="size-3 flex-none" strokeWidth={2.4} />
-              Verified
-            </span>
-          )}
-          {verified === false && (
-            <TooltipProvider delayDuration={0}>
+        <div className="min-w-0">
+          <Eyebrow>Token</Eyebrow>
+          <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1.5">
+            {tokenLogo(16, 'size-4 flex-none')}
+            {symbol && <span className="text-foreground text-body-sm font-mono font-medium">{symbol}</span>}
+            <span className="text-muted-foreground text-body-sm font-mono">{formatAddress(payment.token)}</span>
+            <CopyButton value={payment.token} size={12} resetAfterMs={1500} label="Copy token address" />
+            {verified === true && (
+              <span className="text-positive text-body-xs flex items-center gap-1">
+                <ShieldCheck className="size-3 flex-none" strokeWidth={2.4} />
+                Verified
+              </span>
+            )}
+            {verified === false && (
               <Tooltip>
                 <TooltipTrigger asChild>
                   <span
@@ -128,9 +136,48 @@ export function Erc3009PaymentView({
                 </TooltipTrigger>
                 <TooltipContent className="max-w-[240px]">{UNVERIFIED_NOTE}</TooltipContent>
               </Tooltip>
-            </TooltipProvider>
-          )}
+            )}
+          </div>
         </div>
+
+        {/* The payee can submit the signature any time inside this window. A start in the
+          past needs no row: the signature is usable now. */}
+        {payment.validAfter > BigInt(Math.floor(Date.now() / 1000)) && (
+          <ValidityRow label="Valid from" at={payment.validAfter} kind="start" />
+        )}
+        <ValidityRow label="Valid until" at={payment.validBefore} kind="deadline" />
+      </div>
+    </TooltipProvider>
+  );
+}
+
+function ValidityRow({ label, at, kind }: { label: string; at: bigint; kind: DateKind }) {
+  // Past 2100 is the max-uint "no deadline" convention, not a real date.
+  const never = kind === 'deadline' && at > TS_MAX;
+  const tone = never ? 'far' : dateTone(at, kind);
+  const toneClass = tone === 'expired' ? 'text-destructive' : tone === 'far' ? 'text-warning' : 'text-foreground';
+  const note = never
+    ? NEVER_EXPIRES_NOTE
+    : tone === 'expired'
+      ? 'This date is in the past.'
+      : tone === 'far'
+        ? 'More than a year in the future.'
+        : undefined;
+  return (
+    <div className="min-w-0">
+      <Eyebrow>{label}</Eyebrow>
+      <div className={`text-body-sm mt-1 flex min-w-0 items-center gap-1.5 font-mono ${toneClass}`}>
+        {never ? 'Never expires' : formatUnixDateTime(at)}
+        {note && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span aria-label={note} className="flex-none cursor-help">
+                <TriangleAlert className="size-3.5" strokeWidth={2} />
+              </span>
+            </TooltipTrigger>
+            <TooltipContent className="max-w-[240px]">{note}</TooltipContent>
+          </Tooltip>
+        )}
       </div>
     </div>
   );

@@ -32,6 +32,10 @@ export interface Erc3009Authorization {
   value: bigint;
   /** The token being moved: under ERC-3009 the verifying contract is the token itself. */
   token: string;
+  /** Unix seconds before which the signature can't be used (0: usable at once). */
+  validAfter: bigint;
+  /** Unix seconds from which the signature can't be used. A huge value means it never expires. */
+  validBefore: bigint;
 }
 
 interface TypedDataLike {
@@ -48,17 +52,14 @@ export function readErc3009(typedData: TypedDataLike | null | undefined): Erc300
   const expected = ERC3009_TYPEHASHES[primaryType as Erc3009PrimaryType];
   if (eip712TypeHash(typedData.types, primaryType)?.toLowerCase() !== expected) return null;
 
-  const { from, to, value } = typedData.message ?? {};
+  const { from, to, value, validAfter, validBefore } = typedData.message ?? {};
   const token = typedData.domain?.verifyingContract;
   if (!isAddressString(from) || !isAddressString(to) || !isAddressString(token)) return null;
 
-  let amount: bigint;
-  try {
-    amount = BigInt(value as string | number | bigint);
-  } catch {
-    return null;
-  }
-  if (amount < 0n) return null;
+  const amount = toUint(value);
+  const after = toUint(validAfter);
+  const before = toUint(validBefore);
+  if (amount === null || after === null || before === null) return null;
 
   return {
     primaryType: primaryType as Erc3009PrimaryType,
@@ -66,7 +67,19 @@ export function readErc3009(typedData: TypedDataLike | null | undefined): Erc300
     to,
     value: amount,
     token,
+    validAfter: after,
+    validBefore: before,
   };
+}
+
+function toUint(v: unknown): bigint | null {
+  if (typeof v !== 'string' && typeof v !== 'number' && typeof v !== 'bigint') return null;
+  try {
+    const n = BigInt(v);
+    return n < 0n ? null : n;
+  } catch {
+    return null;
+  }
 }
 
 function isAddressString(v: unknown): v is string {

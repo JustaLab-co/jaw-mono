@@ -10,7 +10,15 @@ describe('readErc3009', () => {
       to: PAYEE,
       value: 1_000_000n,
       token: USDC_BASE,
+      validAfter: 0n,
+      validBefore: 1_893_456_000n,
     });
+  });
+
+  // The validity window is shown on the card, so a message it cannot read is not shown as a payment.
+  it('is not a payment when the validity window is not a number', () => {
+    expect(readErc3009(erc3009TypedData({ message: { validBefore: 'soon' } }))).toBeNull();
+    expect(readErc3009(erc3009TypedData({ message: { validAfter: undefined } }))).toBeNull();
   });
 
   it('reads a ReceiveWithAuthorization the same way', () => {
