@@ -10,8 +10,9 @@ import { applyFormat } from './format';
 
 const USDC = '0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85';
 
-// Permit-style field: tokenPath `@.to` never resolves in typed-data, exercising the
-// verifyingContract fallback.
+// Permit-style field. The contexts below carry no `to`, so tokenPath `@.to` does not
+// resolve and the verifyingContract fallback is what runs. (useClearSigningTypedData
+// does set `to`, per ERC-7730's EIP-712 container; see its test.)
 const amountField = { path: 'value', label: 'Amount', format: 'tokenAmount', params: { tokenPath: '@.to' } };
 
 const baseCtx = () => ({

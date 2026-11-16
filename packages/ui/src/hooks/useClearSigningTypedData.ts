@@ -34,7 +34,9 @@ export function useClearSigningTypedData(
   apiKey?: string
 ): UseClearSigningTypedDataResult {
   const [display, setDisplay] = useState<ClearSigningDisplay | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
+  // Starts true when there is something to resolve, so a caller never reads "no match"
+  // in the render before the lookup has begun.
+  const [isLoading, setIsLoading] = useState(() => !!typedDataJson);
 
   const parsed = useMemo(() => {
     if (!typedDataJson) return null;
@@ -88,7 +90,15 @@ export function useClearSigningTypedData(
           // verifyingContract, numeric chainId) win when a dApp ships a differently-cased
           // address or a hex chainId. Renderer reads from this; we don't want descriptor
           // rows to surface dApp-controlled spelling.
-          tx: { ...parsed.domain, chainId: effectiveChainId, verifyingContract: verifyingContract.toLowerCase() },
+          // `to` is ERC-7730's EIP-712 container value: `@.to` is the verifying contract.
+          // Descriptors such as Circle's ERC-3009 and ERC-2612 permits name their token
+          // with `tokenPath: "@.to"`, so without it their amounts render raw.
+          tx: {
+            ...parsed.domain,
+            chainId: effectiveChainId,
+            verifyingContract: verifyingContract.toLowerCase(),
+            to: verifyingContract.toLowerCase(),
+          },
           chainId: effectiveChainId,
           nativeSymbol: getNativeSymbol(effectiveChainId),
           nativeDecimals: getNativeDecimals(effectiveChainId),

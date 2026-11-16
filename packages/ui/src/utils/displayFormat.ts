@@ -170,3 +170,16 @@ export function formatUnixDate(raw: string | bigint): string {
   if (Number.isNaN(d.getTime())) return groupNumber(n.toString());
   return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
 }
+
+/** Format unix seconds as "1 Jan 2030, 14:05" in local time, for windows short enough that the time matters. */
+export function formatUnixDateTime(raw: bigint): string {
+  const d = new Date(Number(raw) * 1000);
+  if (Number.isNaN(d.getTime())) return groupNumber(raw.toString());
+  return d.toLocaleString('en-GB', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
