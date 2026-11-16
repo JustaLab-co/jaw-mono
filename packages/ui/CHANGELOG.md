@@ -1,3 +1,13 @@
+## 1.13.4 (2026-11-16)
+
+### 🩹 Fixes
+
+- **ui:** resolve @.to as the verifying contract in typed data ([#651](https://github.com/JustaLab-co/jaw-mono/pull/651))
+
+### ❤️ Thank You
+
+- Leo Franklin @LeoFranklin015
+
 ## 1.13.3 (2026-11-13)
 
 ### 🩹 Fixes
