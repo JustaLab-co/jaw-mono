@@ -7,6 +7,9 @@ import { SuccessScreen } from '../SuccessScreen';
 import { ProcessingScreen } from '../ProcessingScreen';
 import { Eip712Tree } from './Eip712Tree';
 import { Eip712DomainCard } from './Eip712DomainCard';
+import { Erc3009PaymentView } from './Erc3009PaymentView';
+import { WarningNotice } from '../primitives';
+import { readErc3009 } from '../../utils/erc3009';
 import { Button } from '../ui/button';
 import { Eip712DialogProps } from './types';
 import { useClearSigningTypedData } from '../../hooks';
@@ -83,11 +86,11 @@ export const Eip712Dialog = ({
   // clearSignedChainId is the chain the rows were resolved on (the typed data's
   // domain chain, falling back to the connected chain) — the view must render
   // token icons and chain labels against it, not against `chainId`.
-  const { display: clearSigned, chainId: clearSignedChainId } = useClearSigningTypedData(
-    typedDataJson,
-    chainId ?? 1,
-    apiKey
-  );
+  const {
+    display: clearSigned,
+    isLoading: clearSigningLoading,
+    chainId: clearSignedChainId,
+  } = useClearSigningTypedData(typedDataJson, chainId ?? 1, apiKey);
 
   // Inside a Radix modal, native wheel/trackpad scrolling of a nested overflow
   // container can get eaten. Drive scrollTop manually so the content region always
@@ -112,9 +115,21 @@ export const Eip712Dialog = ({
   const verifyingContract = typedData?.domain?.verifyingContract as string | undefined;
   const domainChainId = normalizeChainId(typedData?.domain?.chainId);
 
+  // An ERC-3009 authorization moves money when submitted, so it is shown as a payment.
+  // Only a signature from `from` can move those funds: one from any other account is
+  // useless, so Sign is turned off. That rule is scoped to ERC-3009 alone.
+  const payment = useMemo(() => readErc3009(typedData), [typedData]);
+  const paymentFromOther = !!payment && !!accountAddress && payment.from.toLowerCase() !== accountAddress.toLowerCase();
+
   const appAvatar = <AppAvatar appName={appName} appLogoUrl={appLogoUrl} />;
 
   const rawTree = typedData ? <Eip712Tree typedData={typedData} /> : null;
+  const rawDetails = (
+    <details className="text-xs">
+      <summary className="text-muted-foreground hover:text-foreground cursor-pointer">Show raw details</summary>
+      <div className="mt-2">{rawTree}</div>
+    </details>
+  );
 
   return (
     <ShellDialog
@@ -164,15 +179,28 @@ export const Eip712Dialog = ({
               <div className="bg-destructive/10 border-destructive/20 rounded-box border p-4">
                 <p className="text-destructive text-sm">Failed to parse typed data</p>
               </div>
+            ) : payment ? (
+              <>
+                <Erc3009PaymentView
+                  payment={payment}
+                  chainId={clearSignedChainId}
+                  apiKey={apiKey}
+                  mainnetRpcUrl={mainnetRpcUrl}
+                  verified={clearSigningLoading ? undefined : !!clearSigned}
+                />
+                {paymentFromOther && (
+                  <WarningNotice
+                    messages={[
+                      `This payment is from ${formatAddress(payment.from)}, not the account signing. Your signature can't move those funds, so signing is turned off.`,
+                    ]}
+                  />
+                )}
+                {rawDetails}
+              </>
             ) : clearSigned && clearSigned.rows.length > 0 ? (
               <>
                 <ClearSignedView display={clearSigned} chainId={clearSignedChainId} mainnetRpcUrl={mainnetRpcUrl} />
-                <details className="text-xs">
-                  <summary className="text-muted-foreground hover:text-foreground cursor-pointer">
-                    Show raw details
-                  </summary>
-                  <div className="mt-2">{rawTree}</div>
-                </details>
+                {rawDetails}
               </>
             ) : (
               rawTree
@@ -212,8 +240,9 @@ export const Eip712Dialog = ({
               <Button
                 onClick={onSign}
                 // The screen owns this invariant: never offer to sign what it couldn't
-                // render, whatever `canSign` a host passes.
-                disabled={!canSign || !typedData}
+                // render, or an ERC-3009 payment from another account, whatever `canSign`
+                // a host passes.
+                disabled={!canSign || !typedData || paymentFromOther}
                 className="rounded-box text-button h-10 flex-[56] font-semibold focus-visible:ring-1"
               >
                 Sign
