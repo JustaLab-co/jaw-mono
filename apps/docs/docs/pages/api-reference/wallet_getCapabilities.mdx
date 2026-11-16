@@ -9,7 +9,7 @@ Get wallet capabilities for supported chains. Implements EIP-5792 for capability
 ```typescript
 await jaw.provider.request({
   method: 'wallet_getCapabilities',
-  params: ['0x1234...', ['0x1', '0x2105']],
+  params: ['0x1234...', ['0x1', '0x14a34']],
 });
 ```
 
@@ -23,7 +23,7 @@ await jaw.provider.request({
 ### Example
 
 ```json
-["0x1234567890123456789012345678901234567890", ["0x1", "0x2105"]]
+["0x1234567890123456789012345678901234567890", ["0x1", "0x14a34"]]
 ```
 
 Or without filtering:
@@ -49,19 +49,10 @@ Returns capabilities per chain as an object keyed by chain ID (hex).
     "permissions": { "supported": true },
     "feeToken": {
       "supported": true,
-      "tokens": [
-        {
-          "uid": "ethereum",
-          "symbol": "ETH",
-          "address": "0x0000000000000000000000000000000000000000",
-          "interop": false,
-          "decimals": 18,
-          "feeToken": true
-        }
-      ]
+      "mode": "dynamic"
     }
   },
-  "0x2105": {
+  "0x14a34": {
     "atomicBatch": { "supported": true },
     "atomic": { "status": "supported" },
     "paymasterService": { "supported": true },
@@ -70,11 +61,11 @@ Returns capabilities per chain as an object keyed by chain ID (hex).
       "supported": true,
       "tokens": [
         {
-          "uid": "ethereum",
-          "symbol": "ETH",
-          "address": "0x0000000000000000000000000000000000000000",
+          "uid": "usdc-base-sepolia",
+          "symbol": "USDC",
+          "address": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
           "interop": true,
-          "decimals": 18,
+          "decimals": 6,
           "feeToken": true
         }
       ]
@@ -111,20 +102,31 @@ Indicates support for the permission system (`wallet_grantPermissions`, `wallet_
 
 ### feeToken
 
-**Value:** `{ supported: true, tokens: [...] }`
+**Dynamic value:** `{ supported: true, mode: "dynamic" }`
 
-Indicates the supported fee tokens for gas payments on each chain.
+**Static value:** `{ supported: true, tokens: [...] }`
+
+Indicates support for paying network fees with tokens. Each chain explicitly
+chooses one of two modes:
+
+- `dynamic`: the wallet discovers candidate tokens and asks the paymaster which
+  ones can be quoted. The capability does not include a token catalogue.
+- Static allowlist: the capability includes the tokens offered by the wallet.
 
 | Field               | Type      | Description                                             |
 | ------------------- | --------- | ------------------------------------------------------- |
 | `supported`         | `boolean` | Whether fee token selection is supported                |
-| `tokens`            | `array`   | List of available fee tokens                            |
+| `mode`              | `string`  | `"dynamic"` when tokens are discovered at runtime       |
+| `tokens`            | `array`   | Static list of available fee tokens                     |
 | `tokens[].uid`      | `string`  | Unique identifier for the token                         |
 | `tokens[].symbol`   | `string`  | Token symbol (e.g., "ETH", "USDC")                      |
 | `tokens[].address`  | `string`  | Token contract address (zero address for native token)  |
 | `tokens[].interop`  | `boolean` | Whether the token supports cross-chain interoperability |
 | `tokens[].decimals` | `number`  | Token decimal places                                    |
 | `tokens[].feeToken` | `boolean` | Whether this token can be used for gas fees             |
+
+`mode` and `tokens` are mutually exclusive. Clients should discover and quote
+tokens when `mode` is `"dynamic"`, and use the supplied list otherwise.
 
 ## Behavior
 

@@ -36,10 +36,17 @@ export type FeeToken = {
 /**
  * Fee token capability from wallet_getCapabilities response
  */
-export type FeeTokenCapability = {
-    supported: boolean;
-    tokens: FeeToken[];
-};
+export type FeeTokenCapability =
+    | {
+          supported: true;
+          mode: 'dynamic';
+          tokens?: never;
+      }
+    | {
+          supported: true;
+          mode?: never;
+          tokens: FeeToken[];
+      };
 
 export type Account = {
     accounts?: Address[];

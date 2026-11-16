@@ -179,7 +179,7 @@ export async function handleGetCapabilitiesRequest(
         // The one unverified step. `ChainCapabilities` describes what the proxy
         // is expected to answer, and nothing here checks that it did; what
         // actually holds is the narrowing every consumer does before use
-        // (`if (!feeTokenCap?.supported || !feeTokenCap?.tokens?.length)`). If a
+        // (checking `supported`, then using `mode: 'dynamic'` or the configured token list). If a
         // runtime check is ever wanted, this is the single place for it.
         try {
             const result = (await fetchRPCRequest(requestArgs, rpcUrl)) as CapabilitiesResult;

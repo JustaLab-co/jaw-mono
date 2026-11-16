@@ -26,3 +26,4 @@ export * from './assetPreview';
 export * from './eip681';
 export * from './qrPath';
 export * from './resolvePaymaster';
+export * from './feeTokens';

@@ -592,7 +592,12 @@ export type FeeToken = {
 
 // @public
 export type FeeTokenCapability = {
-    supported: boolean;
+    supported: true;
+    mode: 'dynamic';
+    tokens?: never;
+} | {
+    supported: true;
+    mode?: never;
     tokens: FeeToken[];
 };
 
