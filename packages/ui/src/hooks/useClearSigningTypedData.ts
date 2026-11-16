@@ -34,7 +34,9 @@ export function useClearSigningTypedData(
   apiKey?: string
 ): UseClearSigningTypedDataResult {
   const [display, setDisplay] = useState<ClearSigningDisplay | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
+  // Starts true when there is something to resolve, so a caller never reads "no match"
+  // in the render before the lookup has begun.
+  const [isLoading, setIsLoading] = useState(() => !!typedDataJson);
 
   const parsed = useMemo(() => {
     if (!typedDataJson) return null;

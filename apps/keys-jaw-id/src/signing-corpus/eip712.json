@@ -921,5 +921,299 @@
       ],
       "challenge": "0x99f6953854a89f354926800573d70f6cc5842427106a6e14763f934f567cfd89"
     }
+  },
+  {
+    "id": "eip712-erc3009-payment",
+    "attack": "None. Baseline ERC-3009 payment from the signing account: shown as a payment from the first frame, signed exactly as given.",
+    "method": "eth_signTypedData_v4",
+    "typedData": {
+      "domain": {
+        "name": "USD Coin",
+        "version": "2",
+        "chainId": 8453,
+        "verifyingContract": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+      },
+      "primaryType": "TransferWithAuthorization",
+      "types": {
+        "EIP712Domain": [
+          {
+            "name": "name",
+            "type": "string"
+          },
+          {
+            "name": "version",
+            "type": "string"
+          },
+          {
+            "name": "chainId",
+            "type": "uint256"
+          },
+          {
+            "name": "verifyingContract",
+            "type": "address"
+          }
+        ],
+        "TransferWithAuthorization": [
+          {
+            "name": "from",
+            "type": "address"
+          },
+          {
+            "name": "to",
+            "type": "address"
+          },
+          {
+            "name": "value",
+            "type": "uint256"
+          },
+          {
+            "name": "validAfter",
+            "type": "uint256"
+          },
+          {
+            "name": "validBefore",
+            "type": "uint256"
+          },
+          {
+            "name": "nonce",
+            "type": "bytes32"
+          }
+        ]
+      },
+      "message": {
+        "from": "0x9fD37D2cF1b32b3f7dBae480bbd44BE3De2A9e0F",
+        "to": "0x1111111111111111111111111111111111111111",
+        "value": "1000000",
+        "validAfter": "0",
+        "validBefore": "1893456000",
+        "nonce": "0xabababababababababababababababababababababababababababababababab"
+      }
+    },
+    "expect": {
+      "decision": "sign",
+      "pairs": [
+        ["To", "0x1111...1111"],
+        ["Token", "0x8335...2913"]
+      ]
+    }
+  },
+  {
+    "id": "eip712-erc3009-receive",
+    "attack": "None. ReceiveWithAuthorization moves the money the same way, so it gets the same payment screen.",
+    "method": "eth_signTypedData_v4",
+    "typedData": {
+      "domain": {
+        "name": "USD Coin",
+        "version": "2",
+        "chainId": 8453,
+        "verifyingContract": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+      },
+      "primaryType": "ReceiveWithAuthorization",
+      "types": {
+        "EIP712Domain": [
+          {
+            "name": "name",
+            "type": "string"
+          },
+          {
+            "name": "version",
+            "type": "string"
+          },
+          {
+            "name": "chainId",
+            "type": "uint256"
+          },
+          {
+            "name": "verifyingContract",
+            "type": "address"
+          }
+        ],
+        "ReceiveWithAuthorization": [
+          {
+            "name": "from",
+            "type": "address"
+          },
+          {
+            "name": "to",
+            "type": "address"
+          },
+          {
+            "name": "value",
+            "type": "uint256"
+          },
+          {
+            "name": "validAfter",
+            "type": "uint256"
+          },
+          {
+            "name": "validBefore",
+            "type": "uint256"
+          },
+          {
+            "name": "nonce",
+            "type": "bytes32"
+          }
+        ]
+      },
+      "message": {
+        "from": "0x9fD37D2cF1b32b3f7dBae480bbd44BE3De2A9e0F",
+        "to": "0x1111111111111111111111111111111111111111",
+        "value": "1000000",
+        "validAfter": "0",
+        "validBefore": "1893456000",
+        "nonce": "0xabababababababababababababababababababababababababababababababab"
+      }
+    },
+    "expect": {
+      "decision": "sign",
+      "pairs": [
+        ["To", "0x1111...1111"],
+        ["Token", "0x8335...2913"]
+      ]
+    }
+  },
+  {
+    "id": "eip712-erc3009-from-other-account",
+    "attack": "An ERC-3009 payment whose from is another account. A signature from this account can never move those funds, so the screen must say so and not offer to sign.",
+    "method": "eth_signTypedData_v4",
+    "typedData": {
+      "domain": {
+        "name": "USD Coin",
+        "version": "2",
+        "chainId": 8453,
+        "verifyingContract": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+      },
+      "primaryType": "TransferWithAuthorization",
+      "types": {
+        "EIP712Domain": [
+          {
+            "name": "name",
+            "type": "string"
+          },
+          {
+            "name": "version",
+            "type": "string"
+          },
+          {
+            "name": "chainId",
+            "type": "uint256"
+          },
+          {
+            "name": "verifyingContract",
+            "type": "address"
+          }
+        ],
+        "TransferWithAuthorization": [
+          {
+            "name": "from",
+            "type": "address"
+          },
+          {
+            "name": "to",
+            "type": "address"
+          },
+          {
+            "name": "value",
+            "type": "uint256"
+          },
+          {
+            "name": "validAfter",
+            "type": "uint256"
+          },
+          {
+            "name": "validBefore",
+            "type": "uint256"
+          },
+          {
+            "name": "nonce",
+            "type": "bytes32"
+          }
+        ]
+      },
+      "message": {
+        "from": "0x3333333333333333333333333333333333333333",
+        "to": "0x1111111111111111111111111111111111111111",
+        "value": "1000000",
+        "validAfter": "0",
+        "validBefore": "1893456000",
+        "nonce": "0xabababababababababababababababababababababababababababababababab"
+      }
+    },
+    "expect": {
+      "decision": "blocked",
+      "shows": ["This payment is from 0x3333...3333, not the account signing."]
+    }
+  },
+  {
+    "id": "eip712-erc3009-lookalike-struct",
+    "attack": "A struct that borrows the name TransferWithAuthorization but swaps from and to. It is not the standard's struct, so it must not be dressed up as a payment.",
+    "method": "eth_signTypedData_v4",
+    "typedData": {
+      "domain": {
+        "name": "USD Coin",
+        "version": "2",
+        "chainId": 8453,
+        "verifyingContract": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+      },
+      "primaryType": "TransferWithAuthorization",
+      "types": {
+        "EIP712Domain": [
+          {
+            "name": "name",
+            "type": "string"
+          },
+          {
+            "name": "version",
+            "type": "string"
+          },
+          {
+            "name": "chainId",
+            "type": "uint256"
+          },
+          {
+            "name": "verifyingContract",
+            "type": "address"
+          }
+        ],
+        "TransferWithAuthorization": [
+          {
+            "name": "to",
+            "type": "address"
+          },
+          {
+            "name": "from",
+            "type": "address"
+          },
+          {
+            "name": "value",
+            "type": "uint256"
+          },
+          {
+            "name": "validAfter",
+            "type": "uint256"
+          },
+          {
+            "name": "validBefore",
+            "type": "uint256"
+          },
+          {
+            "name": "nonce",
+            "type": "bytes32"
+          }
+        ]
+      },
+      "message": {
+        "from": "0x9fD37D2cF1b32b3f7dBae480bbd44BE3De2A9e0F",
+        "to": "0x1111111111111111111111111111111111111111",
+        "value": "1000000",
+        "validAfter": "0",
+        "validBefore": "1893456000",
+        "nonce": "0xabababababababababababababababababababababababababababababababab"
+      }
+    },
+    "expect": {
+      "decision": "sign",
+      "hides": ["Token"]
+    }
   }
 ]
