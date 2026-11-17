@@ -1,3 +1,17 @@
+## 1.14.0 (2026-11-17)
+
+### 🚀 Features
+
+- support dynamic fee token selection ([#653](https://github.com/JustaLab-co/jaw-mono/pull/653))
+
+### 🧱 Updated Dependencies
+
+- Updated @jaw.id/core to 1.11.0
+
+### ❤️ Thank You
+
+- Nikhil Kumar @nikhilkumar1612
+
 ## 1.13.4 (2026-11-16)
 
 ### 🩹 Fixes
