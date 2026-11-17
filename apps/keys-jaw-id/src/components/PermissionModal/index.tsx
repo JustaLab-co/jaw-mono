@@ -4,7 +4,7 @@ import {
   PermissionDialog,
   useGasEstimation,
   type FeeTokenOption,
-  fetchTokenBalance,
+  loadFeeTokenOptions,
   formatSpendAmount,
   getPublicClient,
   useFunctionSignatures,
@@ -16,7 +16,7 @@ import {
   toDialogCalls,
 } from '@jaw.id/ui';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { formatUnits, erc20Abi, type Address } from 'viem';
+import { erc20Abi, type Address } from 'viem';
 import { getChainNameFromId } from '../../lib/chain-handlers';
 import { useSessionAccount } from '../../hooks';
 import {
@@ -543,7 +543,7 @@ export const PermissionModal = ({
         const chainIdHex = `0x${(chain?.id || 1).toString(16)}` as `0x${string}`;
         const feeTokenCap = capabilities?.[chainIdHex]?.feeToken;
 
-        if (!feeTokenCap?.supported || !feeTokenCap?.tokens?.length) {
+        if (!feeTokenCap?.supported) {
           if (isMounted) setFeeTokensLoading(false);
           return;
         }
@@ -551,44 +551,14 @@ export const PermissionModal = ({
         // Get RPC URL for balance fetching
         const rpcUrl = chain?.rpcUrl || viemChain?.rpcUrls?.default?.http?.[0] || `https://eth.llamarpc.com`;
 
-        // Fetch balances in parallel
-        const tokensWithBalances = await Promise.all(
-          feeTokenCap.tokens.map(async (token) => {
-            try {
-              const balance = await fetchTokenBalance(token.address, balanceAddress, rpcUrl, chain?.id);
-              const balanceFormatted = formatUnits(balance, token.decimals);
-              const tokenIsNative = isNativeToken(token.address);
-              // For native token (ETH): selectable if any balance (gas estimation will catch insufficient)
-              // For ERC-20 tokens: require at least 0.5 units
-              const isSelectable = tokenIsNative ? balance > 0n : parseFloat(balanceFormatted) >= 0.5;
-
-              return {
-                uid: token.uid,
-                symbol: token.symbol,
-                address: token.address,
-                decimals: token.decimals,
-                balance,
-                balanceFormatted,
-                isNative: tokenIsNative,
-                isSelectable,
-                logoURI: token.logoURI,
-              } as FeeTokenOption;
-            } catch (error) {
-              console.warn(`Failed to fetch balance for ${token.symbol}:`, error);
-              return {
-                uid: token.uid,
-                symbol: token.symbol,
-                address: token.address,
-                decimals: token.decimals,
-                balance: 0n,
-                balanceFormatted: '0',
-                isNative: isNativeToken(token.address),
-                isSelectable: false,
-                logoURI: token.logoURI,
-              } as FeeTokenOption;
-            }
-          })
-        );
+        const tokensWithBalances = await loadFeeTokenOptions({
+          capability: feeTokenCap,
+          account: balanceAddress,
+          chainId: chain.id,
+          rpcUrl,
+          apiKey: extractedApiKey,
+          showTestnets: true,
+        });
 
         if (isMounted) {
           setFeeTokens(tokensWithBalances);

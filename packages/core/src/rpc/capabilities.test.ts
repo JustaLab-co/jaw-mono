@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 import { handleGetCapabilitiesRequest, clearCapabilitiesCache, peekCapabilities } from './capabilities.js';
 
-const CAPS = { '0x2105': { feeToken: { supported: true } } };
+const CAPS = { '0x2105': { feeToken: { supported: true, mode: 'dynamic' } } };
 
 function stubFetch(impl?: () => Promise<unknown>) {
     const fn = vi.fn(async () => {

@@ -318,8 +318,37 @@ describe('useGasEstimation fee-token selection', () => {
     expect(hook.isPayingWithErc20).toBe(true);
   });
 
+  // PR 653 review: a token picked on its balance alone, which then gets no quote,
+  // must not stay marked payable with no cost.
+  it('a token picked before the estimate that then gets no quote stops being selectable', async () => {
+    let resolveErc20!: (v: never[]) => void;
+    erc20Mock.mockReturnValue(new Promise((r) => (resolveErc20 = r)));
+    root = createRoot(document.createElement('div'));
+    await act(async () => {
+      root!.render(
+        createElement(Probe, {
+          account: makeAccount(async () => '0.0002'),
+          initialTokens: [nativeEth(10n ** 18n), token({})],
+        })
+      );
+    });
+
+    // The ERC-20 estimate is still pending — the user picks USDC on its balance.
+    const usdc = tokensNow.find((t) => !t.isNative)!;
+    expect(usdc.isSelectable).toBe(true);
+    expect(usdc.gasCostFormatted).toBeUndefined();
+    act(() => hook.setSelectedFeeToken(usdc));
+
+    await act(async () => resolveErc20([]));
+    await flush();
+
+    expect(tokensNow.find((t) => !t.isNative)?.isSelectable).toBe(false);
+    expect(hook.selectedFeeToken?.symbol).toBe('USDC');
+    expect(hook.selectedFeeToken?.isSelectable).toBe(false);
+  });
+
   it('keeps the last error while a retry runs, and resolves refetch when the run ends', async () => {
-    erc20Mock.mockRejectedValue(new Error('pimlico_getTokenQuotes error'));
+    erc20Mock.mockRejectedValue(new Error('jaw_getTokenQuotes error'));
     let ethCalls = 0;
     let finishEth!: () => void;
     const account = makeAccount(() => {
@@ -797,7 +826,7 @@ describe('useGasEstimation fee-token outcome per ERC-20 result', () => {
   it.each([
     ['the paymaster validation reverts (AA33)', () => bundlerError(-32500, 'AA33 reverted 0x')],
     ['the account validation reverts (AA23)', () => bundlerError(-32500, 'AA23 reverted (or OOG)')],
-    ['the token quote reverts', () => new Error('pimlico_getTokenQuotes error: execution reverted')],
+    ['the token quote reverts', () => new Error('jaw_getTokenQuotes error: execution reverted')],
   ])('stays retryable when %s', async (_label, error) => {
     erc20Mock.mockRejectedValue(error());
     await mount(
@@ -861,9 +890,7 @@ describe('useGasEstimation fee-token outcome per ERC-20 result', () => {
     });
 
     it('keeps a quote failure retryable', async () => {
-      await rejectWith(
-        new Erc20EstimationError('quote', new Error('pimlico_getTokenQuotes error: execution reverted'))
-      );
+      await rejectWith(new Erc20EstimationError('quote', new Error('jaw_getTokenQuotes error: execution reverted')));
 
       expect(usdcNow().estimationReverted).toBeFalsy();
       expect(blockNow()).toBe('estimation-failed');

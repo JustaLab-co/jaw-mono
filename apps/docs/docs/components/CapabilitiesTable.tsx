@@ -62,9 +62,12 @@ function CapabilityCell({ supported }: { supported: boolean | null }) {
   return supported ? <CheckIcon /> : <XIcon />;
 }
 
-function FeeTokensCell({ tokens }: { tokens: string[] | null }) {
+function FeeTokensCell({ tokens }: { tokens: string[] | 'dynamic' | null }) {
   if (tokens === null) {
     return <LoadingDot />;
+  }
+  if (tokens === 'dynamic') {
+    return <span style={{ fontSize: '0.875rem' }}>Dynamic</span>;
   }
   if (tokens.length === 0) {
     return <span style={{ color: '#94a3b8' }}>-</span>;
@@ -131,7 +134,7 @@ export function CapabilitiesTable({ type }: CapabilitiesTableProps) {
     return cap.supported === true || cap.status === 'supported';
   };
 
-  const getFeeTokens = (hexId: string): string[] | null => {
+  const getFeeTokens = (hexId: string): string[] | 'dynamic' | null => {
     if (loading) return null;
     if (!capabilities) return [];
 
@@ -141,11 +144,14 @@ export function CapabilitiesTable({ type }: CapabilitiesTableProps) {
     const feeToken = chainCaps.feeToken as
       | {
           supported?: boolean;
+          mode?: 'dynamic';
           tokens?: Array<{ symbol: string }>;
         }
       | undefined;
 
-    if (!feeToken?.supported || !feeToken.tokens) return [];
+    if (!feeToken?.supported) return [];
+    if (feeToken.mode === 'dynamic') return 'dynamic';
+    if (!feeToken.tokens) return [];
 
     return feeToken.tokens.map((t) => t.symbol);
   };
