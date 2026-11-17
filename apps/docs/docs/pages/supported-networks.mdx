@@ -40,7 +40,9 @@ These contracts are deployed at the same address across all supported networks.
 | **Batch**       | Atomic batch transactions via `wallet_sendCalls` (EIP-5792) - all calls succeed or fail together |
 | **Gasless**     | Sponsored transactions via paymaster service (ERC-7677) - users don't pay gas                    |
 | **Permissions** | Permission system for delegating spend and call rights to third parties                          |
-| **Fee Tokens**  | Tokens that can be used to pay for gas fees on each network                                      |
+| **Fee Tokens**  | Tokens that can be used to pay for gas fees on each network, or **Dynamic**                      |
+
+On networks marked **Dynamic**, users can pay for gas with any token they hold, as long as the paymaster can price it. There is no fixed list: when a user sends a transaction, the wallet checks their balances on that network and offers the tokens that can pay. On other networks, only the tokens listed in the table can pay for gas.
 
 ## Related
 
