@@ -267,11 +267,14 @@ export function useGasEstimation({
     const updatedToken = feeTokens.find((t) => t.address.toLowerCase() === selectedFeeToken.address.toLowerCase());
 
     // Update if either fee value changed (new estimate came in) — the ceiling can
-    // move even when the realistic display rounds to the same string.
+    // move even when the realistic display rounds to the same string — or the token
+    // can no longer pay, e.g. it lost its quote: a selection still marked payable
+    // with no cost leaves the fee row estimating and Confirm disabled.
     if (
       updatedToken &&
       (updatedToken.gasCostFormatted !== selectedFeeToken.gasCostFormatted ||
-        updatedToken.gasCostMaxFormatted !== selectedFeeToken.gasCostMaxFormatted)
+        updatedToken.gasCostMaxFormatted !== selectedFeeToken.gasCostMaxFormatted ||
+        updatedToken.isSelectable !== selectedFeeToken.isSelectable)
     ) {
       setSelectedFeeToken(updatedToken);
     }

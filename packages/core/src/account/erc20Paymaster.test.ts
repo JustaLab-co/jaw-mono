@@ -286,8 +286,30 @@ describe('fetchTokenQuotes and the calling dApp', () => {
         );
 
         await expect(fetchTokenQuotes(`${JAW_PAYMASTER_URL}?chainId=8453`, 8453, ['0xabc'])).rejects.toThrow(
-            'pimlico_getTokenQuotes failed with 500: {"statusCode":500,"message":"Internal server error"}'
+            'jaw_getTokenQuotes failed with 500: {"statusCode":500,"message":"Internal server error"}'
         );
+    });
+});
+
+// ENGR-1462: the quote method is `jaw_getTokenQuotes`, no longer Pimlico's name.
+describe('fetchTokenQuotes method name', () => {
+    afterEach(() => {
+        vi.unstubAllGlobals();
+    });
+
+    it('asks for quotes with jaw_getTokenQuotes', async () => {
+        const quote = { token: '0xabc', postOpGas: '0x1', exchangeRate: '0x2', paymaster: '0xdef' };
+        const fetchMock = vi.fn(
+            async () => new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result: { quotes: [quote] } }))
+        );
+        vi.stubGlobal('fetch', fetchMock);
+
+        const quotes = await fetchTokenQuotes(`${JAW_PAYMASTER_URL}?chainId=8453`, 8453, ['0xabc']);
+
+        const body = JSON.parse((fetchMock.mock.calls[0] as unknown as [string, { body: string }])[1].body);
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(body.method).toBe('jaw_getTokenQuotes');
+        expect(quotes).toEqual([{ tokenAddress: '0xabc', postOpGas: 1n, exchangeRate: 2n, paymasterAddress: '0xdef' }]);
     });
 });
 
@@ -342,7 +364,7 @@ describe('estimateErc20PaymasterCosts failures', () => {
             'fetch',
             vi.fn(async (_url: string, init: { body: string }) => {
                 const { id, method } = JSON.parse(init.body);
-                if (method === 'pimlico_getTokenQuotes') {
+                if (method === 'jaw_getTokenQuotes') {
                     return new Response(JSON.stringify({ jsonrpc: '2.0', id, result: quotes }));
                 }
                 if (method === failing) {
@@ -384,7 +406,7 @@ describe('estimateErc20PaymasterCosts failures', () => {
         expect(error.name).toBe('Erc20EstimationError');
         expect(error.phase).toBe('quote');
         expect(error.reason).toBe('unknown');
-        expect(error.message).toBe('pimlico_getTokenQuotes failed with 500: Internal server error');
+        expect(error.message).toBe('jaw_getTokenQuotes failed with 500: Internal server error');
         expect(error.cause).toBeInstanceOf(Error);
         expect((error.cause as Error).message).toBe(error.message);
     });
@@ -403,7 +425,7 @@ describe('estimateErc20PaymasterCosts failures', () => {
         const error = await failure(estimate());
 
         expect(error.phase).toBe('quote');
-        expect(error.message).toBe('pimlico_getTokenQuotes error: bad token');
+        expect(error.message).toBe('jaw_getTokenQuotes error: bad token');
     });
 
     it('marks an empty quote list as the quote phase', async () => {
@@ -528,6 +550,52 @@ describe('estimateErc20PaymasterCosts failures', () => {
         expect(result.tokenCostMax).toBeGreaterThan(0n);
         expect(result.tokenCost).toBeLessThanOrEqual(result.tokenCostMax);
         expect(result.hasSufficientBalance).toBe(false);
+    });
+
+    // PR 653: an owner holding a token the paymaster cannot price, listed before
+    // USDC, could not pay with USDC either — the stub request named the unpriced one.
+    it('estimates with a token the paymaster priced when an unpriced one comes first', async () => {
+        const UNPRICED = '0x4e65fE4DbA92790696d040ac24Aa414708F5c0AB';
+        answers.eth_estimateUserOperationGas = {
+            preVerificationGas: '0xc350',
+            verificationGasLimit: '0xea60',
+            callGasLimit: '0x11170',
+            paymasterVerificationGasLimit: '0x9c40',
+            paymasterPostOpGasLimit: '0x10d88',
+        };
+        const stubTokens: string[] = [];
+        const callData: string[] = [];
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(async (_url: string, init: { body: string }) => {
+                const { id, method, params } = JSON.parse(init.body);
+                const reply = (body: object) => new Response(JSON.stringify({ jsonrpc: '2.0', id, ...body }));
+                if (method === 'jaw_getTokenQuotes') return reply({ result: QUOTES }); // USDC only
+                if (method === 'pm_getPaymasterStubData') {
+                    const token = String(params[3]?.token);
+                    stubTokens.push(token);
+                    if (token.toLowerCase() === UNPRICED.toLowerCase()) {
+                        return reply({ error: { code: -32602, message: `no price for ${token}` } });
+                    }
+                }
+                if (method === 'eth_estimateUserOperationGas') callData.push(String(params[0].callData).toLowerCase());
+                if (method === 'eth_simulateV1') return reply({ error: { code: -32601, message: 'not supported' } });
+                return reply({ result: answers[method] });
+            })
+        );
+
+        const results = await estimateErc20PaymasterCosts(account, calls, chain, PAYMASTER_URL, [
+            { address: UNPRICED, symbol: 'aBasUSDC', decimals: 6, balance: 1n },
+            ...tokens,
+        ]);
+
+        expect(stubTokens.length).toBeGreaterThan(0);
+        expect(stubTokens.every((token) => token.toLowerCase() === TOKEN.toLowerCase())).toBe(true);
+        // The dummy approve goes to the priced token, never the unpriced one.
+        expect(callData.length).toBeGreaterThan(0);
+        expect(callData.every((data) => !data.includes(UNPRICED.slice(2).toLowerCase()))).toBe(true);
+        expect(results.map((r) => r.tokenAddress)).toEqual([TOKEN]);
+        expect(results[0].tokenCostMax).toBeGreaterThan(0n);
     });
 
     it('marks a bundler failure after a permission lookup as the userOp phase', async () => {

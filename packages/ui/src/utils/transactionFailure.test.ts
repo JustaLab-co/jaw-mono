@@ -335,7 +335,7 @@ describe('isRevert', () => {
     ['the paymaster validation reverting (AA33)', bundlerError(-32500, 'AA33 reverted 0x')],
     ['the paymaster validation reverting with a call revert code (AA33)', bundlerError(-32521, 'AA33 reverted 0x')],
     ['the account validation reverting (AA23)', bundlerError(-32500, 'AA23 reverted (or OOG)')],
-    ['the token quote failing', new Error('pimlico_getTokenQuotes error: execution reverted')],
+    ['the token quote failing', new Error('jaw_getTokenQuotes error: execution reverted')],
   ])('leaves %s retryable', (_label, error) => {
     expect(isRevert(error)).toBe(false);
   });

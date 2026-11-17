@@ -21,7 +21,7 @@ import { simulateUserOpGasUsage, type MeasuredUserOpGas } from './userOpGasSimul
 import { jawHttp } from '../utils/jawHttp.js';
 
 /**
- * Token quote from Pimlico's ERC-20 paymaster
+ * Token quote from the JAW ERC-20 paymaster
  */
 export interface TokenQuote {
     tokenAddress: Address;
@@ -220,7 +220,7 @@ export function computeEffectiveGasPrice(
 }
 
 /**
- * Fetches token quotes from Pimlico's ERC-20 paymaster.
+ * Fetches token quotes from the ERC-20 paymaster.
  * This gets the exchange rate and postOpGas for each token.
  *
  * @param paymasterUrl - The paymaster URL (e.g., JAW_PAYMASTER_URL with chainId)
@@ -233,13 +233,13 @@ export async function fetchTokenQuotes(
     chainId: number,
     tokens: Address[]
 ): Promise<TokenQuote[]> {
-    // Pimlico expects:
+    // The paymaster expects:
     // - id as a number (not UUID string)
     // - params as [{tokens: [...]}, entryPointAddress, chainIdHex]
     const requestBody = {
         jsonrpc: '2.0',
         id: 1,
-        method: 'pimlico_getTokenQuotes',
+        method: 'jaw_getTokenQuotes',
         params: [{ tokens }, entryPoint08Address, `0x${chainId.toString(16)}`],
     };
 
@@ -262,20 +262,18 @@ export async function fetchTokenQuotes(
     // surfaced as "no quotes array" and hid the status the proxy answered with.
     if (!response.ok) {
         const body = await response.text();
-        throw new Error(
-            `pimlico_getTokenQuotes failed with ${response.status}${body ? `: ${body.slice(0, 200)}` : ''}`
-        );
+        throw new Error(`jaw_getTokenQuotes failed with ${response.status}${body ? `: ${body.slice(0, 200)}` : ''}`);
     }
 
     const data = await response.json();
 
     if (data.error) {
-        throw new Error(`pimlico_getTokenQuotes error: ${data.error.message || JSON.stringify(data.error)}`);
+        throw new Error(`jaw_getTokenQuotes error: ${data.error.message || JSON.stringify(data.error)}`);
     }
 
     const result = data.result;
     if (!result?.quotes || !Array.isArray(result.quotes)) {
-        throw new Error('Invalid response from pimlico_getTokenQuotes: no quotes array');
+        throw new Error('Invalid response from jaw_getTokenQuotes: no quotes array');
     }
 
     const quotes = result.quotes.map(
@@ -295,7 +293,7 @@ export async function fetchTokenQuotes(
  * This:
  * 1. Gets token quotes from the paymaster
  * 2. Prepares a UserOp WITH the paymaster (so estimation works without ETH)
- * 3. Calculates the token cost for each using Pimlico's formula
+ * 3. Calculates the token cost for each from the paymaster's exchange rate
  *
  * When `permissionId` is provided, calls are routed through the permissions manager
  *
@@ -336,10 +334,12 @@ export async function estimateErc20PaymasterCosts(
     // Use the first quote's paymaster address (should be same for all)
     const paymasterAddress = quotes[0]?.paymasterAddress || ERC20_PAYMASTER_ADDRESS;
 
-    // Create a dummy approval call (we'll use the first token for estimation)
-    // Gas cost is similar regardless of which token we approve
+    // Create a dummy approval call. Gas cost is similar regardless of which token
+    // we approve, but it has to be one the paymaster priced: the stub request
+    // below names it, and a token it cannot price fails the estimate for all.
+    const estimationToken = quotes[0].tokenAddress;
     const approvalCall = {
-        to: tokens[0].address,
+        to: estimationToken,
         value: 0n,
         data: encodeFunctionData({
             abi: erc20Abi,
@@ -382,7 +382,7 @@ export async function estimateErc20PaymasterCosts(
 
     // 3. Prepare UserOp WITH the paymaster configured
     // This is key - the paymaster being included means estimation won't fail with AA21
-    const bundlerClient = getBundlerClient(chain, paymasterUrl, { token: tokens[0].address });
+    const bundlerClient = getBundlerClient(chain, paymasterUrl, { token: estimationToken });
 
     // Fire the base-fee fetch in parallel with the userOp preparation — the two are
     // independent and the block is only consumed after the userOp resolves. Reuse the
@@ -444,7 +444,7 @@ function sumGasLimitsExceptPostOp(gas: UserOpGasFields): bigint {
 
 /**
  * Calculates the required prefund (total gas cost in wei) from userOp gas fields.
- * This follows Pimlico's getRequiredPrefund formula for EntryPoint v0.7/0.8.
+ * This follows the EntryPoint's getRequiredPrefund formula for v0.7/0.8.
  */
 export function getRequiredPrefund(gas: UserOpGasFields): bigint {
     const totalGas = sumGasLimitsExceptPostOp(gas) + (gas.paymasterPostOpGasLimit || 0n);
