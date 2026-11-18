@@ -518,6 +518,25 @@ describe('useGasEstimation fee-token outcome per ERC-20 result', () => {
     expect(hook.tokenEstimates.map((e) => e.tokenAddress)).toEqual([USDC, USDT]);
   });
 
+  it.each([
+    ['the estimate fails', () => erc20Mock.mockRejectedValue(new Error('execution reverted'))],
+    ['the balance cannot cover it', () => erc20Mock.mockRejectedValue(new Error("AA21 didn't pay prefund"))],
+    ['the paymaster leaves the token out', () => erc20Mock.mockResolvedValue([])],
+  ])('a token priced before drops its quote rates when %s', async (_, nextRound) => {
+    const rates = { exchangeRate: 3_300_000_000n, exchangeRateNativeToUsd: 3_300_000_000n };
+    erc20Mock.mockResolvedValue([{ ...usdcEstimate, ...rates }]);
+    await mount(ethOk(), [nativeEth(10n ** 18n), token({})]);
+    expect(usdcNow()).toMatchObject(rates);
+
+    nextRound();
+    await act(async () => hook.refetch());
+    await flush();
+
+    // Same state as a token never quoted: its balance shows in the token, not at an old price.
+    expect(usdcNow().exchangeRate).toBeUndefined();
+    expect(usdcNow().exchangeRateNativeToUsd).toBeUndefined();
+  });
+
   it('success: a funded token the paymaster did not quote keeps the round healthy', async () => {
     erc20Mock.mockResolvedValue([]);
     await mount(ethOk(), [nativeEth(10n ** 18n), token({})]);

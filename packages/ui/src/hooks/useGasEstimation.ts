@@ -129,6 +129,11 @@ function unpriced(token: FeeTokenOption): FeeTokenOption {
     estimationReverted: undefined,
     gasCostFormatted: undefined,
     gasCostMaxFormatted: undefined,
+    gasCost: undefined,
+    gasCostMax: undefined,
+    // The previous round's rates would keep pricing the balance of a token with no estimate now.
+    exchangeRate: undefined,
+    exchangeRateNativeToUsd: undefined,
     isSelectable: false,
   };
 }
@@ -274,6 +279,10 @@ export function useGasEstimation({
       updatedToken &&
       (updatedToken.gasCostFormatted !== selectedFeeToken.gasCostFormatted ||
         updatedToken.gasCostMaxFormatted !== selectedFeeToken.gasCostMaxFormatted ||
+        updatedToken.gasCost !== selectedFeeToken.gasCost ||
+        updatedToken.gasCostMax !== selectedFeeToken.gasCostMax ||
+        updatedToken.exchangeRate !== selectedFeeToken.exchangeRate ||
+        updatedToken.exchangeRateNativeToUsd !== selectedFeeToken.exchangeRateNativeToUsd ||
         updatedToken.isSelectable !== selectedFeeToken.isSelectable)
     ) {
       setSelectedFeeToken(updatedToken);
@@ -400,6 +409,10 @@ export function useGasEstimation({
             estimationReverted: undefined,
             gasCostFormatted: estimate.tokenCostFormatted,
             gasCostMaxFormatted: estimate.tokenCostMaxFormatted,
+            gasCost: estimate.tokenCost,
+            gasCostMax: estimate.tokenCostMax,
+            exchangeRate: estimate.exchangeRate,
+            exchangeRateNativeToUsd: estimate.exchangeRateNativeToUsd,
             isSelectable: estimate.hasSufficientBalance,
           };
         });
