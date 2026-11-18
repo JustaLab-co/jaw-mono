@@ -1,3 +1,13 @@
+## 1.14.3 (2026-11-18)
+
+### 🩹 Fixes
+
+- **ui:** keep the fee picker list short and show erc-20 balances in the token ([#657](https://github.com/JustaLab-co/jaw-mono/pull/657))
+
+### ❤️ Thank You
+
+- Leo Franklin @LeoFranklin015
+
 ## 1.14.2 (2026-11-18)
 
 ### 🩹 Fixes
