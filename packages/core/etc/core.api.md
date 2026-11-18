@@ -1466,6 +1466,7 @@ export interface TokenEstimate {
     decimals: number;
     // (undocumented)
     exchangeRate: bigint;
+    exchangeRateNativeToUsd?: bigint;
     hasSufficientBalance: boolean;
     // (undocumented)
     paymasterAddress: Address_2;
@@ -1494,8 +1495,8 @@ export interface TokenInfo {
 
 // @public
 export interface TokenQuote {
-    // (undocumented)
     exchangeRate: bigint;
+    exchangeRateNativeToUsd?: bigint;
     // (undocumented)
     paymasterAddress: Address_2;
     // (undocumented)

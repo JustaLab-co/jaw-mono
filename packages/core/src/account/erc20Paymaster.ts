@@ -26,7 +26,14 @@ import { jawHttp } from '../utils/jawHttp.js';
 export interface TokenQuote {
     tokenAddress: Address;
     postOpGas: bigint;
+    /** Native wei to the token's smallest unit, per 1e18 wei, with the paymaster's markup. */
     exchangeRate: bigint;
+    /**
+     * Native wei to USD with 6 decimals, per 1e18 wei, with the same markup as `exchangeRate`.
+     * The markup cancels in `amount * exchangeRateNativeToUsd / exchangeRate / 1e6`, which is
+     * the token amount's market value in USD. Absent when the paymaster does not send it.
+     */
+    exchangeRateNativeToUsd?: bigint;
     paymasterAddress: Address;
 }
 
@@ -53,6 +60,8 @@ export interface TokenEstimate {
     tokenCostMaxFormatted: string;
     paymasterAddress: Address;
     exchangeRate: bigint;
+    /** From the quote: see {@link TokenQuote.exchangeRateNativeToUsd}. */
+    exchangeRateNativeToUsd?: bigint;
     /**
      * Whether the user has sufficient balance to pay with this token.
      * Checked against tokenCostMax so a transaction is never started that could
@@ -277,10 +286,17 @@ export async function fetchTokenQuotes(
     }
 
     const quotes = result.quotes.map(
-        (q: { token: string; postOpGas: string; exchangeRate: string; paymaster: string }) => ({
+        (q: {
+            token: string;
+            postOpGas: string;
+            exchangeRate: string;
+            exchangeRateNativeToUsd?: string;
+            paymaster: string;
+        }) => ({
             tokenAddress: q.token as Address,
             postOpGas: BigInt(q.postOpGas),
             exchangeRate: BigInt(q.exchangeRate),
+            ...(q.exchangeRateNativeToUsd ? { exchangeRateNativeToUsd: BigInt(q.exchangeRateNativeToUsd) } : {}),
             paymasterAddress: q.paymaster as Address,
         })
     );
@@ -557,6 +573,9 @@ export function calculateTokenEstimatesFromGas(
             tokenCostMaxFormatted,
             paymasterAddress: quote.paymasterAddress,
             exchangeRate: quote.exchangeRate,
+            ...(quote.exchangeRateNativeToUsd !== undefined
+                ? { exchangeRateNativeToUsd: quote.exchangeRateNativeToUsd }
+                : {}),
             hasSufficientBalance,
         };
     });
