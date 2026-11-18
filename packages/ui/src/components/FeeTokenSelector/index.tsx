@@ -103,6 +103,16 @@ const formatBalance = (balance: string, symbol: string) => {
   });
 };
 
+// An ERC-20 balance as its row shows it. From 1 up it keeps two decimals, or a balance such as
+// "12,345.678912 WMON" overflows the row and is cut off, symbol and all. Under 1 the decimals
+// are what tell the amount apart, so it reads as formatBalance has it.
+const formatErc20Balance = (balance: string, symbol: string) => {
+  const num = parseFloat(balance);
+  return num >= 1
+    ? num.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 })
+    : formatBalance(balance, symbol);
+};
+
 export const FeeTokenSelector = ({
   tokens,
   selectedToken,
@@ -214,7 +224,8 @@ export const FeeTokenSelector = ({
           <div className="text-muted-foreground text-body-xs truncate">
             Bal:{' '}
             <SubText>
-              {balanceInUsd || `${formatBalance(token.balanceFormatted, token.symbol)} ${token.symbol}`}
+              {balanceInUsd ||
+                `${(token.isNative ? formatBalance : formatErc20Balance)(token.balanceFormatted, token.symbol)} ${token.symbol}`}
             </SubText>
           </div>
         </div>
@@ -259,7 +270,7 @@ export const FeeTokenSelector = ({
       {/* Stays inside the dialog card: below the button when it fits there, above it otherwise,
           and never taller than the room it has (Radix flips it and sets the available height). */}
       <PopoverContent
-        className="flex max-h-[var(--radix-popover-content-available-height)] w-64 flex-col p-0"
+        className="flex max-h-[var(--radix-popover-content-available-height)] w-72 flex-col p-0"
         align="end"
         sideOffset={4}
         collisionBoundary={boundary ?? undefined}

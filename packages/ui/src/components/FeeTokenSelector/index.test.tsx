@@ -143,6 +143,24 @@ describe('FeeTokenSelector balances', () => {
     expect(rows().map((r) => r.balance)).toEqual(['Bal: $300.0000', 'Bal: 1.26 USDC', 'Bal: 0.002001 AMZN']);
   });
 
+  it('keeps two decimals on an ERC-20 balance of 1 or more, so it fits the row', () => {
+    const held = (symbol: string, balanceFormatted: string, i: number): FeeTokenOption => ({
+      ...amzn,
+      uid: symbol,
+      symbol,
+      address: `0x${String(i).repeat(40)}`,
+      balanceFormatted,
+    });
+    openPicker([eth, held('WMON', '12345.678912', 1), held('AERO', '42.123456', 2), held('DEGEN', '123456.789', 3)]);
+
+    expect(rows().map((r) => r.balance)).toEqual([
+      'Bal: $300.0000',
+      'Bal: 12,345.68 WMON',
+      'Bal: 42.12 AERO',
+      'Bal: 123,456.79 DEGEN',
+    ]);
+  });
+
   it('never shows a small stablecoin balance as 0', () => {
     // 0.0042 USDC: under a cent, which two decimals would round to "0".
     openPicker([eth, { ...usdc, balance: 4_200n, balanceFormatted: '0.0042' }]);
@@ -265,5 +283,72 @@ describe('FeeTokenSelector without a list', () => {
     const container = mount([]);
 
     expect(container.textContent).toBe('');
+  });
+});
+
+/**
+ * jsdom lays nothing out, so the boxes Radix measures are set by hand: a 400×550 dialog card in a
+ * 1280×1000 window, the fee token button near the card's bottom, and a 256×260 list.
+ */
+function stubLayout(card: Element, trigger: Element) {
+  const box = (x: number, y: number, width: number, height: number) => DOMRect.fromRect({ x, y, width, height });
+  const boxes = new Map<Element, DOMRect>([
+    [card, box(440, 225, 400, 550)],
+    [trigger, box(760, 612, 72, 28)],
+  ]);
+  const rect = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+    return boxes.get(this) ?? box(0, 0, 0, 0);
+  });
+
+  const sized = (el: Element) => el.hasAttribute('data-radix-popper-content-wrapper');
+  const own = (el: Element, name: 'clientWidth' | 'clientHeight', value: number) =>
+    Object.defineProperty(el, name, { configurable: true, value });
+  own(card, 'clientWidth', 400);
+  own(card, 'clientHeight', 550);
+  own(document.documentElement, 'clientWidth', 1280);
+  own(document.documentElement, 'clientHeight', 1000);
+  const offsetWidth = vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(function (
+    this: HTMLElement
+  ) {
+    return sized(this) ? 256 : 0;
+  });
+  const offsetHeight = vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (
+    this: HTMLElement
+  ) {
+    return sized(this) ? 260 : 0;
+  });
+
+  return () => {
+    rect.mockRestore();
+    offsetWidth.mockRestore();
+    offsetHeight.mockRestore();
+    delete (document.documentElement as unknown as Record<string, unknown>).clientWidth;
+    delete (document.documentElement as unknown as Record<string, unknown>).clientHeight;
+  };
+}
+
+/** Lets Radix finish measuring and placing the list, which it does asynchronously. */
+async function settle() {
+  for (let i = 0; i < 5; i++) {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  }
+}
+
+describe('FeeTokenSelector placement', () => {
+  it('opens upward when the dialog card has no room below the button, though the window does', async () => {
+    const card = mount([eth, usdc, amzn], { inDialog: true });
+    const trigger = card.querySelector<HTMLButtonElement>('button[role="combobox"]')!;
+    const restore = stubLayout(card, trigger);
+    try {
+      act(() => trigger.click());
+      await settle();
+
+      // Below the button: 135px left in the card, 360px in the window. The list needs 260.
+      expect(picker()?.getAttribute('data-side')).toBe('top');
+    } finally {
+      restore();
+    }
   });
 });
