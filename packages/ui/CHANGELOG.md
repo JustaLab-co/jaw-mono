@@ -1,3 +1,13 @@
+## 1.14.2 (2026-11-18)
+
+### 🩹 Fixes
+
+- **ui:** price every fee token in dollars and show its "Up to" ([#655](https://github.com/JustaLab-co/jaw-mono/pull/655))
+
+### ❤️ Thank You
+
+- Nikhil Kumar @nikhilkumar1612
+
 ## 1.14.1 (2026-11-18)
 
 ### 🧱 Updated Dependencies
