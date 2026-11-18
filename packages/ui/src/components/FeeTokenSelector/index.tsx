@@ -93,9 +93,10 @@ const formatBalance = (balance: string, symbol: string) => {
   const num = parseFloat(balance);
   if (num === 0) return '0';
   if (num < 0.0001) return subscriptDecimal(num);
-  // For stablecoins, show 2 decimals; for native tokens (ETH, FLR, etc.), show more
+  // For stablecoins, show 2 decimals; for native tokens (ETH, FLR, etc.), show more. Under a
+  // cent a stablecoin keeps more decimals too, or two would round it to "0".
   const stablecoins = ['USDC', 'USDT', 'DAI'];
-  const decimals = stablecoins.includes(symbol.toUpperCase()) ? 2 : 6;
+  const decimals = stablecoins.includes(symbol.toUpperCase()) && num >= 0.01 ? 2 : 6;
   return num.toLocaleString('en-US', {
     minimumFractionDigits: 0,
     maximumFractionDigits: decimals,
@@ -113,6 +114,7 @@ export const FeeTokenSelector = ({
   chainId,
 }: FeeTokenSelectorProps) => {
   const [open, setOpen] = useState(false);
+  const [boundary, setBoundary] = useState<Element | null>(null);
 
   if (isLoading) {
     return (
@@ -145,8 +147,10 @@ export const FeeTokenSelector = ({
     }
   };
 
-  // Balances in dollars; the token amount when there is no price (see TokenRow).
-  const getBalanceUsd = (token: FeeTokenOption): string => balanceUsd(token, nativeTokenPrice) ?? '';
+  // Only the native balance reads in dollars. An ERC-20 balance reads in the token itself, as the
+  // owner holds it, and so does the native one when there is no price (see TokenRow).
+  const nativeBalanceUsd = (token: FeeTokenOption): string =>
+    token.isNative ? (balanceUsd(token, nativeTokenPrice) ?? '') : '';
 
   // Get gas cost for a token
   // For ERC-20 tokens, use the paymaster estimate when there is one
@@ -183,7 +187,7 @@ export const FeeTokenSelector = ({
 
   // Token row component
   const TokenRow = ({ token, showGasCost = true }: { token: FeeTokenOption; showGasCost?: boolean }) => {
-    const balanceInUsd = getBalanceUsd(token);
+    const balanceInUsd = nativeBalanceUsd(token);
     const gasCost = showGasCost ? getGasCost(token) : null;
     const isSelected = selectedToken?.address === token.address;
 
@@ -243,13 +247,24 @@ export const FeeTokenSelector = ({
           aria-expanded={open}
           disabled={disabled}
           className="border-muted-foreground/30 h-7 gap-1 rounded-md px-2 text-xs font-medium"
+          // The dialog card the picker opens in. Read from the click, which keyboard activation
+          // fires too, so it needs no ref through Button.
+          onClick={(event) => setBoundary(event.currentTarget.closest('[role="dialog"]'))}
         >
           {selectedToken && getTokenIcon(selectedToken, chainId, 'size-3.5')}
           <span>{selectedToken?.symbol || 'Select'}</span>
           <ChevronDown className="size-3 opacity-50" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-64 p-0" align="end" sideOffset={4}>
+      {/* Stays inside the dialog card: below the button when it fits there, above it otherwise,
+          and never taller than the room it has (Radix flips it and sets the available height). */}
+      <PopoverContent
+        className="flex max-h-[var(--radix-popover-content-available-height)] w-64 flex-col p-0"
+        align="end"
+        sideOffset={4}
+        collisionBoundary={boundary ?? undefined}
+        collisionPadding={8}
+      >
         {/* Header */}
         <div className="flex items-center justify-between border-b p-3">
           <h3 className="text-sm font-semibold">Pay with</h3>
@@ -258,8 +273,10 @@ export const FeeTokenSelector = ({
           </button>
         </div>
 
-        {/* Token List — native first, then ERC-20s (no section headers). */}
-        <div className="max-h-64 overflow-y-auto p-1.5">
+        {/* Token List — native first, then ERC-20s (no section headers). About three and a half
+            rows show, so the cut-off row tells the owner there is more to scroll. Scrolling it
+            does not scroll the dialog behind. */}
+        <div className="max-h-44 min-h-0 overflow-y-auto overscroll-contain p-1.5">
           {nativeToken && <TokenRow token={nativeToken} />}
           {erc20Tokens.map((token) => (
             <TokenRow key={token.address} token={token} showGasCost={true} />
