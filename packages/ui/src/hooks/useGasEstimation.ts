@@ -131,6 +131,9 @@ function unpriced(token: FeeTokenOption): FeeTokenOption {
     gasCostMaxFormatted: undefined,
     gasCost: undefined,
     gasCostMax: undefined,
+    // The previous round's rates would keep pricing the balance of a token with no estimate now.
+    exchangeRate: undefined,
+    exchangeRateNativeToUsd: undefined,
     isSelectable: false,
   };
 }
