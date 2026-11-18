@@ -2,11 +2,13 @@
 
 import { useState, type ReactNode } from 'react';
 import { Info } from 'lucide-react';
+import { formatUnits } from 'viem';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip';
 import { FeeTokenSelector, type FeeTokenOption } from '../FeeTokenSelector';
 import { Eyebrow, InlineWarning } from '../primitives';
 import { SubText } from '../SubText';
 import { subscriptDecimal } from '../../utils/displayFormat';
+import { erc20FeeCost } from '../../utils/feeCost';
 import type { BlockReason } from '../../utils/transactionFailure';
 
 /** Native amount with dust in subscript notation, e.g. "0.0₅2131 ETH". */
@@ -162,9 +164,10 @@ export function NetworkFeeRow({
 
     if (isPayingWithErc20 && selectedFeeToken) {
       const ceiling = selectedFeeToken.gasCostMaxFormatted ?? selectedFeeToken.gasCostFormatted;
-      // `gasCostFormatted` is a quantity of the fee token, not a fiat figure — and the hook has no
-      // price source for one. It used to render as `$0.0004` beside `≈ 0.0004 WETH`: the same number
-      // wearing two units, one of them wrong by orders of magnitude. One honest line instead.
+      // `gasCostFormatted` is a quantity of the fee token, not a fiat figure. Its dollar value comes
+      // from the paymaster's rate and the native price (`erc20FeeCost`), never from the symbol, and
+      // shows the same way as a native fee: `$0.0034 ≈ 0.0003 VVV`. Without a rate or a price, the
+      // token amount alone.
       //
       // It can also mark the token unpayable (useGasEstimation): a sentinel string or required
       // amount with no ceiling, a priced estimate the balance can't cover, or a settled zero
@@ -184,7 +187,11 @@ export function NetworkFeeRow({
         }
         // The balance must cover the worst-case ceiling; the ceiling-less legs carry the
         // required amount (or a sentinel) as the cost.
-        const needed = selectedFeeToken.gasCostMaxFormatted ?? selectedFeeToken.gasCostFormatted;
+        // The exact ceiling when the estimate has it: the preformatted string rounds dust to 0.0000.
+        const needed =
+          selectedFeeToken.gasCostMax !== undefined
+            ? formatUnits(selectedFeeToken.gasCostMax, selectedFeeToken.decimals)
+            : (selectedFeeToken.gasCostMaxFormatted ?? selectedFeeToken.gasCostFormatted);
         return (
           <InlineWarning
             text="Insufficient funds"
@@ -196,20 +203,35 @@ export function NetworkFeeRow({
           />
         );
       }
+      const erc20Cost = erc20FeeCost(selectedFeeToken, nativeTokenPrice);
+      const upTo =
+        erc20Cost?.maxFormatted ??
+        (ceiling && Number.isFinite(Number(ceiling)) ? `${ceiling} ${selectedFeeToken.symbol}` : undefined);
       return (
         <div className="flex flex-col items-start gap-1">
           <p className="font-mono leading-tight">
             {hasTokenCost ? (
-              <span className="text-foreground text-amount">
-                {selectedFeeToken.gasCostFormatted} {selectedFeeToken.symbol}
-              </span>
+              erc20Cost?.usd ? (
+                <>
+                  <span className="text-foreground text-amount">{erc20Cost.usd}</span>
+                  <span className="text-muted-foreground text-body-xs ml-1">
+                    ≈ <SubText>{erc20Cost.formatted}</SubText>
+                  </span>
+                </>
+              ) : (
+                <span className="text-foreground text-amount">
+                  <SubText>
+                    {erc20Cost?.formatted ?? `${selectedFeeToken.gasCostFormatted} ${selectedFeeToken.symbol}`}
+                  </SubText>
+                </span>
+              )
             ) : (
               <span className="text-muted-foreground text-body-sm">Estimating...</span>
             )}
           </p>
-          {ceiling && Number.isFinite(Number(ceiling)) && (
+          {upTo && (
             <p className="text-muted-foreground text-body-xs font-mono">
-              Up to {ceiling} {selectedFeeToken.symbol}
+              Up to <SubText>{upTo}</SubText>
             </p>
           )}
         </div>

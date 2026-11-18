@@ -92,6 +92,51 @@ describe('NetworkFeeRow — ERC-20 fee slot', () => {
     expect(html).not.toContain('text-destructive');
   });
 
+  it('shows a quoted ERC-20 fee in dollars, like a native fee, with its ceiling', () => {
+    const vvv = usdc({
+      symbol: 'VVV',
+      decimals: 18,
+      isSelectable: true,
+      gasCostFormatted: '0.0010',
+      gasCostMaxFormatted: '0.0030',
+      gasCost: 10n ** 15n,
+      gasCostMax: 3n * 10n ** 15n,
+      // 1 ETH buys 1000 VVV; at $3000 per ETH, 0.001 VVV is $0.003.
+      exchangeRate: 1000n * 10n ** 18n,
+    });
+    const html = renderToStaticMarkup(
+      <NetworkFeeRow
+        blockReason={null}
+        nativeSymbol="ETH"
+        nativeTokenPrice={3000}
+        hasSelectablePaymentOption
+        isPayingWithErc20
+        selectedFeeToken={vvv}
+      />
+    );
+    expect(html).toContain('$0.0030');
+    expect(html).toContain('≈ 0.001 VVV');
+    expect(html).toContain('Up to 0.003 VVV');
+  });
+
+  it('shows a dust ERC-20 fee in subscript notation, never as 0.0000', () => {
+    const weth = usdc({
+      symbol: 'WETH',
+      decimals: 18,
+      isSelectable: true,
+      // core preformats both as "0.0000"
+      gasCostFormatted: '0.0000',
+      gasCostMaxFormatted: '0.0000',
+      gasCost: 1_200_000_000_000n,
+      gasCostMax: 2_270_000_000_000n,
+      exchangeRate: 10n ** 18n,
+    });
+    const html = markup(weth);
+    expect(html).not.toContain('0.0000');
+    expect(html).toMatch(/0\.0<sub[^>]*>5<\/sub>12 WETH/);
+    expect(html).toMatch(/Up to 0\.0<sub[^>]*>5<\/sub>227 WETH/);
+  });
+
   it('never shows an "Up to" line alongside a sentinel (the ceiling would be the sentinel itself)', () => {
     const html = markup(usdc({ gasCostFormatted: 'Estimation failed', gasCostMaxFormatted: undefined }));
     expect(html).not.toContain('Up to');

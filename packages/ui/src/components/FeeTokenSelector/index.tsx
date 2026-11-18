@@ -11,6 +11,7 @@ import { subscriptDecimal } from '../../utils/displayFormat';
 import { ChevronDown, X } from 'lucide-react';
 import { TokenIcon } from '../TokenIcon';
 import { SubText } from '../SubText';
+import { balanceUsd, erc20FeeCost, formatUsd, type FeeCostDisplay } from '../../utils/feeCost';
 
 export interface FeeTokenOption {
   uid: string;
@@ -28,6 +29,15 @@ export interface FeeTokenOption {
   gasCostFormatted?: string;
   /** Worst-case fee ceiling (the "up to" amount reserved/approved). */
   gasCostMaxFormatted?: string;
+  /** `gasCostFormatted` in the token's smallest unit, for pricing and formatting it. */
+  gasCost?: bigint;
+  /** `gasCostMaxFormatted` in the token's smallest unit. */
+  gasCostMax?: bigint;
+  /**
+   * The paymaster's rate, native wei to the token's smallest unit. With the native coin's price it
+   * gives the fee in dollars, for any token the paymaster prices.
+   */
+  exchangeRate?: bigint;
   /** Why the paymaster estimation for this token failed, when it failed for a reason other than funds. */
   estimationFailure?: string;
   /** The paymaster estimation failed because the calls revert. */
@@ -90,14 +100,6 @@ const formatBalance = (balance: string, symbol: string) => {
   });
 };
 
-// Format USD value (show at least 4 decimals for small gas amounts)
-const formatUsd = (value: number) => {
-  return `$${value.toLocaleString('en-US', {
-    minimumFractionDigits: 4,
-    maximumFractionDigits: 4,
-  })}`;
-};
-
 export const FeeTokenSelector = ({
   tokens,
   selectedToken,
@@ -141,54 +143,25 @@ export const FeeTokenSelector = ({
     }
   };
 
-  // Calculate USD values for tokens
-  const getBalanceUsd = (token: FeeTokenOption): string => {
-    if (token.isNative && nativeTokenPrice > 0) {
-      const usd = parseFloat(token.balanceFormatted) * nativeTokenPrice;
-      return formatUsd(usd);
-    }
-    // For non-native ERC-20 tokens, show balance with token decimals
-    if (!token.isNative) {
-      const balance = parseFloat(token.balanceFormatted);
-      // Show appropriate decimal places based on token decimals
-      const displayDecimals = token.decimals >= 6 ? 2 : token.decimals;
-      return `${balance.toLocaleString('en-US', {
-        minimumFractionDigits: 0,
-        maximumFractionDigits: displayDecimals,
-      })} ${token.symbol}`;
-    }
-    return '';
-  };
+  // Balances in dollars; the token amount when there is no price (see TokenRow).
+  const getBalanceUsd = (token: FeeTokenOption): string => balanceUsd(token, nativeTokenPrice) ?? '';
 
   // Get gas cost for a token
-  // For ERC-20 tokens, use pre-computed gasCostFormatted if available (from paymaster quote)
-  const getGasCost = (token: FeeTokenOption): { formatted: string; maxFormatted?: string; usd: string } | null => {
+  // For ERC-20 tokens, use the paymaster estimate when there is one
+  const getGasCost = (token: FeeTokenOption): FeeCostDisplay | null => {
     // Tokens with 0 balance - no gas cost to show
     if (token.balance === 0n) {
       return null;
     }
 
-    // If token has pre-computed gas cost (from paymaster quote), use that
+    // A paymaster estimate, or a sentinel ("Insufficient", "Estimation failed") that shows no cost
     if (token.gasCostFormatted) {
-      // Check if it's a valid numeric value (not "Insufficient" or "Estimation failed")
-      const numericPart = token.gasCostFormatted.replace(/[^0-9.]/g, '');
-      const tokenCost = parseFloat(numericPart);
-
-      // If not a valid number, don't show gas cost
-      if (isNaN(tokenCost) || numericPart === '') {
-        return null;
-      }
-
-      return {
-        formatted: token.gasCostFormatted,
-        maxFormatted: token.gasCostMaxFormatted,
-        usd:
-          ['USDC', 'USDT', 'DAI'].includes(token.symbol.toUpperCase()) && !isNaN(tokenCost) ? formatUsd(tokenCost) : '',
-      };
+      return erc20FeeCost(token, nativeTokenPrice);
     }
 
-    // Fallback: derive from the native ETH gas estimate
-    if (!estimatedGasEth) {
+    // An ERC-20 with no estimate yet has nothing to show: the native estimate can't be
+    // turned into a token amount without the token's own rate.
+    if (!token.isNative || !estimatedGasEth) {
       return null;
     }
 
@@ -200,29 +173,15 @@ export const FeeTokenSelector = ({
     // Native token: show the ETH amount directly. The USD value is only added
     // when a price conversion is available; if it failed, we still show the
     // native estimate instead of blanking out.
-    if (token.isNative) {
-      return {
-        formatted: `${formatBalance(estimatedGasEth, token.symbol)} ${token.symbol}`,
-        usd: nativeTokenPrice ? formatUsd(gasEth * nativeTokenPrice) : '',
-      };
-    }
-
-    // For non-native ERC-20 tokens, converting the ETH estimate needs a price
-    if (!nativeTokenPrice) {
-      return null;
-    }
-    const gasUsd = gasEth * nativeTokenPrice;
-    // Show appropriate decimal places based on token decimals
-    const displayDecimals = token.decimals >= 6 ? 3 : token.decimals;
     return {
-      formatted: `${gasUsd.toFixed(displayDecimals)} ${token.symbol}`,
-      usd: formatUsd(gasUsd),
+      formatted: `${formatBalance(estimatedGasEth, token.symbol)} ${token.symbol}`,
+      usd: nativeTokenPrice ? formatUsd(gasEth * nativeTokenPrice) : undefined,
     };
   };
 
   // Token row component
   const TokenRow = ({ token, showGasCost = true }: { token: FeeTokenOption; showGasCost?: boolean }) => {
-    const balanceUsd = getBalanceUsd(token);
+    const balanceInUsd = getBalanceUsd(token);
     const gasCost = showGasCost ? getGasCost(token) : null;
     const isSelected = selectedToken?.address === token.address;
 
@@ -248,25 +207,23 @@ export const FeeTokenSelector = ({
           </div>
           <div className="text-muted-foreground text-body-xs truncate">
             Bal:{' '}
-            <SubText>{balanceUsd || `${formatBalance(token.balanceFormatted, token.symbol)} ${token.symbol}`}</SubText>
+            <SubText>
+              {balanceInUsd || `${formatBalance(token.balanceFormatted, token.symbol)} ${token.symbol}`}
+            </SubText>
           </div>
         </div>
 
-        {/* Gas Cost / Status */}
+        {/* Gas Cost / Status: the dollar figure when priced, and the ceiling whenever it is known */}
         <div className="shrink-0 text-right">
           {gasCost ? (
-            gasCost.usd ? (
-              <>
-                <div className="text-xs font-semibold">{gasCost.usd}</div>
+            <>
+              <div className="text-xs font-semibold">{gasCost.usd ?? <SubText>{gasCost.formatted}</SubText>}</div>
+              {(gasCost.maxFormatted || gasCost.usd) && (
                 <div className="text-muted-foreground text-body-xs">
                   Up to <SubText>{gasCost.maxFormatted ?? gasCost.formatted}</SubText>
                 </div>
-              </>
-            ) : (
-              <div className="text-xs font-semibold">
-                <SubText>{gasCost.formatted}</SubText>
-              </div>
-            )
+              )}
+            </>
           ) : !token.isSelectable ? (
             <span className="text-destructive text-body-xs">{token.balance === 0n ? '0' : 'Insufficient'}</span>
           ) : null}
