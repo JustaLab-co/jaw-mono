@@ -92,6 +92,9 @@ describe('NetworkFeeRow — ERC-20 fee slot', () => {
     expect(html).not.toContain('text-destructive');
   });
 
+  // Paymaster rates at ETH = $3,000 with its 10% markup in both (see utils/feeCost.test.ts).
+  const NATIVE_TO_USD = 3_300_000_000n;
+
   it('shows a quoted ERC-20 fee in dollars, like a native fee, with its ceiling', () => {
     const vvv = usdc({
       symbol: 'VVV',
@@ -101,22 +104,32 @@ describe('NetworkFeeRow — ERC-20 fee slot', () => {
       gasCostMaxFormatted: '0.0030',
       gasCost: 10n ** 15n,
       gasCostMax: 3n * 10n ** 15n,
-      // 1 ETH buys 1000 VVV; at $3000 per ETH, 0.001 VVV is $0.003.
-      exchangeRate: 1000n * 10n ** 18n,
+      // VVV at $3: 0.001 VVV is $0.003.
+      exchangeRate: 1_100n * 10n ** 18n,
+      exchangeRateNativeToUsd: NATIVE_TO_USD,
     });
-    const html = renderToStaticMarkup(
-      <NetworkFeeRow
-        blockReason={null}
-        nativeSymbol="ETH"
-        nativeTokenPrice={3000}
-        hasSelectablePaymentOption
-        isPayingWithErc20
-        selectedFeeToken={vvv}
-      />
-    );
+    // No native price: an ERC-20 fee is priced from its quote alone.
+    const html = markup(vvv);
     expect(html).toContain('$0.0030');
     expect(html).toContain('≈ 0.001 VVV');
     expect(html).toContain('Up to 0.003 VVV');
+  });
+
+  it('prices a USDC fee at the USDC charged, not divided by the markup', () => {
+    // The review's example: 0.01089 USDC charged is about $0.0109, not $0.0099.
+    const html = markup(
+      usdc({
+        isSelectable: true,
+        gasCostFormatted: '0.0109',
+        gasCostMaxFormatted: '0.0200',
+        gasCost: 10_890n,
+        gasCostMax: 20_000n,
+        exchangeRate: 3_300_000_000n,
+        exchangeRateNativeToUsd: NATIVE_TO_USD,
+      })
+    );
+    expect(html).toContain('$0.0109');
+    expect(html).toContain('≈ 0.01089 USDC');
   });
 
   it('shows a dust ERC-20 fee in subscript notation, never as 0.0000', () => {
@@ -129,7 +142,8 @@ describe('NetworkFeeRow — ERC-20 fee slot', () => {
       gasCostMaxFormatted: '0.0000',
       gasCost: 1_200_000_000_000n,
       gasCostMax: 2_270_000_000_000n,
-      exchangeRate: 10n ** 18n,
+      exchangeRate: 1_100_000_000_000_000_000n,
+      exchangeRateNativeToUsd: NATIVE_TO_USD,
     });
     const html = markup(weth);
     expect(html).not.toContain('0.0000');

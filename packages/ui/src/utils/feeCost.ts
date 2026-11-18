@@ -2,38 +2,43 @@ import { formatUnits } from 'viem';
 import { subscriptDecimal } from './displayFormat';
 
 /**
- * The dollar value of an amount of a fee token, from the paymaster quote's exchange rate and the
- * native coin's price. `exchangeRate` is native wei to the token's smallest unit, so
- * `amount * 1e18 / exchangeRate` is the amount in wei. That is the gas the native coin would pay,
- * so a fee shows about the same dollar figure whichever token pays it.
+ * The market value in dollars of an amount of a fee token, from the paymaster quote's two rates.
+ * `exchangeRate` is token units per 1e18 wei and `exchangeRateNativeToUsd` is USD (6 decimals) per
+ * 1e18 wei. Both carry the paymaster's markup, so it cancels in their ratio:
+ * `usd = amount * exchangeRateNativeToUsd / exchangeRate / 1e6`.
  *
- * Returns undefined when there is no rate or no price. The symbol is never taken as a price, so a
- * token that calls itself "USDC" is worth whatever its rate says, not $1.
+ * Undefined without both rates. The symbol is never taken as a price, so a token that calls itself
+ * "USDC" is worth whatever its rates say, not $1.
  */
 export function feeTokenUsd(
   amount: bigint | undefined,
   exchangeRate: bigint | undefined,
-  nativeTokenPrice: number | undefined
+  exchangeRateNativeToUsd: bigint | undefined
 ): number | undefined {
-  if (amount === undefined || exchangeRate === undefined || exchangeRate <= 0n) return undefined;
-  if (!nativeTokenPrice || !(nativeTokenPrice > 0)) return undefined;
-  const wei = (amount * 10n ** 18n) / exchangeRate;
-  return Number(formatUnits(wei, 18)) * nativeTokenPrice;
+  if (amount === undefined || !exchangeRate || exchangeRate <= 0n) return undefined;
+  if (!exchangeRateNativeToUsd || exchangeRateNativeToUsd <= 0n) return undefined;
+  // Scaled to 18 decimals of USD so a dust fee keeps its digits through the integer division.
+  const usd18 = (amount * exchangeRateNativeToUsd * 10n ** 12n) / exchangeRate;
+  return Number(formatUnits(usd18, 18));
 }
 
+/** The paymaster rates of a fee token, from its estimate. */
+type QuoteRates = { exchangeRate?: bigint; exchangeRateNativeToUsd?: bigint };
+
 /**
- * A fee token's balance in dollars: the native coin at its price, an ERC-20 through the paymaster
- * rate from its estimate (as `feeTokenUsd`). The rate may carry the paymaster's markup, so an
- * ERC-20 figure is approximate. Undefined without a price, or for an ERC-20 not yet quoted.
+ * A fee token's balance in dollars: the native coin at its price, an ERC-20 at the market value
+ * its quote gives (`feeTokenUsd`). Undefined when there is no price for it, so the balance shows in
+ * the token instead.
  */
 export function balanceUsd(
-  token: { isNative: boolean; balance: bigint; balanceFormatted: string; exchangeRate?: bigint },
+  token: QuoteRates & { isNative: boolean; balance: bigint; balanceFormatted: string },
   nativeTokenPrice: number | undefined
 ): string | undefined {
-  if (!nativeTokenPrice || !(nativeTokenPrice > 0)) return undefined;
   const usd = token.isNative
-    ? parseFloat(token.balanceFormatted) * nativeTokenPrice
-    : feeTokenUsd(token.balance, token.exchangeRate, nativeTokenPrice);
+    ? nativeTokenPrice && nativeTokenPrice > 0
+      ? parseFloat(token.balanceFormatted) * nativeTokenPrice
+      : undefined
+    : feeTokenUsd(token.balance, token.exchangeRate, token.exchangeRateNativeToUsd);
   return usd === undefined || !Number.isFinite(usd) ? undefined : formatUsd(usd);
 }
 
@@ -76,9 +81,7 @@ export function erc20FeeCost(
     gasCostMaxFormatted?: string;
     gasCost?: bigint;
     gasCostMax?: bigint;
-    exchangeRate?: bigint;
-  },
-  nativeTokenPrice: number | undefined
+  } & QuoteRates
 ): FeeCostDisplay | null {
   const { gasCostFormatted, gasCostMaxFormatted, symbol, decimals } = token;
   if (!gasCostFormatted || !Number.isFinite(Number(gasCostFormatted))) return null;
@@ -90,7 +93,7 @@ export function erc20FeeCost(
       : gasCostMaxFormatted && Number.isFinite(Number(gasCostMaxFormatted))
         ? gasCostMaxFormatted
         : undefined;
-  const usd = feeTokenUsd(token.gasCost, token.exchangeRate, nativeTokenPrice);
+  const usd = feeTokenUsd(token.gasCost, token.exchangeRate, token.exchangeRateNativeToUsd);
   return {
     formatted: `${amount} ${symbol}`,
     usd: usd === undefined ? undefined : formatUsd(usd),

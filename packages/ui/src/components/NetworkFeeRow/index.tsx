@@ -165,9 +165,8 @@ export function NetworkFeeRow({
     if (isPayingWithErc20 && selectedFeeToken) {
       const ceiling = selectedFeeToken.gasCostMaxFormatted ?? selectedFeeToken.gasCostFormatted;
       // `gasCostFormatted` is a quantity of the fee token, not a fiat figure. Its dollar value comes
-      // from the paymaster's rate and the native price (`erc20FeeCost`), never from the symbol, and
-      // shows the same way as a native fee: `$0.0034 ≈ 0.0003 VVV`. Without a rate or a price, the
-      // token amount alone.
+      // from the paymaster quote's rates (`erc20FeeCost`), never from the symbol, and shows the same
+      // way as a native fee: `$0.0034 ≈ 0.0003 VVV`. Without those rates, the token amount alone.
       //
       // It can also mark the token unpayable (useGasEstimation): a sentinel string or required
       // amount with no ceiling, a priced estimate the balance can't cover, or a settled zero
@@ -203,7 +202,7 @@ export function NetworkFeeRow({
           />
         );
       }
-      const erc20Cost = erc20FeeCost(selectedFeeToken, nativeTokenPrice);
+      const erc20Cost = erc20FeeCost(selectedFeeToken);
       const upTo =
         erc20Cost?.maxFormatted ??
         (ceiling && Number.isFinite(Number(ceiling)) ? `${ceiling} ${selectedFeeToken.symbol}` : undefined);

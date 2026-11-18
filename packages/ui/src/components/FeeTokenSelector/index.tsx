@@ -33,11 +33,13 @@ export interface FeeTokenOption {
   gasCost?: bigint;
   /** `gasCostMaxFormatted` in the token's smallest unit. */
   gasCostMax?: bigint;
-  /**
-   * The paymaster's rate, native wei to the token's smallest unit. With the native coin's price it
-   * gives the fee in dollars, for any token the paymaster prices.
-   */
+  /** The paymaster's rate: token units per 1e18 wei, with its markup. */
   exchangeRate?: bigint;
+  /**
+   * The paymaster's USD rate: USD (6 decimals) per 1e18 wei, with the same markup. With
+   * `exchangeRate` it gives the token's market value in dollars (see `feeTokenUsd`).
+   */
+  exchangeRateNativeToUsd?: bigint;
   /** Why the paymaster estimation for this token failed, when it failed for a reason other than funds. */
   estimationFailure?: string;
   /** The paymaster estimation failed because the calls revert. */
@@ -156,7 +158,7 @@ export const FeeTokenSelector = ({
 
     // A paymaster estimate, or a sentinel ("Insufficient", "Estimation failed") that shows no cost
     if (token.gasCostFormatted) {
-      return erc20FeeCost(token, nativeTokenPrice);
+      return erc20FeeCost(token);
     }
 
     // An ERC-20 with no estimate yet has nothing to show: the native estimate can't be

@@ -279,6 +279,7 @@ export function useGasEstimation({
         updatedToken.gasCost !== selectedFeeToken.gasCost ||
         updatedToken.gasCostMax !== selectedFeeToken.gasCostMax ||
         updatedToken.exchangeRate !== selectedFeeToken.exchangeRate ||
+        updatedToken.exchangeRateNativeToUsd !== selectedFeeToken.exchangeRateNativeToUsd ||
         updatedToken.isSelectable !== selectedFeeToken.isSelectable)
     ) {
       setSelectedFeeToken(updatedToken);
@@ -408,6 +409,7 @@ export function useGasEstimation({
             gasCost: estimate.tokenCost,
             gasCostMax: estimate.tokenCostMax,
             exchangeRate: estimate.exchangeRate,
+            exchangeRateNativeToUsd: estimate.exchangeRateNativeToUsd,
             isSelectable: estimate.hasSufficientBalance,
           };
         });
