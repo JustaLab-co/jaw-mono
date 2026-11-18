@@ -1,3 +1,9 @@
+## 1.1.28 (2026-11-18)
+
+### 🧱 Updated Dependencies
+
+- Updated @jaw.id/core to 1.12.0
+
 ## 1.1.27 (2026-11-17)
 
 ### 🧱 Updated Dependencies

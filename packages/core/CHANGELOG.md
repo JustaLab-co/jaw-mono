@@ -1,3 +1,13 @@
+## 1.12.0 (2026-11-18)
+
+### 🚀 Features
+
+- **core:** carry the paymaster's native-to-USD rate on token quotes ([#656](https://github.com/JustaLab-co/jaw-mono/pull/656))
+
+### ❤️ Thank You
+
+- Nikhil Kumar @nikhilkumar1612
+
 ## 1.11.0 (2026-11-17)
 
 ### 🚀 Features
