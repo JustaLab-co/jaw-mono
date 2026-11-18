@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { Hex } from 'viem';
+import type { Address, Hex } from 'viem';
 import { entryPoint08Abi, entryPoint08Address, type SmartAccount } from 'viem/account-abstraction';
 import { setDappOrigin } from '../dappOrigin.js';
 import { JAW_PAYMASTER_URL } from '../constants.js';
@@ -203,6 +203,18 @@ describe('calculateTokenEstimatesFromGas', () => {
         expect(ok.hasSufficientBalance).toBe(true);
     });
 
+    it("carries the quote's native-to-USD rate onto the estimate, and leaves it out when absent", () => {
+        const [withRate] = calculateTokenEstimatesFromGas(
+            gas,
+            [{ ...quote, exchangeRateNativeToUsd: 3_300_000_000n }],
+            tokens
+        );
+        expect(withRate.exchangeRateNativeToUsd).toBe(3_300_000_000n);
+
+        const [withoutRate] = calculateTokenEstimatesFromGas(gas, [quote], tokens);
+        expect(withoutRate).not.toHaveProperty('exchangeRateNativeToUsd');
+    });
+
     it('matches tokens case-insensitively and defaults unknown tokens', () => {
         const lower: TokenInfo[] = [
             { address: TOKEN.toLowerCase() as TokenInfo['address'], symbol: 'USDC', decimals: 6, balance: 0n },
@@ -310,6 +322,53 @@ describe('fetchTokenQuotes method name', () => {
         expect(fetchMock).toHaveBeenCalledTimes(1);
         expect(body.method).toBe('jaw_getTokenQuotes');
         expect(quotes).toEqual([{ tokenAddress: '0xabc', postOpGas: 1n, exchangeRate: 2n, paymasterAddress: '0xdef' }]);
+    });
+});
+
+describe('fetchTokenQuotes native-to-USD rate', () => {
+    afterEach(() => {
+        vi.unstubAllGlobals();
+    });
+
+    const answer = (quote: Record<string, string>) =>
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(async () => new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result: { quotes: [quote] } })))
+        );
+
+    // A USDC quote the JAW paymaster returned on Base mainnet.
+    const BASE_USDC_QUOTE = {
+        paymaster: '0x0981Ad78B242ef71174b71bee51C753CBEef4E42',
+        token: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+        postOpGas: '0xc350',
+        exchangeRate: '0x767a9d09',
+        exchangeRateNativeToUsd: '0x766bf6b8',
+    };
+
+    it('keeps exchangeRateNativeToUsd from the quote', async () => {
+        answer(BASE_USDC_QUOTE);
+        const [quote] = await fetchTokenQuotes(`${JAW_PAYMASTER_URL}?chainId=8453`, 8453, [
+            BASE_USDC_QUOTE.token as Address,
+        ]);
+        expect(quote).toEqual({
+            tokenAddress: BASE_USDC_QUOTE.token,
+            postOpGas: 50_000n,
+            exchangeRate: 1_987_747_081n,
+            exchangeRateNativeToUsd: 1_986_787_000n,
+            paymasterAddress: BASE_USDC_QUOTE.paymaster,
+        });
+        // The markup in both rates cancels: 100 USDC is worth about $99.95.
+        const usd6 = (100_000_000n * quote.exchangeRateNativeToUsd!) / quote.exchangeRate;
+        expect(usd6).toBe(99_951_700n);
+    });
+
+    it('leaves exchangeRateNativeToUsd out when the paymaster does not send it', async () => {
+        const { exchangeRateNativeToUsd: _, ...withoutRate } = BASE_USDC_QUOTE;
+        answer(withoutRate);
+        const [quote] = await fetchTokenQuotes(`${JAW_PAYMASTER_URL}?chainId=8453`, 8453, [
+            BASE_USDC_QUOTE.token as Address,
+        ]);
+        expect(quote).not.toHaveProperty('exchangeRateNativeToUsd');
     });
 });
 
