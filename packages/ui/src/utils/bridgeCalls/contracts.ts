@@ -49,6 +49,7 @@ const ACROSS_PERIPHERY = '0x97CCDBea4632140639aD5eA9b944aa034eb15fD4';
 const ACROSS_TESTNET_PERIPHERY = '0x10D8b8DaA26d307489803e10477De69C0492B610';
 const ACROSS_HANDLER = '0x0F7Ae28dE1C8532170AD4ee566B5801485c13a0E';
 const ACROSS_EMITTER = '0xBF75133b48b0a42AB9374027902E83C5E2949034';
+const ACROSS_PREFUNDED_STORE = '0x794dBdbDBFd3f8A3b887F4513bf5FF29edD04a94';
 const OP_WETH = '0x4200000000000000000000000000000000000006';
 const RELAY_DEPOSITORY = '0x4cD00E387622C35bDDB9b4c962C136462338BC31';
 const RELAY_TESTNET_DEPOSITORY = '0x5Feab8dB4534F9F7E2669Bb260c57a01aD1c12e3';
@@ -235,6 +236,7 @@ export const BRIDGE_CHAINS: Readonly<Record<number, BridgeChain>> = {
       eventEmitter: ACROSS_EMITTER,
       wrappedNative: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2',
       swapRouter: '0x23617e59A5925b2A4Bf75d73ff6711cD0b29De85',
+      prefundedStore: ACROSS_PREFUNDED_STORE,
     },
     relay: {
       depository: RELAY_DEPOSITORY,
@@ -261,6 +263,7 @@ export const BRIDGE_CHAINS: Readonly<Record<number, BridgeChain>> = {
       eventEmitter: ACROSS_EMITTER,
       wrappedNative: OP_WETH,
       swapRouter: '0xd6145b2D3F379919E8CdEda7B97e37c4b2Ca9c40',
+      prefundedStore: ACROSS_PREFUNDED_STORE,
     },
     relay: {
       depository: RELAY_DEPOSITORY,
@@ -281,6 +284,7 @@ export const BRIDGE_CHAINS: Readonly<Record<number, BridgeChain>> = {
       eventEmitter: ACROSS_EMITTER,
       wrappedNative: OP_WETH,
       swapRouter: '0xC09255D86DB563cBc11C2fCf4a0C512e160111B4',
+      prefundedStore: ACROSS_PREFUNDED_STORE,
     },
     relay: {
       depository: RELAY_DEPOSITORY,
@@ -306,6 +310,7 @@ export const BRIDGE_CHAINS: Readonly<Record<number, BridgeChain>> = {
       eventEmitter: ACROSS_EMITTER,
       wrappedNative: '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1',
       swapRouter: '0x2d01411773c8C24805306E89A41F7855C3c4Fe65',
+      prefundedStore: ACROSS_PREFUNDED_STORE,
     },
     relay: {
       depository: RELAY_DEPOSITORY,
@@ -328,6 +333,7 @@ export const BRIDGE_CHAINS: Readonly<Record<number, BridgeChain>> = {
       multicallHandler: '0xdF1C940487574EEfa79989a79a4936A0F979cDa2',
       eventEmitter: ACROSS_EMITTER,
       wrappedNative: '0xe5D7C2a44FfDDf6b295A15c148167daaAf5Cf34f',
+      prefundedStore: ACROSS_PREFUNDED_STORE,
     },
     relay: {
       depository: '0x59916DA825D2D2eC1BF878D71c88826F6633ecca',
@@ -351,6 +357,7 @@ export const BRIDGE_CHAINS: Readonly<Record<number, BridgeChain>> = {
       eventEmitter: '0x25b15Fc38d6A2C13FEDdD9cb51f184F7Cf0D4C11',
       wrappedNative: '0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7',
       swapRouter: '0x661E93cca42AfacB172121EF892830cA3b70F08d',
+      prefundedStore: ACROSS_PREFUNDED_STORE,
     },
     relay: {
       depository: RELAY_DEPOSITORY,
@@ -371,6 +378,7 @@ export const BRIDGE_CHAINS: Readonly<Record<number, BridgeChain>> = {
       eventEmitter: ACROSS_EMITTER,
       wrappedNative: '0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c',
       swapRouter: '0xDc264714F68d84CF29BC605589405E78bDBE7C9f',
+      prefundedStore: ACROSS_PREFUNDED_STORE,
     },
     relay: {
       depository: RELAY_DEPOSITORY,
@@ -404,6 +412,7 @@ export const BRIDGE_CHAINS: Readonly<Record<number, BridgeChain>> = {
       eventEmitter: ACROSS_EMITTER,
       wrappedNative: '0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270',
       swapRouter: '0xDc264714F68d84CF29BC605589405E78bDBE7C9f',
+      prefundedStore: ACROSS_PREFUNDED_STORE,
     },
     relay: {
       depository: RELAY_DEPOSITORY,
@@ -423,6 +432,7 @@ export const BRIDGE_CHAINS: Readonly<Record<number, BridgeChain>> = {
       multicallHandler: ACROSS_HANDLER,
       eventEmitter: ACROSS_EMITTER,
       wrappedNative: OP_WETH,
+      prefundedStore: ACROSS_PREFUNDED_STORE,
     },
     relay: {
       depository: RELAY_DEPOSITORY,
@@ -458,6 +468,7 @@ export const BRIDGE_CHAINS: Readonly<Record<number, BridgeChain>> = {
       wrappedNative: '0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73',
       swapRouter: '0x204FAca1764B154221e35c0d20aBb3c525710498',
       lifiDiamond: '0xB477751B76CF82d00a686A1232f5fCD772414Af3',
+      prefundedStore: ACROSS_PREFUNDED_STORE,
     },
     relay: {
       depository: RELAY_DEPOSITORY,
@@ -499,6 +510,7 @@ export const BRIDGE_CHAINS: Readonly<Record<number, BridgeChain>> = {
       periphery: '0xE791A2669bef779Ff7A4A9CF789F8Ee2CA20a32c',
       multicallHandler: '0xA07480456C4EbaD7626e4FdF4a180709E238547b',
       eventEmitter: '0x446Fe2Be6a8D90fA89F30f3d0A686aAFfe621237',
+      prefundedStore: ACROSS_PREFUNDED_STORE,
     },
     relay: {
       depository: RELAY_DEPOSITORY,
@@ -519,6 +531,7 @@ export const BRIDGE_CHAINS: Readonly<Record<number, BridgeChain>> = {
       eventEmitter: ACROSS_EMITTER,
       wrappedNative: OP_WETH,
       swapRouter: '0xD1b797D92d87B688193A2B976eFc8D577D204343',
+      prefundedStore: ACROSS_PREFUNDED_STORE,
     },
     relay: {
       depository: RELAY_DEPOSITORY,
@@ -539,6 +552,7 @@ export const BRIDGE_CHAINS: Readonly<Record<number, BridgeChain>> = {
       eventEmitter: ACROSS_EMITTER,
       wrappedNative: '0x3bd359C1119dA7Da1D913D1C4D2B7c461115433A',
       swapRouter: '0xa6CE4F10d83dBdDAc17E68e1837ca9cE6a1b596e',
+      prefundedStore: ACROSS_PREFUNDED_STORE,
     },
     relay: {
       depository: RELAY_DEPOSITORY,

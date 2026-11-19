@@ -1,5 +1,5 @@
 import { decodeFunctionData, erc20Abi, getAddress, isAddress, type Address, type Hex } from 'viem';
-import { readAcrossCall, type AcrossDeposit } from './across';
+import { readAcrossCall, readAcrossStore, type AcrossDeposit, type AcrossOrder } from './across';
 import { readBridgeApprove, type BridgeApprove } from './approve';
 import { readRelayCall, readRelaySwap, type RelayDeposit, type RelaySwap } from './relay';
 import { readRelayOrder } from './relayOrder';
@@ -15,7 +15,7 @@ export type BridgeStep = { unreadable: true } | null;
 /** `alerts` are red: a bridge call this screen cannot read. `notices` are yellow: worth a look, maybe intended. */
 export type BridgeBatch = { transfer?: BridgeTransfer; steps: BridgeStep[]; alerts: string[]; notices: string[] };
 
-type Deposit = AcrossDeposit | RelayDeposit | RelaySwap;
+type Deposit = AcrossDeposit | AcrossOrder | RelayDeposit | RelaySwap;
 export type BridgeRead = Deposit | BridgeApprove | Inert | Unreadable | undefined;
 
 // A lone call has no step number on screen, so the line names no step.
@@ -43,6 +43,7 @@ function unreadableAlerts(reads: BridgeRead[]): string[] {
 export function readBridgeCall(contracts: BridgeContracts, call: BridgeCall, account: Address): BridgeRead {
   return (
     readAcrossCall(contracts, call) ??
+    readAcrossStore(contracts, call) ??
     readRelayCall(contracts, call) ??
     readRelaySwap(contracts, call, account) ??
     readBridgeApprove(contracts, call)
@@ -123,6 +124,7 @@ function erc20Call(data: string | undefined) {
   }
 }
 
-const isDeposit = (read: BridgeRead): read is Deposit => read?.kind === 'deposit' || read?.kind === 'swap';
+const isDeposit = (read: BridgeRead): read is Deposit =>
+  read?.kind === 'deposit' || read?.kind === 'order' || read?.kind === 'swap';
 
 const stepOf = (read: BridgeRead): BridgeStep => (read?.kind === 'unreadable' ? { unreadable: true } : null);

@@ -25,6 +25,7 @@ describe('given the pinned bridge table of the signing screen', () => {
         eventEmitter: '0xBF75133b48b0a42AB9374027902E83C5E2949034',
         wrappedNative: '0x4200000000000000000000000000000000000006',
         swapRouter: '0xd6145b2D3F379919E8CdEda7B97e37c4b2Ca9c40',
+        prefundedStore: '0x794dBdbDBFd3f8A3b887F4513bf5FF29edD04a94',
       },
       relay: {
         depository: '0x4cD00E387622C35bDDB9b4c962C136462338BC31',
@@ -177,8 +178,15 @@ describe('given the pinned bridge table of the signing screen', () => {
     }
   });
 
+  it('then the Across v1 prefunded store is pinned on every chain Across v1 serves, and nowhere else', () => {
+    const pinned = chains.filter((c) => c.across?.prefundedStore).map((c) => c.id);
+    expect(pinned.sort((a, b) => a - b)).toEqual([
+      1, 10, 56, 130, 137, 143, 4663, 5042, 8453, 42161, 43114, 57073, 59144,
+    ]);
+  });
+
   it('then the table matches the reviewed digest, so any changed literal updates this test', () => {
     const digest = createHash('sha256').update(JSON.stringify({ BRIDGE_CHAINS, JAW_FEE_RECIPIENT })).digest('hex');
-    expect(digest).toBe('6639530831c6132ef21eeb2102571f3501d1138efadd63a883abe2fdba32a880');
+    expect(digest).toBe('187b79b61f88b2268cfc73779bf88d435f5e52283259a167732f905e1537f9f4');
   });
 });

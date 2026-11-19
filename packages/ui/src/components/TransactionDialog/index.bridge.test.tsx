@@ -365,6 +365,25 @@ describe('TransactionDialog with a bridge deposit', () => {
     expect(yellow(root)).toEqual([RELAY_HIDDEN]);
   });
 
+  it('shows an Across v1 deposit as You send only, with the reason in yellow', () => {
+    const store = '0x794dBdbDBFd3f8A3b887F4513bf5FF29edD04a94';
+    const orderId = '0x1732e19275968d23d44fc2e93f2b92ad6322a61fa1143fea32407016886a299c';
+    const deposit: BridgeCall = {
+      chainId: 8453,
+      to: store,
+      value: '0',
+      data: `0x1e04ce08${word(orderId)}${word(BASE_USDC)}${word('989680')}`,
+    };
+    const root = render([approve(store), deposit]);
+    expect(title(root)).toBe('Deposit to Across');
+    expect(column(root, 'You send')).toMatch(/USDC.*−10/);
+    expect(root.textContent).not.toContain('You get');
+    expect(yellow(root)).toEqual([
+      'Across keeps the destination chain and the recipient in an order outside this transaction. This screen cannot show them. Confirm only if you started this transfer yourself.',
+    ]);
+    expect(headerIcons(root)).toEqual([]);
+  });
+
   it('shows a Relay deposit with its order like an Across one: the minimum via Relay on the other chain', () => {
     const capabilities = { jawRelayOrder: { optional: true, orderData: RELAY_USDC_ORDER } };
     const root = render([RELAY_USDC_APPROVE, RELAY_USDC_DEPOSIT], { capabilities });

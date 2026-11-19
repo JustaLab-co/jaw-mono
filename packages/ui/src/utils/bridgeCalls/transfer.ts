@@ -1,7 +1,7 @@
 import { formatUnits, getAddress, isAddressEqual, type Address } from 'viem';
 import { groupNumber } from '../displayFormat';
 import { formatAddress } from '../formatAddress';
-import type { AcrossDeposit } from './across';
+import type { AcrossDeposit, AcrossOrder } from './across';
 import type { BridgeChain } from './contracts';
 import type { RelayDeposit, RelaySwap } from './relay';
 import type { OrderUnshown, RelayOrder } from './relayOrder';
@@ -37,16 +37,18 @@ const tokenNotice = (token: Token) =>
     : `This screen does not know the token ${token.address}. Check it before you confirm.`;
 const unknownChain = (id: number) =>
   `This screen does not know chain ${id} and cannot confirm that the recipient there is this account. Check it before you confirm.`;
-const RELAY_HIDDEN =
-  'Relay keeps the destination chain and the recipient in an order outside this transaction. This screen cannot show them. Confirm only if you started this transfer yourself.';
+const hiddenTerms = (provider: BridgeProvider) =>
+  `${PROVIDER_NAME[provider]} keeps the destination chain and the recipient in an order outside this transaction. This screen cannot show them. Confirm only if you started this transfer yourself.`;
+const orderDetail = (id: string): Detail => ({ label: 'Order', value: `${id.slice(0, 6)}…${id.slice(-4)}`, copy: id });
 
 export function transferOf(
   contracts: BridgeContracts,
-  deposit: AcrossDeposit | RelayDeposit | RelaySwap,
+  deposit: AcrossDeposit | AcrossOrder | RelayDeposit | RelaySwap,
   account: Address,
   order?: RelayOrder | OrderUnshown
 ): TransferRead {
   if (deposit.kind === 'swap') return relaySwapTransfer(contracts, deposit);
+  if (deposit.kind === 'order') return acrossOrderTransfer(contracts, deposit);
   if (deposit.provider === 'across') return acrossTransfer(contracts, deposit, account);
   return relayTransfer(contracts, deposit, account, order);
 }
@@ -105,17 +107,16 @@ function relayTransfer(
   if (!isAddressEqual(deposit.depositor, account))
     notices.push(notThisAccount('The account credited', deposit.depositor));
   const credited = accountDetail('Credited to', deposit.depositor, account);
-  const orderDetail = { label: 'Order', value: `${id.slice(0, 6)}…${id.slice(-4)}`, copy: id };
 
   if (order?.kind !== 'order') {
-    notices.unshift(...(order ? [order.reason, RELAY_HIDDEN] : [RELAY_HIDDEN]));
+    notices.unshift(...(order ? [order.reason] : []), hiddenTerms('relay'));
     return {
       transfer: {
         provider: 'relay',
         title: 'Deposit to Relay',
         send: deposit.send,
         origin: labelOf(contracts, deposit.send.chainId),
-        details: [credited, orderDetail],
+        details: [credited, orderDetail(id)],
       },
       notices,
     };
@@ -142,7 +143,22 @@ function relayTransfer(
       receive: { kind: 'minimum', amount: order.minimumReceived },
       destination,
       otherRecipient: isAddressEqual(order.recipient, account) ? undefined : getAddress(order.recipient),
-      details: [accountDetail('Recipient', order.recipient, account), ...refundDetails, credited, orderDetail],
+      details: [accountDetail('Recipient', order.recipient, account), ...refundDetails, credited, orderDetail(id)],
+    },
+    notices,
+  };
+}
+
+function acrossOrderTransfer(contracts: BridgeContracts, deposit: AcrossOrder): TransferRead {
+  const notices = [hiddenTerms('across')];
+  if (!deposit.send.token.known) notices.push(tokenNotice(deposit.send.token));
+  return {
+    transfer: {
+      provider: 'across',
+      title: 'Deposit to Across',
+      send: deposit.send,
+      origin: labelOf(contracts, deposit.send.chainId),
+      details: [orderDetail(deposit.orderId)],
     },
     notices,
   };
