@@ -87,6 +87,9 @@ function CLIBridgeContent() {
   const [error, setError] = useState('');
   const [lastMethod, setLastMethod] = useState<string | null>(null);
   const [appName, setAppName] = useState(DEFAULT_BRIDGE_APP_NAME);
+  // iOS ignores window.close() on a tab another app opened, and shows its own way back.
+  const [onIOS, setOnIOS] = useState(false);
+  useEffect(() => setOnIOS(/iPhone|iPad|iPod/.test(navigator.userAgent)), []);
   const sdkRef = useRef<ReturnType<typeof JAW.create> | null>(null);
   /** What `sdkRef` was built from, so a second init can tell whether it still fits. */
   const sdkSignatureRef = useRef<string | null>(null);
@@ -129,11 +132,14 @@ function CLIBridgeContent() {
     window.history.replaceState(null, '', window.location.pathname + window.location.search);
     if (link.kind === 'ok') {
       setCliPublicKeyHex(link.pk);
+    } else if (link.kind === 'gone' && sessionId && wasEnded(sessionId)) {
+      // Mobile Safari reloads a tab it put to sleep, after the key was stripped.
+      setState('ended');
     } else {
       setState('error');
       setError(link.kind === 'damaged' ? LINK_DAMAGED : LINK_LOST);
     }
-  }, []);
+  }, [sessionId]);
 
   // A client that lost its connection asks again under the same id, so it
   // gets the answer already given instead of a second dialog.
@@ -196,6 +202,7 @@ function CLIBridgeContent() {
     answersRef.current = new Map();
     trackSend(null);
     let clientPosted = false;
+    let initArrived = false;
     let serverEnded = false;
 
     const endRequest = (next: 'ended' | 'lost') => {
@@ -266,6 +273,7 @@ function CLIBridgeContent() {
 
               switch (inner.type) {
                 case 'init': {
+                  initArrived = true;
                   clearTimeout(unanswered);
                   const parsed = parseInit(
                     inner,
@@ -381,10 +389,11 @@ function CLIBridgeContent() {
 
                 case 'shutdown':
                   serverEnded = true;
+                  markEnded(sessionId);
                   endRequest('ended');
                   // A send keeps the tab open so the owner can watch it land. The
-                  // socket still closes, or the relay later expires the idle
-                  // session and the page would show that as an error.
+                  // socket still closes, so the relay does not keep the idle
+                  // session around until it expires.
                   if (sendRef.current) {
                     cancelled = true;
                     ws?.close(1000, 'Request ended');
@@ -408,7 +417,9 @@ function CLIBridgeContent() {
             ws!.send(JSON.stringify({ type: 'pong' }));
           }
 
-          if (msg.type === 'error' && msg.code === 'session_expired') {
+          // A tab the browser would not close after a shutdown hears this once the
+          // relay drops the idle session. The request still ended.
+          if (msg.type === 'error' && msg.code === 'session_expired' && !serverEnded) {
             setState('error');
             setError('Session expired. Start a new session to reconnect.');
           }
@@ -436,10 +447,11 @@ function CLIBridgeContent() {
 
         ws.onerror = () => {
           clearTimeout(unanswered);
-          if (!cancelled) {
-            setState('error');
-            setError('Relay connection failed');
-          }
+          // After init an error only comes ahead of an abnormal close, which onclose
+          // reports as ended or lost. iOS drops the socket of a tab in the background.
+          if (cancelled || initArrived) return;
+          setState('error');
+          setError('Relay connection failed');
         };
 
         beforeUnloadHandler = () => {
@@ -531,9 +543,17 @@ function CLIBridgeContent() {
         )}
 
         {state === 'ended' && !pendingSendId && (
-          <p className="text-muted-foreground mt-2 text-sm leading-relaxed">
-            This request has ended. You can close this tab.
-          </p>
+          <>
+            <p className="text-success text-base font-semibold">Done ✓</p>
+            <p className="text-muted-foreground mt-2 text-sm leading-relaxed">
+              This request has ended. You can close this tab.
+            </p>
+            {onIOS && (
+              <p className="text-muted-foreground mt-2 text-sm leading-relaxed">
+                Tap ◀ at the top left to go back to the app you came from.
+              </p>
+            )}
+          </>
         )}
 
         {state === 'lost' && (
@@ -599,6 +619,25 @@ const LINK_GONE = 'This link is no longer active. Ask the agent for a new one.';
 const LINK_LOST =
   'This tab lost its link. Open the link from the chat again. If it no longer opens, ask the agent for a new one.';
 const LINK_DAMAGED = 'This link is damaged. Ask the agent for a new one.';
+
+// Holds only the session id, never the key or the link secret.
+const ENDED_KEY = 'cli-bridge-ended:';
+
+function markEnded(sessionId: string) {
+  try {
+    sessionStorage.setItem(ENDED_KEY + sessionId, '1');
+  } catch {
+    // Storage can be blocked; a reload then says the link was lost.
+  }
+}
+
+function wasEnded(sessionId: string) {
+  try {
+    return sessionStorage.getItem(ENDED_KEY + sessionId) === '1';
+  } catch {
+    return false;
+  }
+}
 
 // The relay keeps one browser per session and closes the older socket with
 // this code when the link is opened in another tab.
