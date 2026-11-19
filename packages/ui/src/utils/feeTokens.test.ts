@@ -67,6 +67,26 @@ describe('loadFeeTokenOptions', () => {
     ).resolves.toEqual([]);
   });
 
+  it('asks wallet_getAssets for held tokens without DeFi receipt tokens', async () => {
+    vi.mocked(handleGetAssetsRequest).mockResolvedValue({ '0x2105': [] });
+
+    await load();
+
+    expect(handleGetAssetsRequest).toHaveBeenCalledTimes(1);
+    const [request] = vi.mocked(handleGetAssetsRequest).mock.calls[0];
+    expect(request).toEqual({
+      method: 'wallet_getAssets',
+      params: [
+        {
+          account: ACCOUNT,
+          chainFilter: ['0x2105'],
+          assetTypeFilter: ['native', 'erc20'],
+          includeDefiTokens: false,
+        },
+      ],
+    });
+  });
+
   it('maps dynamically discovered balances without requiring seeded logo data', async () => {
     vi.mocked(handleGetAssetsRequest).mockResolvedValue({
       '0x2105': [

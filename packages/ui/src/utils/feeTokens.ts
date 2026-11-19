@@ -5,6 +5,7 @@ import {
   type Asset,
   type FeeTokenCapability,
   type TokenQuote,
+  type WalletGetAssetsParams,
 } from '@jaw.id/core';
 import { formatUnits, zeroAddress, type Address } from 'viem';
 import type { FeeTokenOption } from '../components/FeeTokenSelector';
@@ -126,17 +127,16 @@ export async function loadFeeTokenOptions(params: LoadFeeTokenOptionsParams): Pr
   if (params.capability.mode !== 'dynamic') return loadStaticOptions(params);
 
   const chainIdHex = `0x${params.chainId.toString(16)}` as `0x${string}`;
+  const request: WalletGetAssetsParams = {
+    account: params.account,
+    chainFilter: [chainIdHex],
+    assetTypeFilter: ['native', 'erc20'],
+    // Only held ERC-20s the paymaster can price are offered, not DeFi receipt
+    // tokens such as aBasUSDC, so this asks for the cheaper lookup that may skip them.
+    includeDefiTokens: false,
+  };
   const response = (await handleGetAssetsRequest(
-    {
-      method: 'wallet_getAssets',
-      params: [
-        {
-          account: params.account,
-          chainFilter: [chainIdHex],
-          assetTypeFilter: ['native', 'erc20'],
-        },
-      ],
-    },
+    { method: 'wallet_getAssets', params: [request] },
     params.apiKey,
     params.showTestnets ?? false
   )) as Record<string, Asset[]>;
