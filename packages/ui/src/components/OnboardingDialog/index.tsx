@@ -390,10 +390,14 @@ export function OnboardingDialog({
   expectedAccount,
   mismatchedAccount,
   onRetryAccount,
+  switchPasskey = false,
 }: OnboardingDialogProps) {
   const defaultAccount = useMemo(
-    () => selectDefaultAccount(accounts, lastAuthenticatedCredentialId, expectedAccount),
-    [accounts, lastAuthenticatedCredentialId, expectedAccount]
+    () =>
+      switchPasskey
+        ? (accounts.find((a) => a.credentialId && a.address?.toLowerCase() === expectedAccount?.toLowerCase()) ?? null)
+        : selectDefaultAccount(accounts, lastAuthenticatedCredentialId, expectedAccount),
+    [accounts, lastAuthenticatedCredentialId, expectedAccount, switchPasskey]
   );
 
   const [view, setView] = useState<OnboardingView>(startInCreate ? 'signup' : defaultAccount ? 'welcome' : 'signin');
@@ -554,6 +558,8 @@ export function OnboardingDialog({
               <MonoDivider label="Already have an account?" className="my-5" />
               {passkeyButton}
             </>
+          ) : switchPasskey ? (
+            <div className="mt-6">{passkeyButton}</div>
           ) : (
             <>
               <div className="mt-6">{passkeyButton}</div>
@@ -634,13 +640,15 @@ export function OnboardingDialog({
           {isImporting ? 'Opening Passkey...' : 'Show more accounts'}
         </Button>
 
-        <button
-          onClick={onCreateNewAccount ?? (() => setView('signup'))}
-          disabled={isBusy}
-          className="text-muted-foreground hover:text-foreground mx-auto mt-4 cursor-pointer bg-transparent text-xs font-medium transition-colors"
-        >
-          Create new account
-        </button>
+        {!switchPasskey && (
+          <button
+            onClick={onCreateNewAccount ?? (() => setView('signup'))}
+            disabled={isBusy}
+            className="text-muted-foreground hover:text-foreground mx-auto mt-4 cursor-pointer bg-transparent text-xs font-medium transition-colors"
+          >
+            Create new account
+          </button>
+        )}
       </div>
     </DialogShell>
   );

@@ -79,4 +79,10 @@ export interface OnboardingDialogProps {
   mismatchedAccount?: { address: string; name?: string };
   /** "Use another passkey" on the mismatch screen: back to the sign-in view. */
   onRetryAccount?: () => void;
+  /**
+   * The signed-in passkey can't sign for `expectedAccount`, and the screen asks for one that can.
+   * Only the stored account at that address is offered (otherwise the sign-in view), and no new
+   * account can be created, since a new account is never the requested one.
+   */
+  switchPasskey?: boolean;
 }
