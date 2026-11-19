@@ -62,6 +62,13 @@ export type WalletGetAssetsParams = {
     assetTypeFilter?: AssetType[];
     /** Filters by specific assets per chain (optional) */
     assetFilter?: AssetFilter;
+    /**
+     * JAW extension, not part of EIP-7811 (optional, default `true`).
+     * `false` asks for a cheaper lookup that may leave out DeFi receipt tokens,
+     * such as Aave's aTokens. Set it only when those tokens are not needed, for
+     * example to list the tokens that can pay a fee, never to show balances.
+     */
+    includeDefiTokens?: boolean;
 };
 
 /**

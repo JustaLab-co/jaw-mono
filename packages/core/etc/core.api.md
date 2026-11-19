@@ -1688,6 +1688,7 @@ export type WalletGetAssetsParams = {
     chainFilter?: string[];
     assetTypeFilter?: AssetType[];
     assetFilter?: AssetFilter;
+    includeDefiTokens?: boolean;
 };
 
 // @public
