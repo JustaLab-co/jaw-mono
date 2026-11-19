@@ -24,6 +24,9 @@ export function createWagmiConfig(
   const keysUrl = resolveKeysUrl();
 
   return createConfig({
+    // Hydrate after mount: without this, wagmi reconnects during render and React warns
+    // "Cannot update a component while rendering a different component (`Hydrate`)".
+    ssr: true,
     chains: SUPPORTED_CHAINS as unknown as readonly [Chain, ...Chain[]],
     connectors: [
       jaw({
