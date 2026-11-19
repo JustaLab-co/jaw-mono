@@ -72,6 +72,26 @@ app is unreachable, and the clickjacking guard that keeps an untrusted host on
 the popup where the browser cannot prove the iframe is visible
 (IntersectionObserver v2 is Chromium only). Runs on chromium, firefox and webkit.
 
+### cli-bridge
+
+The keys `/cli-bridge` page on an iPhone (`webkit-iphone` project: WebKit with
+the iPhone 15 profile), the way a person reaches it from a chat app. The spec
+runs its own stand-in for the relay and the CLI behind it: a local WebSocket
+server that does the key exchange, sends `init`, waits for `ready` and then
+ends the request the way a test asks. Only the keys app is used.
+
+iOS ignores `window.close()` on a tab another app opened, so the tab outlives
+the request. The tests hold the page to saying the request ended when the
+socket then drops without a close frame or the tab reloads without its `#pk`
+fragment, and to saying the connection was lost when the socket drops before
+the request ended.
+
+The stand-in relay serves plain `ws://` only, so the suite skips over https.
+
+```bash
+bunx playwright test --config playwright.config.ts --project webkit-iphone
+```
+
 ### http and https
 
 The SDK only uses the iframe on an https origin; plain http routes every dialog
@@ -113,6 +133,9 @@ firefox and webkit, with a throwaway certificate made on the runner. It is
 heavier, so on PRs it only runs when something the iframe depends on changes:
 the SDK transport and the checks that route to it, the keys app, `ui` or
 `e2e/`. Both can also be run from the Actions tab.
+
+Neither runs `cli-bridge`: `e2e.yml` runs only the chromium project, and
+`e2e-iframe.yml` serves https, where the suite skips.
 
 ## Manual QA (real Safari — not coverable headlessly)
 

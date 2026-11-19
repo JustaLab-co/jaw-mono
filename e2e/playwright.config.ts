@@ -38,9 +38,12 @@ export default defineConfig({
   },
   projects: [
     // The connect flows need the virtual authenticator, which only Chromium has.
-    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
+    { name: 'chromium', use: { ...devices['Desktop Chrome'] }, testIgnore: 'cli-bridge.spec.ts' },
     { name: 'firefox', use: { ...devices['Desktop Firefox'] }, testMatch: 'iframe-transport.spec.ts' },
     { name: 'webkit', use: { ...devices['Desktop Safari'] }, testMatch: 'iframe-transport.spec.ts' },
+    // The CLI bridge the way an iPhone opens it from another app, where the
+    // tab outlives the request.
+    { name: 'webkit-iphone', use: { ...devices['iPhone 15'] }, testMatch: 'cli-bridge.spec.ts' },
   ],
   webServer: [
     {
