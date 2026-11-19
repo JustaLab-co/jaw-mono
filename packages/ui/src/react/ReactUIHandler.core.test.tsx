@@ -15,7 +15,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react';
-import { JAW, Mode, type UIHandler, type UIRequest } from '@jaw.id/core';
+import { JAW, Mode, PasskeyManager, type UIHandler, type UIRequest } from '@jaw.id/core';
 import { stringToHex } from 'viem';
 
 import { ReactUIHandler } from './ReactUIHandler';
@@ -40,7 +40,10 @@ function siwe(domain: string) {
 
 /**
  * The person signs in, the real handler renders everything else. Onboarding
- * needs a passkey ceremony, which is not what this file is about.
+ * needs a passkey ceremony, which is not what this file is about, so connecting
+ * leaves the signed-in passkey stored the way onboarding does. Restoring it
+ * still needs the chain, which is offline here, so the dialogs open as they do
+ * when that fails.
  */
 function signedInHandler(): UIHandler {
   const dialogs = new ReactUIHandler();
@@ -48,6 +51,16 @@ function signedInHandler(): UIHandler {
     init: (config) => dialogs.init(config),
     request: async <T,>(request: UIRequest) => {
       if (request.type !== 'wallet_connect') return dialogs.request<T>(request);
+      const passkeys = new PasskeyManager();
+      passkeys.addAccountToList({
+        credentialId: 'YWxpY2UtcGFzc2tleQ',
+        publicKey: `0x04${'11'.repeat(64)}`,
+        username: 'alice',
+        creationDate: new Date(0).toISOString(),
+        isImported: false,
+        address: ALICE,
+      });
+      passkeys.storeAuthState(ALICE, 'YWxpY2UtcGFzc2tleQ');
       return { id: request.id, approved: true, data: { accounts: [{ address: ALICE }] } as T };
     },
   };

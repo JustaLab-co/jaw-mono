@@ -31,8 +31,8 @@ const PASSKEYS = {
 type CredentialId = keyof typeof PASSKEYS;
 
 const world = {
-  /** The passkey the wallet page has signed in, as `Account.get()` restores it. */
-  signedIn: 'cred-other' as CredentialId,
+  /** The passkey the wallet page has signed in, as `Account.get()` restores it. None after clearing site data. */
+  signedIn: 'cred-other' as CredentialId | null,
   /** Passkeys saved on this device. */
   saved: ['cred-productmee', 'cred-other'] as CredentialId[],
   /** What the person picks in the browser's own passkey sheet. */
@@ -43,6 +43,12 @@ const world = {
   signed: [] as Array<{ passkey: CredentialId; address?: string }>,
   /** Core's owner lookup never answers, as on a slow network. */
   ownerCheckHangs: false,
+  /** Core's owner lookup fails, as with no network. */
+  ownerCheckFails: false,
+  /** Restoring the signed-in passkey fails, as with no network. */
+  restoreFails: false,
+  /** Signing a chosen passkey in fails after its prompt, as with no network. */
+  signInFails: false,
 };
 
 vi.mock('@jaw.id/core', async (importActual) => {
@@ -58,6 +64,7 @@ vi.mock('@jaw.id/core', async (importActual) => {
     getMetadata: () => ({ username: PASSKEYS[passkey].username }),
     getSmartAccountFor: async (address?: Address) => {
       if (world.ownerCheckHangs) await new Promise(() => undefined);
+      if (world.ownerCheckFails) throw new Error('fetch failed');
       if (!owns(passkey, address)) throw notOwner(address);
       return {};
     },
@@ -100,7 +107,12 @@ vi.mock('@jaw.id/core', async (importActual) => {
     Account: {
       // With a credential id this is a passkey prompt that signs that passkey in.
       get: async (_config: unknown, credentialId?: CredentialId) => {
+        if (credentialId && world.signInFails) throw new Error('fetch failed');
+        if (!credentialId && world.restoreFails) throw new Error('fetch failed');
         if (credentialId) world.signedIn = credentialId;
+        // What core throws when no passkey is signed in and none is asked for.
+        if (!world.signedIn)
+          throw new Error('Not authenticated. Please provide a credentialId to login, or create an account first.');
         return accountFor(world.signedIn);
       },
       // "Use another passkey": the browser's passkey sheet, then that passkey is signed in.
@@ -110,8 +122,8 @@ vi.mock('@jaw.id/core', async (importActual) => {
         return accountFor(world.signedIn);
       },
       getStoredAccounts: () => world.saved.map(stored),
-      getCurrentAccount: () => stored(world.signedIn),
-      getAuthenticatedAddress: () => PASSKEYS[world.signedIn].address,
+      getCurrentAccount: () => (world.signedIn ? stored(world.signedIn) : null),
+      getAuthenticatedAddress: () => (world.signedIn ? PASSKEYS[world.signedIn].address : null),
     },
     handleGetCapabilitiesRequest: async () => ({
       '0x2105': { feeToken: { supported: true, tokens: [] } },
@@ -270,6 +282,9 @@ beforeEach(() => {
   world.sent = [];
   world.signed = [];
   world.ownerCheckHangs = false;
+  world.ownerCheckFails = false;
+  world.restoreFails = false;
+  world.signInFails = false;
 });
 afterEach(() => {
   document.body.innerHTML = '';
@@ -482,5 +497,108 @@ describe.each(SIGNS)('$method with a signed-in passkey that does not own the acc
     await closeAccountScreen();
     await expect(answer).resolves.toMatchObject({ approved: false, error: { code: 4001 } });
     expect(world.signed).toEqual([]);
+  });
+});
+
+describe.each(SENDS)('$method with no passkey signed in', ({ request }) => {
+  it('shows the account screen for the requested account, then the send screen once it signs in', async () => {
+    world.signedIn = null;
+    await open(request);
+    expect(screenText()).toContain('Welcome back.');
+    expect(screenText()).toContain('productmee');
+
+    await click('productmee');
+    expect(world.signedIn).toBe('cred-productmee');
+    expect(screenText()).toContain('0.02 USDC');
+  });
+});
+
+describe.each(SIGNS)('$method with no passkey signed in', ({ request }) => {
+  it('shows the account screen for the requested account instead of a Sign that never enables, then signs', async () => {
+    world.signedIn = null;
+    const { answer } = await open(request);
+    expect(screenText()).toContain('Welcome back.');
+    expect(screenText()).toContain('productmee');
+
+    await click('productmee');
+    await click('Sign');
+    expect(world.signed).toEqual([{ passkey: 'cred-productmee', address: PRODUCTMEE }]);
+    await expect(answer).resolves.toMatchObject({ approved: true, data: '0xsig' });
+  });
+});
+
+describe('the account screen when a passkey cannot be checked against the requested account', () => {
+  it('says the check failed, rather than nothing happening, and lets the person try again', async () => {
+    const { answer } = await open(SIGNS[0].request);
+    // A passkey that would need the chain to tell whether it co-owns the account, on a dead network.
+    world.pickInSheet = 'cred-other';
+    world.ownerCheckFails = true;
+    await click('Show more accounts');
+
+    expect(screenText()).toContain("Couldn't check");
+    expect(screenText()).not.toContain('Wrong account.');
+
+    world.ownerCheckFails = false;
+    world.pickInSheet = 'cred-productmee';
+    await click('Show more accounts');
+    expect(screenText()).not.toContain("Couldn't check");
+    await click('Sign');
+    await expect(answer).resolves.toMatchObject({ approved: true, data: '0xsig' });
+  });
+});
+
+describe('wallet_sendCalls naming no account, with no passkey signed in', () => {
+  it('offers a saved passkey to sign in with, with nothing to create, then the send screen', async () => {
+    world.signedIn = null;
+    await open({
+      id: 'req-send',
+      type: 'wallet_sendCalls',
+      data: { chainId: 8453, calls: [{ to: TO, value: '0x0', data: '0x' }] },
+    });
+    expect(screenText()).toContain('Welcome back.');
+    expect(screenText()).not.toContain('Create new account');
+
+    await click('other');
+    expect(world.signedIn).toBe('cred-other');
+    await vi.waitFor(() => expect(screenText()).toContain('0.02 USDC'));
+  });
+});
+
+describe.each(SIGNS)('$method when the signed-in passkey cannot be restored', ({ request }) => {
+  it('shows the signing screen as before, and reports the failure when Sign is pressed', async () => {
+    world.signedIn = 'cred-productmee';
+    world.restoreFails = true;
+    const { answer } = await open(request);
+    expect(screenText()).not.toContain('Welcome back.');
+
+    await click('Sign');
+    expect(world.signed).toEqual([]);
+    await expect(answer).resolves.toMatchObject({ approved: false, error: { code: -32603 } });
+  });
+});
+
+describe('personal_sign after clearing site data, with nothing saved on this device', () => {
+  it('signs in through the passkey sheet for the requested account, then signs', async () => {
+    world.signedIn = null;
+    world.saved = [];
+    const { answer } = await open(SIGNS[0].request);
+    expect(screenText()).toContain('This request is for');
+    expect(screenText()).not.toContain('Create');
+
+    await click('Sign in');
+    await click('Sign');
+    expect(world.signed).toEqual([{ passkey: 'cred-productmee', address: PRODUCTMEE }]);
+    await expect(answer).resolves.toMatchObject({ approved: true, data: '0xsig' });
+  });
+});
+
+describe('the account screen when signing a passkey in fails after its prompt', () => {
+  it('says so, rather than looking like a dismissed prompt', async () => {
+    await open(SIGNS[0].request);
+    world.signInFails = true;
+    await click('productmee');
+
+    expect(screenText()).toContain("Couldn't sign in with this passkey");
+    expect(screenText()).toContain('Welcome back.');
   });
 });

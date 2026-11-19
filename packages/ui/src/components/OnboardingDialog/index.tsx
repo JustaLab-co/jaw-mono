@@ -391,11 +391,12 @@ export function OnboardingDialog({
   mismatchedAccount,
   onRetryAccount,
   switchPasskey = false,
+  signInError,
 }: OnboardingDialogProps) {
   const defaultAccount = useMemo(
     () =>
-      switchPasskey
-        ? (accounts.find((a) => a.credentialId && a.address?.toLowerCase() === expectedAccount?.toLowerCase()) ?? null)
+      switchPasskey && expectedAccount
+        ? (accounts.find((a) => a.credentialId && a.address?.toLowerCase() === expectedAccount.toLowerCase()) ?? null)
         : selectDefaultAccount(accounts, lastAuthenticatedCredentialId, expectedAccount),
     [accounts, lastAuthenticatedCredentialId, expectedAccount, switchPasskey]
   );
@@ -500,6 +501,11 @@ export function OnboardingDialog({
       accounts.find((a) => a.address?.toLowerCase() === expectedAccount.toLowerCase())?.username)
     : undefined;
   const expectedLine = expectedAccount && `This request is for ${namedAddress(expectedAccount, expectedName)}.`;
+  const signInErrorLine = signInError && (
+    <p role="alert" className="text-destructive mt-4 text-center text-xs font-medium">
+      {signInError}
+    </p>
+  );
 
   if (mismatchedAccount && expectedAccount) {
     const signedInAs = mismatchedAccount.name ?? nameOfAddress(mismatchedAccount.address);
@@ -549,7 +555,8 @@ export function OnboardingDialog({
           <p className="text-muted-foreground text-body mt-2">
             {isSignUp
               ? 'Pick a username to create your account.'
-              : (expectedLine ?? 'Use a saved passkey, or create a new account.')}
+              : (expectedLine ??
+                (switchPasskey ? 'Use a saved passkey.' : 'Use a saved passkey, or create a new account.'))}
           </p>
 
           {isSignUp ? (
@@ -567,6 +574,7 @@ export function OnboardingDialog({
               {createForm}
             </>
           )}
+          {signInErrorLine}
         </div>
       </DialogShell>
     );
@@ -649,6 +657,7 @@ export function OnboardingDialog({
             Create new account
           </button>
         )}
+        {signInErrorLine}
       </div>
     </DialogShell>
   );
