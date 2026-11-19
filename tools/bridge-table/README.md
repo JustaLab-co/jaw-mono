@@ -2,7 +2,7 @@
 
 `bun tools/bridge-table/bridge-table.mts` diffs `BRIDGE_CHAINS` in `packages/ui/src/utils/bridgeCalls/contracts.ts` against Across's deployed addresses and Relay's `/chains`, prints an `ok` or `DIFF` line per field and exits 1 on any difference. It needs no install.
 
-`bun tools/bridge-table/bridge-probe.mts` reads real quotes from both APIs through the signing screen's readers and exits 1 if any quote reads as unreadable.
+`bun tools/bridge-table/bridge-probe.mts` reads real Across quotes through the proxy and Relay quotes through the signing screen's readers and exits 1 if any quote reads as unreadable, or if no Across quote comes back (for example when the proxy is down).
 
 `.github/workflows/bridge-table.yml` runs both every day and keeps one open issue while either fails.
 
