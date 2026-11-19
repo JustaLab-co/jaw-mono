@@ -1,3 +1,13 @@
+## 1.14.4 (2026-11-19)
+
+### 🩹 Fixes
+
+- **ui:** ask for the right passkey when the signed-in one can't sign for the request ([#661](https://github.com/JustaLab-co/jaw-mono/pull/661))
+
+### ❤️ Thank You
+
+- Leo Franklin @LeoFranklin015
+
 ## 1.14.3 (2026-11-18)
 
 ### 🩹 Fixes
