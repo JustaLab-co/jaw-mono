@@ -89,7 +89,11 @@ function CLIBridgeContent() {
   const [appName, setAppName] = useState(DEFAULT_BRIDGE_APP_NAME);
   // iOS ignores window.close() on a tab another app opened, and shows its own way back.
   const [onIOS, setOnIOS] = useState(false);
-  useEffect(() => setOnIOS(/iPhone|iPad|iPod/.test(navigator.userAgent)), []);
+  // iPadOS Safari reports a desktop Mac user agent, told apart only by its touch points.
+  useEffect(() => {
+    const ua = navigator.userAgent;
+    setOnIOS(/iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1));
+  }, []);
   const sdkRef = useRef<ReturnType<typeof JAW.create> | null>(null);
   /** What `sdkRef` was built from, so a second init can tell whether it still fits. */
   const sdkSignatureRef = useRef<string | null>(null);
@@ -113,6 +117,8 @@ function CLIBridgeContent() {
    */
   const sendRef = useRef<Send | null>(null);
   const [send, setSend] = useState<Send | null>(null);
+  /** Whether the last answer was a refusal or an error, so the end screen does not read as approved. */
+  const [refused, setRefused] = useState(false);
   const trackSend = useCallback((next: Send | null) => {
     sendRef.current = next;
     setSend(next);
@@ -165,6 +171,7 @@ function CLIBridgeContent() {
         setLastMethod(method);
       }
       const reply = given.request === request ? await given.reply : idReused(id);
+      setRefused(!reply.success);
       ws.send(JSON.stringify(await encryptAndSerialize(secret, reply)));
     },
     [trackSend]
@@ -172,6 +179,13 @@ function CLIBridgeContent() {
 
   // The wallet keeps the receipt waiter alive only while it is asked, so the page asks until the send ends.
   const pendingSendId = send?.phase === 'submitted' ? send.id : null;
+  const done = state === 'ended' && !refused && (!send || send.phase === 'confirmed');
+
+  // Only a request that ended well survives a reload as done. Anything else comes
+  // back as a lost link, since the outcome is not kept.
+  useEffect(() => {
+    if (done && sessionId) markEnded(sessionId);
+  }, [done, sessionId]);
   useEffect(() => {
     if (!pendingSendId) return;
     const stopAt = Date.now() + SEND_POLL_LIMIT_MS;
@@ -201,6 +215,7 @@ function CLIBridgeContent() {
     let unanswered: ReturnType<typeof setTimeout> | undefined;
     answersRef.current = new Map();
     trackSend(null);
+    setRefused(false);
     let clientPosted = false;
     let initArrived = false;
     let serverEnded = false;
@@ -389,7 +404,6 @@ function CLIBridgeContent() {
 
                 case 'shutdown':
                   serverEnded = true;
-                  markEnded(sessionId);
                   endRequest('ended');
                   // A send keeps the tab open so the owner can watch it land. The
                   // socket still closes, so the relay does not keep the idle
@@ -544,7 +558,7 @@ function CLIBridgeContent() {
 
         {state === 'ended' && !pendingSendId && (
           <>
-            <p className="text-success text-base font-semibold">Done ✓</p>
+            {done && <p className="text-success text-base font-semibold">Done ✓</p>}
             <p className="text-muted-foreground mt-2 text-sm leading-relaxed">
               This request has ended. You can close this tab.
             </p>

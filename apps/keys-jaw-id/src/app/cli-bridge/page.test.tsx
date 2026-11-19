@@ -450,6 +450,78 @@ describe('cli-bridge page when the server ends the request', () => {
     expect(host.textContent).toContain('Tap ◀ at the top left to go back to the app you came from.');
   });
 
+  it('given a shutdown on an iPad, which reports a Mac user agent, the page shows how to go back', async () => {
+    const ua = vi
+      .spyOn(navigator, 'userAgent', 'get')
+      .mockReturnValue(
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15'
+      );
+    // jsdom has no maxTouchPoints, so the test gives the navigator one.
+    Object.defineProperty(navigator, 'maxTouchPoints', { value: 5, configurable: true });
+    onTestFinished(() => {
+      ua.mockRestore();
+      Reflect.deleteProperty(navigator, 'maxTouchPoints');
+    });
+    vi.stubGlobal('close', vi.fn());
+    const ws = await start();
+    await init(ws, { appName: 'Claude' });
+
+    await deliver(ws, { type: 'shutdown' });
+
+    expect(host.textContent).toContain('Tap ◀ at the top left to go back to the app you came from.');
+  });
+
+  it('given the owner refused the request, the shutdown says it ended without done', async () => {
+    vi.stubGlobal('close', vi.fn());
+    created.request = async () => {
+      throw { code: 4001, message: 'User rejected the request.' };
+    };
+    const ws = await start();
+    await init(ws, { appName: 'Claude' });
+    await deliver(ws, { type: 'rpc_request', id: 'r1', method: 'personal_sign', params: ['0x00', '0x01'] });
+    await vi.waitFor(async () => expect(await answers(ws, 'r1')).toHaveLength(1));
+
+    await deliver(ws, { type: 'shutdown' });
+
+    expect(host.textContent).toContain('This request has ended. You can close this tab.');
+    expect(host.textContent).not.toContain('Done ✓');
+  });
+
+  it('given a reload after a refused request ended, the page does not say done', async () => {
+    vi.stubGlobal('close', vi.fn());
+    created.session = 'refused';
+    created.request = async () => {
+      throw { code: 4001, message: 'User rejected the request.' };
+    };
+    const ws = await start();
+    await init(ws, { appName: 'Claude' });
+    await deliver(ws, { type: 'rpc_request', id: 'r1', method: 'personal_sign', params: ['0x00', '0x01'] });
+    await vi.waitFor(async () => expect(await answers(ws, 'r1')).toHaveLength(1));
+    await deliver(ws, { type: 'shutdown' });
+    await act(async () => root.render(<div />));
+
+    window.location.hash = '';
+    await act(async () => root.render(<CLIBridgePage />));
+
+    expect(host.textContent).not.toContain('Done ✓');
+    expect(host.textContent).toContain('This tab lost its link.');
+  });
+
+  it('given a reload after an init was refused and the client left, the page keeps no done', async () => {
+    vi.stubGlobal('close', vi.fn());
+    created.session = 'init-refused';
+    const ws = await start();
+    await init(ws, { chainId: 999999 });
+    await deliver(ws, { type: 'shutdown' });
+    await act(async () => root.render(<div />));
+
+    window.location.hash = '';
+    await act(async () => root.render(<CLIBridgePage />));
+
+    expect(host.textContent).not.toContain('Done ✓');
+    expect(host.textContent).toContain('This tab lost its link.');
+  });
+
   it('given a shutdown on a desktop browser, the page says done without the iPhone hint', async () => {
     vi.stubGlobal('close', vi.fn());
     const ws = await start();
@@ -1163,6 +1235,23 @@ describe('cli-bridge page after a send', () => {
     expect(host.textContent).not.toContain(CAN_CLOSE);
   });
 
+  it('given a reload before the send settles, the page does not say done', async () => {
+    vi.stubGlobal('close', vi.fn());
+    created.session = 'send-pending';
+    sends({ status: 100 });
+    const ws = await start();
+    await init(ws, {});
+    await sent(ws);
+    await deliver(ws, { type: 'shutdown' });
+    await act(async () => root.render(<div />));
+
+    window.location.hash = '';
+    await act(async () => root.render(<CLIBridgePage />));
+
+    expect(host.textContent).not.toContain('Done ✓');
+    expect(host.textContent).toContain('This tab lost its link.');
+  });
+
   it('shows a relay error next to the send, and still says to wait for it', async () => {
     sends({ status: 100 });
     const ws = await start();
@@ -1243,10 +1332,10 @@ describe('cli-bridge page after a send', () => {
     });
 
     it.each([
-      ['confirmed', 'Confirmed', { status: 200, receipts: [receipt] }],
-      ['reverted', 'Failed', { status: 500, receipts: [receipt] }],
-      ['never landed', 'Failed', { status: 400 }],
-    ])('says a %s send is done and the tab can be closed once the client shuts down', async (_, title, status) => {
+      ['confirmed', 'Confirmed', { status: 200, receipts: [receipt] }, true],
+      ['reverted', 'Failed', { status: 500, receipts: [receipt] }, false],
+      ['never landed', 'Failed', { status: 400 }, false],
+    ])('says a %s send ended and the tab can be closed once the client shuts down', async (_, title, status, done) => {
       sends(status);
       const ws = await start();
       await init(ws, {});
@@ -1257,6 +1346,7 @@ describe('cli-bridge page after a send', () => {
 
       expect(host.textContent).toContain(title);
       expect(host.textContent).toContain(CAN_CLOSE);
+      expect(host.textContent!.includes('Done ✓')).toBe(done);
       expect(host.textContent).not.toContain('Connected');
       expect(host.textContent).not.toContain('Keep it open');
       expect(host.textContent).not.toContain(KEEP_OPEN);
