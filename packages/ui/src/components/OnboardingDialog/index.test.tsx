@@ -166,6 +166,47 @@ describe('OnboardingDialog with an expected account', () => {
   });
 });
 
+describe('OnboardingDialog switching to the passkey a request needs', () => {
+  // The signed-in passkey ('cred-last') does not own the requested account. A new account can never
+  // be the requested one, and falling back to the signed-in passkey would only fail again.
+  const noCreate = { ...props, expectedAccount: OTHER, switchPasskey: true };
+  const text = () => container.textContent ?? '';
+
+  it('offers the requested account and another passkey, but no new account', async () => {
+    await act(async () => {
+      root.render(createElement(OnboardingDialog, noCreate));
+    });
+    await settle();
+
+    expect(text()).toContain('other.justan.id');
+    expect(text()).toContain('Show more accounts');
+    expect(text()).not.toContain('Create new account');
+  });
+
+  it('signs in with a passkey only when the requested account is not stored here', async () => {
+    const elsewhere = '0x3333333333333333333333333333333333333333';
+    await act(async () => {
+      root.render(createElement(OnboardingDialog, { ...noCreate, expectedAccount: elsewhere }));
+    });
+    await settle();
+
+    expect(text()).toContain('This request is for 0x3333...3333.');
+    expect(text()).toContain('Sign in');
+    expect(text()).not.toContain('ghadi.justan.id');
+    expect(text()).not.toContain('New to JAW?');
+    expect(container.querySelector('input')).toBeNull();
+  });
+
+  it('still offers creation by default', async () => {
+    await act(async () => {
+      root.render(createElement(OnboardingDialog, props));
+    });
+    await settle();
+
+    expect(text()).toContain('Create new account');
+  });
+});
+
 describe('OnboardingDialog tile label', () => {
   const render = async (extra: Partial<OnboardingDialogProps>) => {
     await act(async () => {

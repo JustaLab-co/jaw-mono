@@ -58,6 +58,7 @@ import {
   getStoredLocalAccounts,
   getLastAuthenticatedCredentialId,
 } from '../components/OnboardingDialog/accountHelpers';
+import { signsFor } from '../utils/signsFor';
 import { useChainIconURI } from '../hooks/useChainIconURI';
 import { useGasEstimation } from '../hooks/useGasEstimation';
 import { useSpenderPrefund, describeSpenderPrefund } from '../hooks/useSpenderPrefund';
@@ -524,6 +525,7 @@ export class ReactUIHandler implements UIHandler {
               paymasters={this.config.paymasters}
               appName={this.config.appName}
               appLogoUrl={this.config.appLogoUrl}
+              serverUrl={this.config.serverUrl}
             />
           );
         }
@@ -538,6 +540,7 @@ export class ReactUIHandler implements UIHandler {
             paymasters={this.config.paymasters}
             appName={this.config.appName}
             appLogoUrl={this.config.appLogoUrl}
+            serverUrl={this.config.serverUrl}
           />
         );
       }
@@ -574,6 +577,7 @@ export class ReactUIHandler implements UIHandler {
                 paymasters={this.config.paymasters}
                 appName={this.config.appName}
                 appLogoUrl={this.config.appLogoUrl}
+                serverUrl={this.config.serverUrl}
               />
             );
           }
@@ -598,6 +602,7 @@ export class ReactUIHandler implements UIHandler {
               paymasters={this.config.paymasters}
               appName={this.config.appName}
               appLogoUrl={this.config.appLogoUrl}
+              serverUrl={this.config.serverUrl}
             />
           );
         } else if (signType === '0x01') {
@@ -626,6 +631,7 @@ export class ReactUIHandler implements UIHandler {
               paymasters={this.config.paymasters}
               appName={this.config.appName}
               appLogoUrl={this.config.appLogoUrl}
+              serverUrl={this.config.serverUrl}
             />
           );
         } else {
@@ -646,6 +652,7 @@ export class ReactUIHandler implements UIHandler {
             paymasters={this.config.paymasters}
             appName={this.config.appName}
             appLogoUrl={this.config.appLogoUrl}
+            serverUrl={this.config.serverUrl}
           />
         );
 
@@ -663,6 +670,7 @@ export class ReactUIHandler implements UIHandler {
             appName={this.config.appName}
             appLogoUrl={this.config.appLogoUrl}
             originLabel={this.originLabel}
+            serverUrl={this.config.serverUrl}
           />
         );
 
@@ -680,6 +688,7 @@ export class ReactUIHandler implements UIHandler {
             appName={this.config.appName}
             appLogoUrl={this.config.appLogoUrl}
             originLabel={this.originLabel}
+            serverUrl={this.config.serverUrl}
           />
         );
 
@@ -696,6 +705,7 @@ export class ReactUIHandler implements UIHandler {
             paymasters={this.config.paymasters}
             appName={this.config.appName}
             appLogoUrl={this.config.appLogoUrl}
+            serverUrl={this.config.serverUrl}
           />
         );
 
@@ -712,6 +722,7 @@ export class ReactUIHandler implements UIHandler {
             paymasters={this.config.paymasters}
             appName={this.config.appName}
             appLogoUrl={this.config.appLogoUrl}
+            serverUrl={this.config.serverUrl}
           />
         );
 
@@ -761,6 +772,216 @@ async function getAccountForSigning(apiKey?: string, chainId?: number, paymaster
     apiKey,
     paymasterUrl,
   });
+}
+
+/**
+ * The account a dialog signs with: the signed-in passkey's, restored from storage. That passkey
+ * is whichever signed in last, which need not own `address`, the account the request is for, and
+ * there may be none at all (after clearing site data, say). In either case `needsPasskey` is set
+ * and `account` stays null, so nothing is estimated or signed for an account it can't sign for.
+ * The dialog shows `PasskeySwitchDialog` instead, and `switchedTo` hands over the account it
+ * signed in.
+ *
+ * A signed-in passkey that fails to restore (the network, say) sets `restoreFailed` instead: the
+ * dialog shows as before, and `signingAccount` tries again when Sign is pressed, so the failure
+ * is reported there rather than leaving Sign disabled.
+ */
+function useSigningAccount({
+  apiKey,
+  chainId,
+  paymasterUrl,
+  address,
+}: {
+  apiKey?: string;
+  chainId: number;
+  paymasterUrl?: string;
+  address?: string;
+}): {
+  account: Account | null;
+  needsPasskey: boolean;
+  restoreFailed: boolean;
+  switchedTo: (account: Account) => void;
+  signingAccount: () => Promise<Account>;
+} {
+  const [state, setState] = useState<{ account: Account | null; needsPasskey: boolean; restoreFailed: boolean }>({
+    account: null,
+    needsPasskey: false,
+    restoreFailed: false,
+  });
+
+  useEffect(() => {
+    let isMounted = true;
+    const restore = async () => {
+      let restored: Account;
+      try {
+        restored = await getAccountForSigning(apiKey, chainId, paymasterUrl);
+      } catch (error) {
+        console.error('Error initializing account:', error);
+        // No passkey signed in (after clearing site data, say): the account screen is where one
+        // signs in. One that is signed in but didn't restore is retried when Sign is pressed.
+        const signedIn = !!Account.getAuthenticatedAddress(apiKey);
+        if (isMounted) setState({ account: null, needsPasskey: !signedIn, restoreFailed: signedIn });
+        return;
+      }
+      let canSign = true;
+      try {
+        canSign = await signsFor(restored, address);
+      } catch (error) {
+        // Not an ownership refusal (the network, say): the dialog reports it as it always has.
+        console.error('Could not check the signed-in passkey against the request:', error);
+      }
+      if (isMounted)
+        setState(
+          canSign
+            ? { account: restored, needsPasskey: false, restoreFailed: false }
+            : { account: null, needsPasskey: true, restoreFailed: false }
+        );
+    };
+    restore();
+    return () => {
+      isMounted = false;
+    };
+  }, [apiKey, chainId, paymasterUrl, address]);
+
+  const switchedTo = (account: Account) => setState({ account, needsPasskey: false, restoreFailed: false });
+  const signingAccount = async () => state.account ?? getAccountForSigning(apiKey, chainId, paymasterUrl);
+  return { ...state, switchedTo, signingAccount };
+}
+
+/**
+ * The account screen, asking for a passkey that can sign for `expectedAccount` after the signed-in
+ * one turned out not to, or when none is signed in. Signing in here also makes that passkey the
+ * signed-in one, so the next request opens straight on its dialog. A passkey that still can't sign
+ * shows the mismatch screen. With no `expectedAccount`, any saved passkey will do.
+ */
+function PasskeySwitchDialog({
+  expectedAccount,
+  apiKey,
+  chainId,
+  paymasterUrl,
+  serverUrl,
+  onSwitched,
+  onCancel,
+}: {
+  expectedAccount?: string;
+  apiKey?: string;
+  chainId: number;
+  paymasterUrl?: string;
+  serverUrl?: string;
+  onSwitched: (account: Account) => void;
+  onCancel: () => void;
+}) {
+  const [accounts, setAccounts] = useState<LocalStorageAccount[]>(() => getStoredLocalAccounts(apiKey));
+  const [loggingInAccount, setLoggingInAccount] = useState<string | null>(null);
+  const [isImporting, setIsImporting] = useState(false);
+  const [mismatchedAccount, setMismatchedAccount] = useState<{ address: string; name?: string } | null>(null);
+  const [signInError, setSignInError] = useState<string | null>(null);
+  const config = { chainId, apiKey: apiKey ?? '', paymasterUrl, serverUrl };
+
+  const stopBusy = () => {
+    setLoggingInAccount(null);
+    setIsImporting(false);
+  };
+
+  // A dismissed passkey prompt just leaves the screen as it was. Anything else is said on screen,
+  // so a sign-in that failed doesn't look like one the person called off.
+  const signInFailed = (error: unknown) => {
+    console.error('Sign-in failed:', error);
+    if (!(error instanceof Error && error.name === 'NotAllowedError')) {
+      setSignInError("Couldn't sign in with this passkey. Check your connection and try again.");
+    }
+    stopBusy();
+  };
+
+  const finishSignIn = async (signedIn: Account, name?: string) => {
+    let canSign: boolean;
+    try {
+      canSign = await signsFor(signedIn, expectedAccount);
+    } catch (error) {
+      // Not a refusal (the network, say).
+      console.error('Could not check the passkey against the request:', error);
+      setSignInError("Couldn't check this passkey against the account. Check your connection and try again.");
+      stopBusy();
+      return;
+    }
+    if (canSign) {
+      onSwitched(signedIn);
+      return;
+    }
+    setMismatchedAccount({ address: signedIn.address, name });
+    stopBusy();
+  };
+
+  const handleAccountSelect = async (account: LocalStorageAccount) => {
+    if (!account.credentialId) return;
+    setSignInError(null);
+    setLoggingInAccount(account.username);
+    let signedIn: Account;
+    try {
+      signedIn = await Account.get(config, account.credentialId);
+    } catch (error) {
+      signInFailed(error);
+      return;
+    }
+    await finishSignIn(signedIn, account.username);
+  };
+
+  const handleImportAccount = async () => {
+    setSignInError(null);
+    setIsImporting(true);
+    let imported: Account;
+    try {
+      imported = await Account.import(config);
+    } catch (error) {
+      signInFailed(error);
+      return;
+    }
+    setAccounts(getStoredLocalAccounts(apiKey));
+    await finishSignIn(imported, imported.getMetadata()?.username);
+  };
+
+  return (
+    <DefaultDialogComponent
+      open
+      onOpenChange={(newOpen) => {
+        if (!newOpen) onCancel();
+      }}
+      // OnboardingDialog brings its own DialogShell (see OnboardingDialogWrapper).
+      ownsBottomInset
+      contentStyle={{
+        width: 'fit-content',
+        maxWidth: '450px',
+        background: 'transparent',
+        border: 'none',
+        boxShadow: 'none',
+      }}
+      innerStyle={{ padding: 0, overflow: 'visible' }}
+    >
+      <OnboardingDialog
+        onClose={onCancel}
+        accounts={accounts}
+        onAccountSelect={handleAccountSelect}
+        loggingInAccount={loggingInAccount}
+        onImportAccount={handleImportAccount}
+        isImporting={isImporting}
+        // Never offered with switchPasskey: a new account is never the requested one.
+        onCreateAccount={async () => {
+          throw new Error('Creating an account is not offered when switching passkeys');
+        }}
+        onAccountCreationComplete={async () => undefined}
+        isCreating={false}
+        chainId={chainId}
+        mainnetRpcUrl={getMainnetRpcUrl(apiKey)}
+        apiKey={apiKey}
+        lastAuthenticatedCredentialId={getLastAuthenticatedCredentialId(apiKey)}
+        expectedAccount={expectedAccount}
+        mismatchedAccount={mismatchedAccount ?? undefined}
+        onRetryAccount={() => setMismatchedAccount(null)}
+        signInError={signInError ?? undefined}
+        switchPasskey
+      />
+    </DefaultDialogComponent>
+  );
 }
 
 // OnboardingDialogWrapper - handles passkey authentication flow with ConnectDialog confirmation
@@ -1301,6 +1522,7 @@ function SignatureDialogWrapper({
   paymasters,
   appName,
   appLogoUrl,
+  serverUrl,
 }: {
   request: SignatureUIRequest;
   onApprove: (data: any, holdMs?: number) => void;
@@ -1310,6 +1532,7 @@ function SignatureDialogWrapper({
   paymasters?: Record<number, PaymasterConfig>;
   appName?: string;
   appLogoUrl?: string | null;
+  serverUrl?: string;
 }) {
   const [open, setOpen] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -1318,6 +1541,15 @@ function SignatureDialogWrapper({
 
   // Use chainId from request (current chain), fallback to defaultChainId
   const chainId = request.data.chainId || defaultChainId || 1;
+
+  // Signs with the account this check passed (or the account screen switched to), so Sign waits for
+  // it: a fresh restore at click time could still be the passkey that can't sign for the request.
+  const { account, needsPasskey, restoreFailed, switchedTo, signingAccount } = useSigningAccount({
+    apiKey,
+    chainId,
+    paymasterUrl: paymasters?.[chainId]?.url,
+    address: request.data.address,
+  });
   const chainName = getChainNameFromId(chainId);
   const chainIcon = useChainIconURI(chainId, apiKey, 24);
 
@@ -1325,11 +1557,10 @@ function SignatureDialogWrapper({
     setIsProcessing(true);
     setSignatureStatus('Signing message...');
     try {
-      // Restore account for signing
-      const account = await getAccountForSigning(apiKey, chainId, paymasters?.[chainId]?.url);
+      const signer = await signingAccount();
 
       // Sign the message
-      const signature = await account.signMessage(request.data.message, { address: request.data.address });
+      const signature = await signer.signMessage(request.data.message, { address: request.data.address });
 
       setSignatureStatus('Signature successful!');
       // Deliver, then hold the tick (onApprove resolves now, defers teardown — no delay).
@@ -1356,6 +1587,20 @@ function SignatureDialogWrapper({
     onReject(UIError.userRejected());
   };
 
+  if (needsPasskey) {
+    return (
+      <PasskeySwitchDialog
+        expectedAccount={request.data.address}
+        apiKey={apiKey}
+        chainId={chainId}
+        paymasterUrl={paymasters?.[chainId]?.url}
+        serverUrl={serverUrl}
+        onSwitched={switchedTo}
+        onCancel={handleCancel}
+      />
+    );
+  }
+
   return (
     <SignatureDialog
       open={open}
@@ -1377,7 +1622,7 @@ function SignatureDialogWrapper({
       isProcessing={isProcessing}
       isSuccess={isSuccess}
       signatureStatus={signatureStatus}
-      canSign={!isProcessing && !!request.data.message}
+      canSign={!isProcessing && (!!account || restoreFailed) && !!request.data.message}
     />
   );
 }
@@ -1391,6 +1636,7 @@ function Eip712DialogWrapper({
   paymasters,
   appName,
   appLogoUrl,
+  serverUrl,
 }: {
   request: TypedDataUIRequest;
   onApprove: (data: any, holdMs?: number) => void;
@@ -1400,6 +1646,7 @@ function Eip712DialogWrapper({
   paymasters?: Record<number, PaymasterConfig>;
   appName?: string;
   appLogoUrl?: string | null;
+  serverUrl?: string;
 }) {
   const [open, setOpen] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -1408,6 +1655,15 @@ function Eip712DialogWrapper({
 
   // Use chainId from request (current chain), fallback to defaultChainId
   const chainId = request.data.chainId || defaultChainId || 1;
+
+  // Signs with the account this check passed (or the account screen switched to), so Sign waits for
+  // it: a fresh restore at click time could still be the passkey that can't sign for the request.
+  const { account, needsPasskey, restoreFailed, switchedTo, signingAccount } = useSigningAccount({
+    apiKey,
+    chainId,
+    paymasterUrl: paymasters?.[chainId]?.url,
+    address: request.data.address,
+  });
   const chainName = getChainNameFromId(chainId);
   const chainIcon = useChainIconURI(chainId, apiKey, 24);
 
@@ -1415,15 +1671,14 @@ function Eip712DialogWrapper({
     setIsProcessing(true);
     setSignatureStatus('Signing typed data...');
     try {
-      // Restore account for signing
-      const account = await getAccountForSigning(apiKey, chainId, paymasters?.[chainId]?.url);
+      const signer = await signingAccount();
 
       // Parse typed data if it's a string
       const typedData =
         typeof request.data.typedData === 'string' ? JSON.parse(request.data.typedData) : request.data.typedData;
 
       // Sign the typed data
-      const signature = await account.signTypedData(
+      const signature = await signer.signTypedData(
         {
           domain: typedData.domain,
           types: typedData.types,
@@ -1458,6 +1713,20 @@ function Eip712DialogWrapper({
     onReject(UIError.userRejected());
   };
 
+  if (needsPasskey) {
+    return (
+      <PasskeySwitchDialog
+        expectedAccount={request.data.address}
+        apiKey={apiKey}
+        chainId={chainId}
+        paymasterUrl={paymasters?.[chainId]?.url}
+        serverUrl={serverUrl}
+        onSwitched={switchedTo}
+        onCancel={handleCancel}
+      />
+    );
+  }
+
   return (
     <Eip712Dialog
       open={open}
@@ -1479,7 +1748,7 @@ function Eip712DialogWrapper({
       isProcessing={isProcessing}
       isSuccess={isSuccess}
       signatureStatus={signatureStatus}
-      canSign={!isProcessing && !!request.data.typedData}
+      canSign={!isProcessing && (!!account || restoreFailed) && !!request.data.typedData}
     />
   );
 }
@@ -1495,6 +1764,7 @@ function TransactionDialogWrapper({
   appName,
   appLogoUrl,
   originLabel,
+  serverUrl,
 }: {
   request: TransactionUIRequest;
   onApprove: (data: any) => void;
@@ -1507,6 +1777,7 @@ function TransactionDialogWrapper({
   appName?: string;
   appLogoUrl?: string | null;
   originLabel?: string;
+  serverUrl?: string;
 }) {
   const [open, setOpen] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -1514,7 +1785,6 @@ function TransactionDialogWrapper({
   // re-render, which is too soft a gate for a call that moves funds (permission
   // and EIP-7702 paths sign without a passkey prompt).
   const submittingRef = useRef(false);
-  const [account, setAccount] = useState<Account | null>(null);
   // Fee token state for ERC-20 paymaster
   const [feeTokens, setFeeTokens] = useState<FeeTokenOption[]>([]);
   const [feeTokensLoading, setFeeTokensLoading] = useState(false);
@@ -1533,6 +1803,15 @@ function TransactionDialogWrapper({
   );
 
   const isSponsored = !!effectivePaymasterUrl;
+
+  // Restored with effectivePaymasterUrl (stable), not computedPaymasterUrl: re-restoring when the
+  // user changes fee token would re-run gas estimation in a dependency cycle.
+  const { account, needsPasskey, switchedTo } = useSigningAccount({
+    apiKey,
+    chainId,
+    paymasterUrl: effectivePaymasterUrl,
+    address: request.data.from,
+  });
 
   // Transform calls to transactions format expected by dialog
   const transactions = useMemo(
@@ -1704,31 +1983,6 @@ function TransactionDialogWrapper({
     };
   }, [chainId, apiKey, request.data.from, effectivePaymasterUrl, viemChain]);
 
-  // Initialize account
-  // Note: Use effectivePaymasterUrl (stable) instead of computedPaymasterUrl to avoid
-  // re-initializing account when user changes fee token selection (which would cause
-  // gas estimation to run multiple times in a dependency cycle)
-  useEffect(() => {
-    let isMounted = true;
-
-    const initializeAccount = async () => {
-      try {
-        const restoredAccount = await getAccountForSigning(apiKey, chainId, effectivePaymasterUrl);
-        if (isMounted) {
-          setAccount(restoredAccount);
-        }
-      } catch (error) {
-        console.error('Error initializing account:', error);
-      }
-    };
-
-    initializeAccount();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [apiKey, chainId, effectivePaymasterUrl]);
-
   // Note: Gas estimation is now handled by useGasEstimation hook
 
   const handleConfirm = async () => {
@@ -1794,6 +2048,20 @@ function TransactionDialogWrapper({
   // Determine if fee token selector should be shown (not sponsored and has fee tokens)
   const showFeeTokenSelector = !isSponsored && feeTokens.length > 0;
 
+  if (needsPasskey) {
+    return (
+      <PasskeySwitchDialog
+        expectedAccount={request.data.from}
+        apiKey={apiKey}
+        chainId={chainId}
+        paymasterUrl={effectivePaymasterUrl}
+        serverUrl={serverUrl}
+        onSwitched={switchedTo}
+        onCancel={handleCancel}
+      />
+    );
+  }
+
   return (
     <TransactionDialog
       open={open}
@@ -1854,6 +2122,7 @@ function SendTransactionDialogWrapper({
   appName,
   appLogoUrl,
   originLabel,
+  serverUrl,
 }: {
   request: SendTransactionUIRequest;
   onApprove: (data: any) => void;
@@ -1866,6 +2135,7 @@ function SendTransactionDialogWrapper({
   appName?: string;
   appLogoUrl?: string | null;
   originLabel?: string;
+  serverUrl?: string;
 }) {
   const [open, setOpen] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -1873,7 +2143,6 @@ function SendTransactionDialogWrapper({
   // re-render, which is too soft a gate for a call that moves funds (permission
   // and EIP-7702 paths sign without a passkey prompt).
   const submittingRef = useRef(false);
-  const [account, setAccount] = useState<Account | null>(null);
   // Fee token state for ERC-20 paymaster
   const [feeTokens, setFeeTokens] = useState<FeeTokenOption[]>([]);
   const [feeTokensLoading, setFeeTokensLoading] = useState(false);
@@ -1892,6 +2161,15 @@ function SendTransactionDialogWrapper({
   );
 
   const isSponsored = !!effectivePaymasterUrl;
+
+  // Restored with effectivePaymasterUrl (stable), not computedPaymasterUrl: re-restoring when the
+  // user changes fee token would re-run gas estimation in a dependency cycle.
+  const { account, needsPasskey, switchedTo } = useSigningAccount({
+    apiKey,
+    chainId,
+    paymasterUrl: effectivePaymasterUrl,
+    address: request.data.from,
+  });
 
   // Transform eth_sendTransaction data to transactions format expected by dialog
   const transactions = useMemo(
@@ -2048,31 +2326,6 @@ function SendTransactionDialogWrapper({
     };
   }, [chainId, apiKey, request.data.from, effectivePaymasterUrl, viemChain]);
 
-  // Initialize account
-  // Note: Use effectivePaymasterUrl (stable) instead of computedPaymasterUrl to avoid
-  // re-initializing account when user changes fee token selection (which would cause
-  // gas estimation to run multiple times in a dependency cycle)
-  useEffect(() => {
-    let isMounted = true;
-
-    const initializeAccount = async () => {
-      try {
-        const restoredAccount = await getAccountForSigning(apiKey, chainId, effectivePaymasterUrl);
-        if (isMounted) {
-          setAccount(restoredAccount);
-        }
-      } catch (error) {
-        console.error('Error initializing account:', error);
-      }
-    };
-
-    initializeAccount();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [apiKey, chainId, effectivePaymasterUrl]);
-
   // Note: Gas estimation is now handled by useGasEstimation hook
 
   const handleConfirm = async () => {
@@ -2132,6 +2385,20 @@ function SendTransactionDialogWrapper({
   // Determine if fee token selector should be shown (not sponsored and has fee tokens)
   const showFeeTokenSelector = !isSponsored && feeTokens.length > 0;
 
+  if (needsPasskey) {
+    return (
+      <PasskeySwitchDialog
+        expectedAccount={request.data.from}
+        apiKey={apiKey}
+        chainId={chainId}
+        paymasterUrl={effectivePaymasterUrl}
+        serverUrl={serverUrl}
+        onSwitched={switchedTo}
+        onCancel={handleCancel}
+      />
+    );
+  }
+
   return (
     <TransactionDialog
       open={open}
@@ -2187,6 +2454,7 @@ function PermissionDialogWrapper({
   paymasters,
   appName,
   appLogoUrl,
+  serverUrl,
 }: {
   request: PermissionUIRequest;
   onApprove: (data: any) => void;
@@ -2197,13 +2465,13 @@ function PermissionDialogWrapper({
   paymasters?: Record<number, PaymasterConfig>;
   appName?: string;
   appLogoUrl?: string | null;
+  serverUrl?: string;
 }) {
   const [open, setOpen] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
   const [status, setStatus] = useState<string>('');
   const [tokenInfoMap, setTokenInfoMap] = useState<TokenInfoMap>({});
   const [isLoadingTokenInfo, setIsLoadingTokenInfo] = useState(true);
-  const [account, setAccount] = useState<Account | null>(null);
   const [feeTokens, setFeeTokens] = useState<FeeTokenOption[]>([]);
   const [feeTokensLoading, setFeeTokensLoading] = useState(true);
   // Synchronous re-entry guard: isProcessing disables the buttons only after a
@@ -2234,6 +2502,15 @@ function PermissionDialogWrapper({
 
   // Check if this is a sponsored transaction (paymaster provided)
   const isSponsored = !!effectivePaymasterUrl;
+
+  // Restored with effectivePaymasterUrl (stable), not computedPaymasterUrl: re-restoring when the
+  // user changes fee token would re-run gas estimation in a dependency cycle.
+  const { account, needsPasskey, switchedTo } = useSigningAccount({
+    apiKey,
+    chainId,
+    paymasterUrl: effectivePaymasterUrl,
+    address: request.data.address,
+  });
 
   // The transfer to the spender the request asked for, sized before the screen renders so the
   // screen shows it and the grant sends exactly that.
@@ -2486,31 +2763,6 @@ function PermissionDialogWrapper({
     };
   }, [chainId, apiKey, request.data.address, effectivePaymasterUrl, viemChain]);
 
-  // Initialize account
-  // Note: Use effectivePaymasterUrl (stable) instead of computedPaymasterUrl to avoid
-  // re-initializing account when user changes fee token selection (which would cause
-  // gas estimation to run multiple times in a dependency cycle)
-  useEffect(() => {
-    let isMounted = true;
-
-    const initializeAccount = async () => {
-      try {
-        const restoredAccount = await getAccountForSigning(apiKey, chainId, effectivePaymasterUrl);
-        if (isMounted) {
-          setAccount(restoredAccount);
-        }
-      } catch (error) {
-        console.error('[PermissionDialogWrapper] Error initializing account:', error);
-      }
-    };
-
-    initializeAccount();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [apiKey, chainId, effectivePaymasterUrl]);
-
   // Note: Gas estimation is now handled by useGasEstimation hook
 
   // Convert to SpendPermission array format expected by PermissionDialog
@@ -2623,6 +2875,20 @@ function PermissionDialogWrapper({
     onReject(UIError.userRejected());
   };
 
+  if (needsPasskey) {
+    return (
+      <PasskeySwitchDialog
+        expectedAccount={request.data.address}
+        apiKey={apiKey}
+        chainId={chainId}
+        paymasterUrl={effectivePaymasterUrl}
+        serverUrl={serverUrl}
+        onSwitched={switchedTo}
+        onCancel={handleCancel}
+      />
+    );
+  }
+
   return (
     <PermissionDialog
       open={open}
@@ -2679,6 +2945,7 @@ function SiweDialogWrapper({
   paymasters,
   appName,
   appLogoUrl,
+  serverUrl,
 }: {
   request: SignatureUIRequest;
   onApprove: (data: any, holdMs?: number) => void;
@@ -2688,6 +2955,7 @@ function SiweDialogWrapper({
   paymasters?: Record<number, PaymasterConfig>;
   appName?: string;
   appLogoUrl?: string | null;
+  serverUrl?: string;
 }) {
   const [open, setOpen] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -2696,6 +2964,15 @@ function SiweDialogWrapper({
 
   // Use chainId from request (current chain), fallback to defaultChainId
   const chainId = request.data.chainId || defaultChainId || 1;
+
+  // Signs with the account this check passed (or the account screen switched to), so Sign waits for
+  // it: a fresh restore at click time could still be the passkey that can't sign for the request.
+  const { account, needsPasskey, restoreFailed, switchedTo, signingAccount } = useSigningAccount({
+    apiKey,
+    chainId,
+    paymasterUrl: paymasters?.[chainId]?.url,
+    address: request.data.address,
+  });
   const chainName = getChainNameFromId(chainId);
   const chainIcon = useChainIconURI(chainId, apiKey, 24);
   const origin = typeof window !== 'undefined' ? window.location.origin : 'unknown';
@@ -2732,11 +3009,12 @@ function SiweDialogWrapper({
     setIsProcessing(true);
     setSiweStatus('Signing message...');
     try {
-      // Restore account for signing
-      const account = await getAccountForSigning(apiKey, chainId, paymasters?.[chainId]?.url);
+      const signer = await signingAccount();
 
       // Sign the message
-      const signature = await account.signMessage(request.data.message);
+      // For the account the request names, as personal_sign does: without it a passkey that co-owns
+      // that account would sign in as its own.
+      const signature = await signer.signMessage(request.data.message, { address: request.data.address });
 
       setSiweStatus('Sign-in successful!');
       // Deliver, then hold the tick (onApprove resolves now, defers teardown — no delay).
@@ -2763,6 +3041,20 @@ function SiweDialogWrapper({
     onReject(UIError.userRejected());
   };
 
+  if (needsPasskey) {
+    return (
+      <PasskeySwitchDialog
+        expectedAccount={request.data.address}
+        apiKey={apiKey}
+        chainId={chainId}
+        paymasterUrl={paymasters?.[chainId]?.url}
+        serverUrl={serverUrl}
+        onSwitched={switchedTo}
+        onCancel={handleCancel}
+      />
+    );
+  }
+
   return (
     <SiweDialog
       open={open}
@@ -2784,7 +3076,7 @@ function SiweDialogWrapper({
       isProcessing={isProcessing}
       isSuccess={isSuccess}
       siweStatus={siweStatus}
-      canSign={!isProcessing}
+      canSign={!isProcessing && (!!account || restoreFailed)}
       warningMessage={warningMessage}
     />
   );
@@ -2845,6 +3137,7 @@ function RevokePermissionDialogWrapper({
   paymasters,
   appName,
   appLogoUrl,
+  serverUrl,
 }: {
   request: RevokePermissionUIRequest;
   onApprove: (data: any) => void;
@@ -2855,6 +3148,7 @@ function RevokePermissionDialogWrapper({
   paymasters?: Record<number, PaymasterConfig>;
   appName?: string;
   appLogoUrl?: string | null;
+  serverUrl?: string;
 }) {
   const [open, setOpen] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -2864,7 +3158,6 @@ function RevokePermissionDialogWrapper({
   // second revoke arriving without a remount left the gate open on an empty permission.
   const [isLoadingTokenMetadata, setIsLoadingTokenMetadata] = useState(true);
   const [tokenInfoMap, setTokenInfoMap] = useState<TokenInfoMap>({});
-  const [account, setAccount] = useState<Account | null>(null);
   const [feeTokens, setFeeTokens] = useState<FeeTokenOption[]>([]);
   const [feeTokensLoading, setFeeTokensLoading] = useState(true);
   // Synchronous re-entry guard: isProcessing disables the buttons only after a
@@ -2903,6 +3196,15 @@ function RevokePermissionDialogWrapper({
 
   // Check if this is a sponsored transaction (paymaster provided)
   const isSponsored = !!effectivePaymasterUrl;
+
+  // Restored with effectivePaymasterUrl (stable), not computedPaymasterUrl: re-restoring when the
+  // user changes fee token would re-run gas estimation in a dependency cycle.
+  const { account, needsPasskey, switchedTo } = useSigningAccount({
+    apiKey,
+    chainId,
+    paymasterUrl: effectivePaymasterUrl,
+    address: request.data.address,
+  });
 
   // Build the actual permission revoke call for gas estimation
   const transactionCalls = useMemo(() => {
@@ -3123,31 +3425,6 @@ function RevokePermissionDialogWrapper({
     };
   }, [chainId, apiKey, request.data.address, effectivePaymasterUrl, viemChain]);
 
-  // Initialize account
-  // Note: Use effectivePaymasterUrl (stable) instead of computedPaymasterUrl to avoid
-  // re-initializing account when user changes fee token selection (which would cause
-  // gas estimation to run multiple times in a dependency cycle)
-  useEffect(() => {
-    let isMounted = true;
-
-    const initializeAccount = async () => {
-      try {
-        const restoredAccount = await getAccountForSigning(apiKey, chainId, effectivePaymasterUrl);
-        if (isMounted) {
-          setAccount(restoredAccount);
-        }
-      } catch (error) {
-        console.error('[RevokePermissionDialogWrapper] Error initializing account:', error);
-      }
-    };
-
-    initializeAccount();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [apiKey, chainId, effectivePaymasterUrl]);
-
   // Format spends for display
   const formattedSpends = useMemo(() => {
     if (!fetchedPermissionData?.spends) return [];
@@ -3258,6 +3535,20 @@ function RevokePermissionDialogWrapper({
     setOpen(false);
     onReject(UIError.userRejected());
   };
+
+  if (needsPasskey) {
+    return (
+      <PasskeySwitchDialog
+        expectedAccount={request.data.address}
+        apiKey={apiKey}
+        chainId={chainId}
+        paymasterUrl={effectivePaymasterUrl}
+        serverUrl={serverUrl}
+        onSwitched={switchedTo}
+        onCancel={handleCancel}
+      />
+    );
+  }
 
   return (
     <PermissionDialog

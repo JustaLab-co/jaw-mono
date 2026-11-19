@@ -390,10 +390,15 @@ export function OnboardingDialog({
   expectedAccount,
   mismatchedAccount,
   onRetryAccount,
+  switchPasskey = false,
+  signInError,
 }: OnboardingDialogProps) {
   const defaultAccount = useMemo(
-    () => selectDefaultAccount(accounts, lastAuthenticatedCredentialId, expectedAccount),
-    [accounts, lastAuthenticatedCredentialId, expectedAccount]
+    () =>
+      switchPasskey && expectedAccount
+        ? (accounts.find((a) => a.credentialId && a.address?.toLowerCase() === expectedAccount.toLowerCase()) ?? null)
+        : selectDefaultAccount(accounts, lastAuthenticatedCredentialId, expectedAccount),
+    [accounts, lastAuthenticatedCredentialId, expectedAccount, switchPasskey]
   );
 
   const [view, setView] = useState<OnboardingView>(startInCreate ? 'signup' : defaultAccount ? 'welcome' : 'signin');
@@ -496,6 +501,11 @@ export function OnboardingDialog({
       accounts.find((a) => a.address?.toLowerCase() === expectedAccount.toLowerCase())?.username)
     : undefined;
   const expectedLine = expectedAccount && `This request is for ${namedAddress(expectedAccount, expectedName)}.`;
+  const signInErrorLine = signInError && (
+    <p role="alert" className="text-destructive mt-4 text-center text-xs font-medium">
+      {signInError}
+    </p>
+  );
 
   if (mismatchedAccount && expectedAccount) {
     const signedInAs = mismatchedAccount.name ?? nameOfAddress(mismatchedAccount.address);
@@ -545,7 +555,8 @@ export function OnboardingDialog({
           <p className="text-muted-foreground text-body mt-2">
             {isSignUp
               ? 'Pick a username to create your account.'
-              : (expectedLine ?? 'Use a saved passkey, or create a new account.')}
+              : (expectedLine ??
+                (switchPasskey ? 'Use a saved passkey.' : 'Use a saved passkey, or create a new account.'))}
           </p>
 
           {isSignUp ? (
@@ -554,6 +565,8 @@ export function OnboardingDialog({
               <MonoDivider label="Already have an account?" className="my-5" />
               {passkeyButton}
             </>
+          ) : switchPasskey ? (
+            <div className="mt-6">{passkeyButton}</div>
           ) : (
             <>
               <div className="mt-6">{passkeyButton}</div>
@@ -561,6 +574,7 @@ export function OnboardingDialog({
               {createForm}
             </>
           )}
+          {signInErrorLine}
         </div>
       </DialogShell>
     );
@@ -634,13 +648,16 @@ export function OnboardingDialog({
           {isImporting ? 'Opening Passkey...' : 'Show more accounts'}
         </Button>
 
-        <button
-          onClick={onCreateNewAccount ?? (() => setView('signup'))}
-          disabled={isBusy}
-          className="text-muted-foreground hover:text-foreground mx-auto mt-4 cursor-pointer bg-transparent text-xs font-medium transition-colors"
-        >
-          Create new account
-        </button>
+        {!switchPasskey && (
+          <button
+            onClick={onCreateNewAccount ?? (() => setView('signup'))}
+            disabled={isBusy}
+            className="text-muted-foreground hover:text-foreground mx-auto mt-4 cursor-pointer bg-transparent text-xs font-medium transition-colors"
+          >
+            Create new account
+          </button>
+        )}
+        {signInErrorLine}
       </div>
     </DialogShell>
   );

@@ -6,9 +6,9 @@ import { Account } from '@jaw.id/core';
 import { ReactUIHandler } from './ReactUIHandler';
 
 // The signature dialog is stubbed so the test can press sign through its props.
-let signProps: { onSign?: () => Promise<void> } = {};
+let signProps: { onSign?: () => Promise<void>; canSign?: boolean } = {};
 vi.mock('../components/SignatureDialog', () => ({
-  SignatureDialog: (props: { onSign?: () => Promise<void> }) => {
+  SignatureDialog: (props: { onSign?: () => Promise<void>; canSign?: boolean }) => {
     signProps = props;
     return null;
   },
@@ -57,7 +57,10 @@ describe('ReactUIHandler dismiss', () => {
 
   it('keeps a signed dialog up until its tick ends when dismissed during the hold', async () => {
     vi.stubGlobal('fetch', () => Promise.reject(new Error('offline')));
-    vi.spyOn(Account, 'get').mockResolvedValue({ signMessage: async () => SIGNATURE } as unknown as Account);
+    vi.spyOn(Account, 'get').mockResolvedValue({
+      address: SIGN.data.address,
+      signMessage: async () => SIGNATURE,
+    } as unknown as Account);
     const handler = new ReactUIHandler();
     handler.init({ apiKey: 'test-key', defaultChainId: 1 } as Parameters<ReactUIHandler['init']>[0]);
     let answer: Awaited<ReturnType<ReactUIHandler['request']>> | undefined;
@@ -65,6 +68,8 @@ describe('ReactUIHandler dismiss', () => {
       void handler.request(SIGN as Parameters<ReactUIHandler['request']>[0]).then((r) => (answer = r));
     });
     expect(signProps.onSign).toBeDefined();
+    // Sign is offered once the account that signs is restored and checked against the request.
+    await vi.waitFor(() => expect(signProps.canSign).toBe(true));
 
     vi.useFakeTimers();
     await act(async () => signProps.onSign?.());
