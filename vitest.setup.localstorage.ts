@@ -51,3 +51,15 @@ if (typeof window !== 'undefined' && !isUsable(globalThis.localStorage)) {
     writable: true,
   });
 }
+
+// jsdom ships its own AbortSignal, and Node 24+ refuses it as the `signal` of a Request.
+// viem builds a Request around one on every RPC call, so in a jsdom file each call fails
+// before it reaches `fetch`. Drop the signal there; the timeout it carried is not under test.
+if (typeof window !== 'undefined') {
+  const NodeRequest = globalThis.Request;
+  globalThis.Request = class extends NodeRequest {
+    constructor(input: RequestInfo | URL, init?: RequestInit) {
+      super(input, init && { ...init, signal: null });
+    }
+  };
+}
