@@ -964,6 +964,7 @@ function KeysJawIdAppContent({
           finishDeliveredFlow={finishDeliveredFlow}
           closeDelayMs={CLOSE_DELAY_MS}
           signDelivered={signDelivered}
+          connectedAccount={{ address: authQuery.walletAddress, name: authQuery.accountName }}
         />
       );
     }

@@ -16,6 +16,8 @@ import { debugLog } from '../../lib/debug-log';
 import type { Phase } from '../../lib/select-screen';
 import type { PendingRequest } from '../../utils/types';
 import type { PopupCommunicator } from '../../lib/popup-communicator';
+import { AccountGate, type ConnectedAccount } from './AccountGate';
+import { requestedAccount } from './requestedAccount';
 
 /**
  * Every modal that answers a pending request, in one place.
@@ -44,9 +46,37 @@ export interface RequestModalsProps {
   closeDelayMs: number;
   /** True once a signature has been delivered — drives the modals' tick. */
   signDelivered: boolean;
+  /** The account this app is connected as. A request for another account is checked first. */
+  connectedAccount: ConnectedAccount;
 }
 
-export function RequestModals({
+export function RequestModals(props: RequestModalsProps): ReactElement {
+  const { pendingRequest, communicator, apiKey, currentOrigin, txData, connectedAccount } = props;
+  return (
+    // Keyed by request, like the modals: the embedded iframe stays mounted across flows, and the
+    // check's verdict belongs to one request.
+    <AccountGate
+      key={pendingRequest.requestId}
+      pendingRequest={pendingRequest}
+      address={requestedAccount(pendingRequest, txData)}
+      connectedAccount={connectedAccount}
+      sessionOrigin={currentOrigin || undefined}
+      apiKey={apiKey}
+      onRefuse={async (error, errorCode) => {
+        try {
+          await pendingRequest.onReject(error.message, errorCode);
+        } catch (err) {
+          console.error('❌ Failed to reject:', err);
+        }
+        communicator.requestClose();
+      }}
+    >
+      <RequestModal {...props} />
+    </AccountGate>
+  );
+}
+
+function RequestModal({
   pendingRequest,
   communicator,
   apiKey,
@@ -121,9 +151,9 @@ export function RequestModals({
   }
 
   if (pendingRequest.type === SDKRequestType.SIGN_MESSAGE) {
-    // Extract message and address based on method type
+    // Extract message based on method type. The address is the one the account check read.
     let messageToSign: string;
-    let address: string | undefined;
+    const address = requestedAccount(pendingRequest, txData);
 
     if (pendingRequest.method === 'wallet_sign') {
       // wallet_sign: params[0] is SignParams object
@@ -131,14 +161,11 @@ export function RequestModals({
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const signParams = pendingRequest.params[0] as {
         request: { type: string; data: { message: string } };
-        address?: string;
       };
       messageToSign = signParams?.request?.data?.message || '';
-      address = signParams?.address;
     } else {
       // personal_sign: params[0] is message, params[1] is address
       messageToSign = pendingRequest.params[0] as string;
-      address = pendingRequest.params[1] as string;
     }
 
     // Check if this is a SIWE (Sign-In with Ethereum) message
@@ -234,8 +261,8 @@ export function RequestModals({
   }
 
   if (pendingRequest.type === SDKRequestType.SIGN_TYPED_DATA) {
-    // Extract typed data JSON and address based on method type
-    let address: string | undefined;
+    // Extract typed data JSON based on method type. The address is the one the account check read.
+    const address = requestedAccount(pendingRequest, txData);
     let typedDataJson: string;
 
     if (pendingRequest.method === 'wallet_sign') {
@@ -243,18 +270,14 @@ export function RequestModals({
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const signParams = pendingRequest.params[0] as {
         request: { type: string; data: Record<string, unknown> };
-        address?: string;
       };
 
       const data = signParams?.request?.data;
       typedDataJson = typeof data === 'string' ? data : JSON.stringify(data);
 
-      address = signParams?.address;
-
       debugLog('🔍 wallet_sign EIP-712 Request:', { type: signParams?.request?.type, address, typedDataJson });
     } else {
       // eth_signTypedData_v4: params[0] is address, params[1] is typed data JSON string
-      address = pendingRequest.params[0] as string;
       typedDataJson = pendingRequest.params[1] as string;
 
       debugLog('🔍 eth_signTypedData_v4 Request:', { address, typedDataJson });
