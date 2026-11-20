@@ -24,8 +24,15 @@ const world = {
   owned: new Set<string>(),
   offline: false,
   restoreFailed: false,
+  /** Restoring the app's passkey never finishes, as on a slow network. */
+  restoreHangs: false,
   /** Core's owner lookup never answers, as on a slow network. */
   checkHangs: false,
+  /** Core's owner lookup answers once this settles. */
+  checkWaitsFor: null as Promise<void> | null,
+  /** How often the popup read the app's session, and asked core about an account. */
+  sessionReads: 0,
+  ownerChecks: 0,
   /** The connected account's name, if it has one. */
   connectedName: 'bee.justan.id' as string | null,
 };
@@ -34,7 +41,9 @@ const world = {
 const sessionAccount = {
   address: CONNECTED,
   getSmartAccountFor: async (address?: string) => {
+    world.ownerChecks++;
     if (world.checkHangs) await new Promise(() => undefined);
+    if (world.checkWaitsFor) await world.checkWaitsFor;
     if (world.offline) throw new Error('fetch failed');
     if (!address || world.owned.has(address.toLowerCase())) return {};
     throw standardErrors.rpc.invalidParams(`Signer is not an owner on account ${address}`);
@@ -42,13 +51,16 @@ const sessionAccount = {
 };
 
 vi.mock('../../hooks', () => ({
-  useSessionAccount: () => ({
-    account: world.restoreFailed ? null : sessionAccount,
-    isLoading: false,
-    error: world.restoreFailed ? new Error('restore failed') : null,
-    walletAddress: CONNECTED,
-    isAuthenticated: true,
-  }),
+  useSessionAccount: () => {
+    world.sessionReads++;
+    return {
+      account: world.restoreFailed || world.restoreHangs ? null : sessionAccount,
+      isLoading: world.restoreHangs,
+      error: world.restoreFailed ? new Error('restore failed') : null,
+      walletAddress: CONNECTED,
+      isAuthenticated: true,
+    };
+  },
 }));
 
 vi.mock('../TransactionModal', () => ({ TransactionModal: () => <div data-screen="transaction" /> }));
@@ -119,13 +131,19 @@ async function open({
 }
 
 const screenShown = (name: string) => container.querySelector(`[data-screen="${name}"]`) !== null;
+/** The placeholder shown while the account is checked. */
+const waiting = () => container.querySelector('[data-slot="skeleton"]') !== null;
 
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   world.owned = new Set([CONNECTED, CO_OWNED]);
   world.offline = false;
   world.restoreFailed = false;
+  world.restoreHangs = false;
   world.checkHangs = false;
+  world.checkWaitsFor = null;
+  world.sessionReads = 0;
+  world.ownerChecks = 0;
   world.connectedName = 'bee.justan.id';
   container = document.createElement('div');
   document.body.appendChild(container);
@@ -134,6 +152,7 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   container.remove();
+  vi.useRealTimers();
 });
 
 function click(label: string) {
@@ -151,13 +170,15 @@ describe.each(['wallet_sendCalls', 'eth_sendTransaction'] as const)('RequestModa
     expect(container.textContent).toContain('Example App is connected as bee.justan.id');
   });
 
-  it('tells the app the account is not connected when the refusal is closed, and closes', async () => {
+  // -32602 is what core answers in app-specific mode when the passkey can't sign for the account.
+  // Not 4100: the SDK disconnects on 4100 from the popup, and the app's connection is fine.
+  it('rejects the request as invalid params when the refusal is closed, and closes', async () => {
     const request = sendFrom(NOT_OWNED, method);
     const { communicator } = await open(request);
 
     await click('Close');
 
-    expect(request.pendingRequest.onReject).toHaveBeenCalledWith(expect.stringContaining(NOT_OWNED), 4100);
+    expect(request.pendingRequest.onReject).toHaveBeenCalledWith(expect.stringContaining(NOT_OWNED), -32602);
     expect(request.pendingRequest.onApprove).not.toHaveBeenCalled();
     expect(communicator.requestClose).toHaveBeenCalledTimes(1);
   });
@@ -312,7 +333,7 @@ describe.each([...PERMISSIONS, ...SIGNS])('RequestModals $name', ({ screen, requ
     expect(container.textContent).toContain('This request is for 0xaaaa...aaaa');
 
     await click('Close');
-    expect(opened.pendingRequest.onReject).toHaveBeenCalledWith(expect.stringContaining(NOT_OWNED), 4100);
+    expect(opened.pendingRequest.onReject).toHaveBeenCalledWith(expect.stringContaining(NOT_OWNED), -32602);
     expect(communicator.requestClose).toHaveBeenCalledTimes(1);
   });
 
@@ -351,7 +372,70 @@ describe('RequestModals refusing a request for an account the connected passkey 
   it('shows neither the screen nor the refusal while the check is still running', async () => {
     world.checkHangs = true;
     await open(sendFrom(NOT_OWNED));
+    expect(waiting()).toBe(true);
     expect(screenShown('transaction')).toBe(false);
     expect(container.textContent).not.toContain('This request is for');
+  });
+});
+
+describe('RequestModals with a request for the connected account', () => {
+  it.each([
+    ['as the session holds it', CONNECTED],
+    ['in a different case', CONNECTED.toUpperCase().replace('0X', '0x')],
+  ])('opens the screen without reading the session or asking core, %s', async (_, from) => {
+    await open(sendFrom(from));
+    expect(screenShown('transaction')).toBe(true);
+    expect(world.sessionReads).toBe(0);
+    expect(world.ownerChecks).toBe(0);
+  });
+});
+
+describe('RequestModals when the ownership check takes too long', () => {
+  it.each([
+    ['the owner check', 'checkHangs'],
+    ['restoring the passkey', 'restoreHangs'],
+  ] as const)(
+    'opens the screen after 8 seconds when %s hangs, as when the check fails, so the person can still reject it',
+    async (_, hang) => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      world[hang] = true;
+      await open(sendFrom(NOT_OWNED));
+
+      await act(async () => vi.advanceTimersByTimeAsync(7_900));
+      expect(waiting()).toBe(true);
+      expect(screenShown('transaction')).toBe(false);
+
+      await act(async () => vi.advanceTimersByTimeAsync(100));
+      expect(screenShown('transaction')).toBe(true);
+      expect(container.textContent).not.toContain('This request is for');
+    }
+  );
+
+  it('keeps the screen open when a refusal arrives after it opened', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let answer!: () => void;
+    world.checkWaitsFor = new Promise((resolve) => (answer = resolve));
+    await open(sendFrom(NOT_OWNED));
+    await act(async () => vi.advanceTimersByTimeAsync(8_000));
+    expect(screenShown('transaction')).toBe(true);
+
+    await act(async () => answer());
+    await act(async () => vi.advanceTimersByTimeAsync(0));
+    expect(screenShown('transaction')).toBe(true);
+    expect(container.textContent).not.toContain('This request is for');
+  });
+});
+
+describe('RequestModals when the next request arrives in the same popup', () => {
+  it('checks the new request rather than reusing the verdict on the last one', async () => {
+    await open(sendFrom(CO_OWNED));
+    expect(screenShown('transaction')).toBe(true);
+
+    world.checkHangs = true;
+    const next = sendFrom(NOT_OWNED);
+    next.pendingRequest.requestId = 'req-2';
+    await open(next);
+    expect(waiting()).toBe(true);
+    expect(screenShown('transaction')).toBe(false);
   });
 });

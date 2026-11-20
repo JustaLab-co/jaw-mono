@@ -38,8 +38,23 @@ export function AccountGate(props: AccountGateProps): ReactElement {
   return <OwnershipCheck {...props} address={address} />;
 }
 
-/** `open` when core did not refuse: the passkey signs for it, or the check itself failed. */
+/** `open` when core did not refuse: the passkey signs for it, or the check failed or ran too long. */
 type Verdict = 'checking' | 'open' | 'refused';
+
+/**
+ * How long the check may run before the screen opens anyway, as it does when the check fails.
+ * The skeleton has no Reject, so a stuck network must not leave the person on it.
+ */
+const CHECK_TIMEOUT_MS = 8_000;
+
+/**
+ * Sets the verdict unless one is already set. The first answer stands, so a refusal that arrives
+ * after the screen opened doesn't swap it out from under the person.
+ */
+const unlessDecided =
+  (answer: Verdict) =>
+  (verdict: Verdict): Verdict =>
+    verdict === 'checking' ? answer : verdict;
 
 /** Asks core whether the connected passkey signs for another account, as a co-owner can. */
 function OwnershipCheck({
@@ -59,15 +74,20 @@ function OwnershipCheck({
   const [verdict, setVerdict] = useState<Verdict>('checking');
 
   useEffect(() => {
+    const timer = setTimeout(() => setVerdict(unlessDecided('open')), CHECK_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
     if (!account) return;
     let current = true;
     signsFor(account, address).then(
-      (signs) => current && setVerdict(signs ? 'open' : 'refused'),
+      (signs) => current && setVerdict(unlessDecided(signs ? 'open' : 'refused')),
       (error) => {
         // Not core refusing the passkey, so not a reason to refuse the request: the screen opens
         // as it did before this check, and reports what fails there.
         console.error('[AccountGate] Could not check the requested account:', error);
-        if (current) setVerdict('open');
+        if (current) setVerdict(unlessDecided('open'));
       }
     );
     return () => {

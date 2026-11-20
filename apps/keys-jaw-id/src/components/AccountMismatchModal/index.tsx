@@ -20,8 +20,12 @@ export interface AccountMismatchModalProps {
 /**
  * Shown instead of a request's screen when the request is for an account the passkey this app
  * connected with can't sign for. A stale tab still on an account the app has since left, or an
- * app naming an address it likes. Nothing is switched or disconnected: the app is told the
- * account isn't connected (4100), and the user reloads it to pick up the account it is on.
+ * app naming an address it likes. Nothing is switched or disconnected, and the user reloads the
+ * app to pick up the account it is on.
+ *
+ * The app gets invalid params (-32602), the code core gives the same refusal in app-specific mode.
+ * Not 4100: the SDK disconnects on a 4100 from the popup (JAWProvider), which would log the app
+ * out, and could take another tab's working connection with it.
  */
 export const AccountMismatchModal = ({
   origin,
@@ -45,7 +49,7 @@ export const AccountMismatchModal = ({
     setIsClosing(true);
     onClose(
       new Error(`The request is for ${requestedAddress}, which is not the account this app is connected with`),
-      standardErrorCodes.provider.unauthorized
+      standardErrorCodes.rpc.invalidParams
     );
   };
 

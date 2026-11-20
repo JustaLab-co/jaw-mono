@@ -1299,6 +1299,25 @@ describe('JAWProvider', () => {
             expect(disconnectSpy).not.toHaveBeenCalled();
         });
 
+        // What keys.jaw.id answers when a request is for an account the connected passkey can't
+        // sign for (AccountMismatchModal). The connection itself is fine, so it must stay.
+        it('stays connected when the popup refuses a request for an account it cannot sign for', async () => {
+            const refusal = {
+                code: standardErrorCodes.rpc.invalidParams,
+                message: `The request is for 0x${'aa'.repeat(20)}, which is not the account this app is connected with`,
+            };
+            (mockSigner.request as Mock).mockRejectedValue(refusal);
+            const disconnectSpy = vi.spyOn(provider, 'disconnect');
+
+            await expect(
+                provider.request({
+                    method: 'wallet_sendCalls',
+                    params: [{ from: `0x${'aa'.repeat(20)}`, calls: [{ to: `0x${'bb'.repeat(20)}`, value: '0x0' }] }],
+                })
+            ).rejects.toMatchObject({ code: -32602 });
+            expect(disconnectSpy).not.toHaveBeenCalled();
+        });
+
         it('should not disconnect on non-unauthorized errors', async () => {
             // Arrange
             const request: RequestArguments = {
