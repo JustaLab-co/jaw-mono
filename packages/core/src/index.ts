@@ -9,6 +9,10 @@ export {
     JAW_WALLET_ID,
     JAW_WALLET_RDNS,
     PERMISSIONS_MANAGER_ADDRESS,
+    CHECKER_FACTORY_ADDRESS,
+    ARG_IN_TEMPLATE_ADDRESS,
+    ARG_AT_MOST_TEMPLATE_ADDRESS,
+    VALUE_AT_MOST_TEMPLATE_ADDRESS,
 } from './constants.js';
 
 /**  SDK Info **/
@@ -67,6 +71,10 @@ export {
     ANY_TARGET,
     ANY_FN_SEL,
     EMPTY_CALLDATA_FN_SEL,
+    // Reusable call checkers: where a checker lives, and the deploy a grant adds for it
+    predictCheckerAddress,
+    checkerDeployCalls,
+    type CheckerDeploy,
     // Asset types (EIP-7811 wallet_getAssets)
     type AssetType,
     type AssetMetadata,

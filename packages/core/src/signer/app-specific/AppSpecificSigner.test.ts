@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, it, expect, vi, beforeEach, afterEach, Mock } from 'vitest';
 import { AppSpecificSigner } from './AppSpecificSigner.js';
 import { store } from '../../store/index.js';
@@ -38,6 +39,16 @@ vi.mock('../../rpc/permissions.js', async (importOriginal) => {
 });
 
 const mockCorrelationId = 'test-correlation-id';
+
+// vectors/checker-calls.json, first entry: the deployed factory puts this ArgIn checker at `checker`.
+const [CHECKER_VECTOR]: Array<{ template: `0x${string}`; settings: `0x${string}`; checker: `0x${string}` }> =
+    JSON.parse(readFileSync(new URL('../../../vectors/checker-calls.json', import.meta.url), 'utf8'));
+const CHECKER_DEPLOY_CALL = {
+    target: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+    functionSignature: 'transfer(address,uint256)',
+    checker: CHECKER_VECTOR.checker,
+    checkerDeploy: { template: CHECKER_VECTOR.template, settings: CHECKER_VECTOR.settings },
+};
 
 describe('AppSpecificSigner', () => {
     let signer: AppSpecificSigner;
@@ -1393,6 +1404,54 @@ describe('AppSpecificSigner', () => {
             ).rejects.toMatchObject({ code: -32602, message: expect.stringContaining('permissions.calls[1].checker') });
 
             expect(mockUIHandler.request).not.toHaveBeenCalled();
+        });
+
+        // The deploy has to produce the checker the permission names, or the grant would approve
+        // a contract nobody deployed. Refused before the dialog, like a malformed checker.
+        it('rejects a grant whose checkerDeploy would create a different checker, and opens no dialog', async () => {
+            await expect(
+                signer.request({
+                    method: 'wallet_grantPermissions',
+                    params: [
+                        {
+                            expiry: 2_000_000_000,
+                            spender: '0x2222222222222222222222222222222222222222',
+                            permissions: {
+                                calls: [
+                                    { ...CHECKER_DEPLOY_CALL, checker: '0x398b9d939E7E616E03eA99601c835C920621B2ca' },
+                                ],
+                            },
+                        },
+                    ],
+                } as never)
+            ).rejects.toMatchObject({
+                code: -32602,
+                message: expect.stringContaining('permissions.calls[0].checkerDeploy'),
+            });
+
+            expect(mockUIHandler.request).not.toHaveBeenCalled();
+        });
+
+        // The dialog builds the batch from the permissions it is handed, so the deploy has to
+        // reach it whole for the grant to deploy the checker it approves.
+        it('hands the grant dialog the checkerDeploy unchanged', async () => {
+            vi.mocked(mockUIHandler.request).mockResolvedValueOnce({ approved: true, data: {} } as never);
+
+            await signer.request({
+                method: 'wallet_grantPermissions',
+                params: [
+                    {
+                        expiry: 2_000_000_000,
+                        spender: '0x2222222222222222222222222222222222222222',
+                        permissions: { calls: [CHECKER_DEPLOY_CALL] },
+                    },
+                ],
+            } as never);
+
+            const uiRequest = vi.mocked(mockUIHandler.request).mock.calls[0][0] as unknown as {
+                data: { permissions: { calls: Array<typeof CHECKER_DEPLOY_CALL> } };
+            };
+            expect(uiRequest.data.permissions.calls[0]).toEqual(CHECKER_DEPLOY_CALL);
         });
 
         // The grant screen names a call by its functionSignature, but the selector is what gets

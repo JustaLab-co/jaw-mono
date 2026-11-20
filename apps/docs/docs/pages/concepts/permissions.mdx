@@ -58,6 +58,38 @@ permissions: {
 }
 ```
 
+You don't have to write a checker yourself. JAW deploys three reusable templates, currently on Base Sepolia, at the same addresses on every chain:
+
+| Template                         | Passes when                                  | Settings                                             |
+| -------------------------------- | -------------------------------------------- | ---------------------------------------------------- |
+| `ARG_IN_TEMPLATE_ADDRESS`        | the argument at `slot` is one of `allowed`   | `(bytes4 selector, uint256 slot, bytes32[] allowed)` |
+| `ARG_AT_MOST_TEMPLATE_ADDRESS`   | the argument at `slot` is at most `max`      | `(bytes4 selector, uint256 slot, uint256 max)`       |
+| `VALUE_AT_MOST_TEMPLATE_ADDRESS` | the call sends at most `max` of native token | `(bytes4 selector, uint256 max)`                     |
+
+A checker is a clone of a template with its settings, and its address comes from them, so the same rule is the same contract for everyone. Compute the address with `predictCheckerAddress` and send `checkerDeploy` with it: if the checker isn't deployed yet, the grant deploys it in the same transaction.
+
+```typescript
+import { encodeAbiParameters, pad } from 'viem';
+import { ARG_IN_TEMPLATE_ADDRESS, predictCheckerAddress } from '@jaw.id/core';
+
+// transfer may only pay LANDLORD: argument 0 must be that address.
+const settings = encodeAbiParameters(
+  [{ type: 'bytes4' }, { type: 'uint256' }, { type: 'bytes32[]' }],
+  ['0xa9059cbb', 0n, [pad(LANDLORD)]],
+);
+
+permissions: {
+  calls: [{
+    target: USDC_ADDRESS,
+    functionSignature: 'transfer(address,uint256)',
+    checker: predictCheckerAddress(ARG_IN_TEMPLATE_ADDRESS, settings),
+    checkerDeploy: { template: ARG_IN_TEMPLATE_ADDRESS, settings },
+  }],
+}
+```
+
+A slot is the argument's position, counting from 0, and must be a fixed-size type such as an address or a number. In an `ARG_IN` list, `0xAcc0Acc0acC0ACc0Acc0AcC0ACc0ACc0acc0Acc0` stands for the account running the call, so one checker can mean "pay this wallet" for everyone.
+
 ### Time-Bounded Sessions
 
 Permissions expire automatically. A session key granted for a gaming session doesn't persist after the user closes the app.

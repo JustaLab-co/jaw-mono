@@ -120,6 +120,14 @@ export function optionalHexQuantity(value: unknown, method: string, field: strin
     throw standardErrors.rpc.invalidParams(`${method}: ${field} must be a hex quantity, got ${describeValue(value)}`);
 }
 
+/** Requires hex bytes: `0x` and an even number of hex digits. A bare `0x` is empty bytes and passes. */
+export function requireHexBytes(value: unknown, method: string, field: string): `0x${string}` {
+    if (!isHexString(value) || value.length % 2 !== 0) {
+        throw standardErrors.rpc.invalidParams(`${method}: ${field} must be hex bytes`);
+    }
+    return value;
+}
+
 export function optionalHexData(value: unknown, method: string, field: string): `0x${string}` | undefined {
     if (value === undefined || value === null) return undefined;
     if (!isHexString(value)) {
