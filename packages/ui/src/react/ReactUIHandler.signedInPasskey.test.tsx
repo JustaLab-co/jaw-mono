@@ -191,6 +191,10 @@ vi.mock('../hooks/usePermissionRevocation', () => ({
 
 const { ReactUIHandler } = await import('./ReactUIHandler');
 
+// Each test renders whole dialogs through sign-in, fee tokens and both estimation legs, which runs
+// long when the machine is busy (the pre-push hook runs several suites at once).
+vi.setConfig({ testTimeout: 20_000 });
+
 /** Let restores, owner checks, fee tokens and both estimation legs settle. */
 async function settle() {
   for (let i = 0; i < 20; i++) {
@@ -202,9 +206,25 @@ async function settle() {
 
 const screenText = () => document.body.textContent ?? '';
 
+/** Waits for `text` to be on screen, rather than for a fixed number of ticks. */
+async function shows(text: string) {
+  await vi.waitFor(() => expect(screenText()).toContain(text), { timeout: 10_000 });
+}
+
+/** The signing screens' own button: Sign, or Sign In for a Sign-In with Ethereum message. */
+const signButtons = () =>
+  Array.from(document.querySelectorAll('button')).filter((b) =>
+    ['Sign', 'Sign In'].includes(b.textContent?.trim() ?? '')
+  );
+
+/** Waits for a signing screen whose Sign can be pressed. */
+async function showsSignable() {
+  await vi.waitFor(() => expect(signButtons().some((b) => !b.disabled)).toBe(true), { timeout: 10_000 });
+}
+
 /** Close the account screen with its X, the person declining the request. */
 async function closeAccountScreen() {
-  expect(screenText()).toContain('Welcome back.');
+  await shows('Welcome back.');
   const close = document.querySelector<HTMLButtonElement>('button[aria-label="Cancel"]');
   if (!close) throw new Error(`No close button on: ${screenText()}`);
   await act(async () => close.click());
@@ -220,9 +240,13 @@ async function click(label: string) {
   await settle();
 }
 
+/** Every handler a test opened, closed after it so its dialogs stop running into the next test. */
+const handlers: InstanceType<typeof ReactUIHandler>[] = [];
+
 /** Open a request and settle it. `answer` is what the dApp gets back. */
 async function open(request: unknown): Promise<{ answer: Promise<unknown> }> {
   const handler = new ReactUIHandler();
+  handlers.push(handler);
   (handler as unknown as { config: Record<string, unknown> }).config = {
     apiKey: 'test-key',
     defaultChainId: 8453,
@@ -286,7 +310,9 @@ beforeEach(() => {
   world.restoreFails = false;
   world.signInFails = false;
 });
-afterEach(() => {
+afterEach(async () => {
+  // Rejects and unmounts what is still open. `open` already catches the answer.
+  await act(async () => handlers.splice(0).forEach((handler) => handler.dismiss()));
   document.body.innerHTML = '';
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -296,15 +322,15 @@ describe.each(SENDS)('$method with a signed-in passkey that does not own the acc
   it('control: with the owning passkey signed in, the send screen shows the USDC fee', async () => {
     world.signedIn = 'cred-productmee';
     await open(request);
-    expect(screenText()).toContain('0.02 USDC');
+    await shows('0.02 USDC');
     expect(screenText()).not.toContain('Welcome back.');
   });
 
   it('shows the account screen with the requested account instead of a failed fee', async () => {
     await open(request);
+    await shows('Welcome back.');
     const screen = screenText();
     expect(screen).not.toContain('Fee estimation failed');
-    expect(screen).toContain('Welcome back.');
     expect(screen).toContain('Requested');
     expect(screen).toContain('productmee');
   });
@@ -314,7 +340,7 @@ describe.each(SENDS)('$method with a signed-in passkey that does not own the acc
     await click('productmee');
 
     expect(world.signedIn).toBe('cred-productmee');
-    expect(screenText()).toContain('0.02 USDC');
+    await shows('0.02 USDC');
 
     await click('Confirm');
     expect(world.sent).toEqual([{ passkey: 'cred-productmee', from: PRODUCTMEE }]);
@@ -326,7 +352,7 @@ describe.each(SENDS)('$method with a signed-in passkey that does not own the acc
     await open(request);
     await click('Show more accounts');
 
-    expect(screenText()).toContain('Wrong account.');
+    await shows('Wrong account.');
     expect(screenText()).not.toContain('0.02 USDC');
     expect(world.sent).toEqual([]);
 
@@ -334,19 +360,19 @@ describe.each(SENDS)('$method with a signed-in passkey that does not own the acc
     await click('Use another passkey');
     world.pickInSheet = 'cred-productmee';
     await click('Show more accounts');
-    expect(screenText()).toContain('0.02 USDC');
+    await shows('0.02 USDC');
   });
 
   it('signs in through the passkey sheet when the requested account is not saved on this device', async () => {
     world.saved = ['cred-other'];
     await open(request);
 
-    expect(screenText()).toContain('This request is for');
+    await shows('This request is for');
     expect(screenText()).not.toContain('Create');
     await click('Sign in');
 
     expect(world.signedIn).toBe('cred-productmee');
-    expect(screenText()).toContain('0.02 USDC');
+    await shows('0.02 USDC');
   });
 
   it('rejects the request as the person declining it when they close the account screen', async () => {
@@ -388,19 +414,19 @@ describe.each(PERMISSIONS)('$method with a signed-in passkey that does not own t
   it('control: with the owning passkey signed in, the permission screen opens', async () => {
     world.signedIn = 'cred-productmee';
     await open(request);
+    await shows('0.02 USDC');
     expect(screenText()).not.toContain('Welcome back.');
-    expect(screenText()).toContain('0.02 USDC');
   });
 
   it('shows the account screen with the requested account, then the permission screen once it signs in', async () => {
     await open(request);
-    expect(screenText()).toContain('Welcome back.');
-    expect(screenText()).toContain('Requested');
+    await shows('Welcome back.');
+    await shows('Requested');
 
     await click('productmee');
     expect(world.signedIn).toBe('cred-productmee');
+    await shows('0.02 USDC');
     expect(screenText()).not.toContain('Welcome back.');
-    expect(screenText()).toContain('0.02 USDC');
   });
 
   it('rejects the request as the person declining it when they close the account screen', async () => {
@@ -463,16 +489,18 @@ describe.each(SIGNS)('$method with a signed-in passkey that does not own the acc
   it('control: with the owning passkey signed in, the signing screen opens', async () => {
     world.signedIn = 'cred-productmee';
     await open(request);
+    await showsSignable();
     expect(screenText()).not.toContain('Welcome back.');
   });
 
   it('shows the account screen with the requested account, then signs with its passkey', async () => {
     const { answer } = await open(request);
-    expect(screenText()).toContain('Welcome back.');
-    expect(screenText()).toContain('Requested');
+    await shows('Welcome back.');
+    await shows('Requested');
 
     await click('productmee');
     expect(world.signedIn).toBe('cred-productmee');
+    await showsSignable();
     expect(screenText()).not.toContain('Welcome back.');
 
     await click('Sign');
@@ -484,11 +512,11 @@ describe.each(SIGNS)('$method with a signed-in passkey that does not own the acc
   it('offers nothing to sign while the passkey is still being checked against the account', async () => {
     world.ownerCheckHangs = true;
     await open(request);
-    const signButtons = Array.from(document.querySelectorAll('button')).filter((b) =>
-      ['Sign', 'Sign In'].includes(b.textContent?.trim() ?? '')
-    );
-    expect(signButtons.length).toBeGreaterThan(0);
-    expect(signButtons.every((b) => b.disabled)).toBe(true);
+    await vi.waitFor(() => expect(signButtons().length).toBeGreaterThan(0), { timeout: 10_000 });
+    // Sign starts out disabled anyway. Give a check that does answer time to, so it is the hung one
+    // keeping it disabled.
+    await settle();
+    expect(signButtons().every((b) => b.disabled)).toBe(true);
     expect(world.signed).toEqual([]);
   });
 
@@ -504,12 +532,12 @@ describe.each(SENDS)('$method with no passkey signed in', ({ request }) => {
   it('shows the account screen for the requested account, then the send screen once it signs in', async () => {
     world.signedIn = null;
     await open(request);
-    expect(screenText()).toContain('Welcome back.');
-    expect(screenText()).toContain('productmee');
+    await shows('Welcome back.');
+    await shows('productmee');
 
     await click('productmee');
     expect(world.signedIn).toBe('cred-productmee');
-    expect(screenText()).toContain('0.02 USDC');
+    await shows('0.02 USDC');
   });
 });
 
@@ -517,10 +545,11 @@ describe.each(SIGNS)('$method with no passkey signed in', ({ request }) => {
   it('shows the account screen for the requested account instead of a Sign that never enables, then signs', async () => {
     world.signedIn = null;
     const { answer } = await open(request);
-    expect(screenText()).toContain('Welcome back.');
-    expect(screenText()).toContain('productmee');
+    await shows('Welcome back.');
+    await shows('productmee');
 
     await click('productmee');
+    await showsSignable();
     await click('Sign');
     expect(world.signed).toEqual([{ passkey: 'cred-productmee', address: PRODUCTMEE }]);
     await expect(answer).resolves.toMatchObject({ approved: true, data: '0xsig' });
@@ -535,12 +564,13 @@ describe('the account screen when a passkey cannot be checked against the reques
     world.ownerCheckFails = true;
     await click('Show more accounts');
 
-    expect(screenText()).toContain("Couldn't check");
+    await shows("Couldn't check");
     expect(screenText()).not.toContain('Wrong account.');
 
     world.ownerCheckFails = false;
     world.pickInSheet = 'cred-productmee';
     await click('Show more accounts');
+    await showsSignable();
     expect(screenText()).not.toContain("Couldn't check");
     await click('Sign');
     await expect(answer).resolves.toMatchObject({ approved: true, data: '0xsig' });
@@ -555,12 +585,12 @@ describe('wallet_sendCalls naming no account, with no passkey signed in', () => 
       type: 'wallet_sendCalls',
       data: { chainId: 8453, calls: [{ to: TO, value: '0x0', data: '0x' }] },
     });
-    expect(screenText()).toContain('Welcome back.');
+    await shows('Welcome back.');
     expect(screenText()).not.toContain('Create new account');
 
     await click('other');
     expect(world.signedIn).toBe('cred-other');
-    await vi.waitFor(() => expect(screenText()).toContain('0.02 USDC'));
+    await shows('0.02 USDC');
   });
 });
 
@@ -569,6 +599,7 @@ describe.each(SIGNS)('$method when the signed-in passkey cannot be restored', ({
     world.signedIn = 'cred-productmee';
     world.restoreFails = true;
     const { answer } = await open(request);
+    await showsSignable();
     expect(screenText()).not.toContain('Welcome back.');
 
     await click('Sign');
@@ -582,10 +613,11 @@ describe('personal_sign after clearing site data, with nothing saved on this dev
     world.signedIn = null;
     world.saved = [];
     const { answer } = await open(SIGNS[0].request);
-    expect(screenText()).toContain('This request is for');
+    await shows('This request is for');
     expect(screenText()).not.toContain('Create');
 
     await click('Sign in');
+    await showsSignable();
     await click('Sign');
     expect(world.signed).toEqual([{ passkey: 'cred-productmee', address: PRODUCTMEE }]);
     await expect(answer).resolves.toMatchObject({ approved: true, data: '0xsig' });
@@ -598,7 +630,7 @@ describe('the account screen when signing a passkey in fails after its prompt', 
     world.signInFails = true;
     await click('productmee');
 
-    expect(screenText()).toContain("Couldn't sign in with this passkey");
-    expect(screenText()).toContain('Welcome back.');
+    await shows("Couldn't sign in with this passkey");
+    await shows('Welcome back.');
   });
 });
