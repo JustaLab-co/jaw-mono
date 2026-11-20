@@ -56,6 +56,16 @@ export const tokenAmount = (
   token: tokenOf(contracts, chainId, address),
 });
 
+const MAX_CAPABILITY_CHARS = 32_768;
+
+export function unreadableCapability(capability: unknown): boolean {
+  try {
+    return (JSON.stringify(capability) ?? '').length > MAX_CAPABILITY_CHARS;
+  } catch {
+    return true;
+  }
+}
+
 export function callValue(value: string | undefined): bigint | undefined {
   try {
     return BigInt(value || 0);
