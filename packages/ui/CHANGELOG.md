@@ -1,3 +1,17 @@
+## 1.14.5 (2026-11-20)
+
+### 🩹 Fixes
+
+- **keys:** refuse a request for an account the app isn't connected as ([#665](https://github.com/JustaLab-co/jaw-mono/pull/665))
+
+### 🧱 Updated Dependencies
+
+- Updated @jaw.id/core to 1.12.1
+
+### ❤️ Thank You
+
+- Leo Franklin @LeoFranklin015
+
 ## 1.14.4 (2026-11-19)
 
 ### 🩹 Fixes
