@@ -1,5 +1,6 @@
 import { decodeFunctionData, erc20Abi, getAddress, isAddress, type Address, type Hex } from 'viem';
 import { readAcrossCall, readAcrossStore, type AcrossDeposit, type AcrossOrder } from './across';
+import type { AcrossAttestedOrder } from './acrossAttestation';
 import { readBridgeApprove, type BridgeApprove } from './approve';
 import { readRelayCall, readRelaySwap, type RelayDeposit, type RelaySwap } from './relay';
 import { readRelayOrder } from './relayOrder';
@@ -54,9 +55,10 @@ export function readBridgeBatch(
   contracts: BridgeContracts,
   calls: BridgeCall[],
   account: Address,
-  relayOrder?: unknown
+  relayCapability?: unknown,
+  acrossOrder: AcrossAttestedOrder | null = null
 ): BridgeBatch | null {
-  return readBridgeBatchWithUnread(contracts, calls, account, relayOrder)?.batch ?? null;
+  return readBridgeBatchWithUnread(contracts, calls, account, relayCapability, acrossOrder)?.batch ?? null;
 }
 
 /** The batch and the tokens outside the table that nothing has read yet, for the screen to ask about. */
@@ -64,7 +66,8 @@ export function readBridgeBatchWithUnread(
   contracts: BridgeContracts,
   calls: BridgeCall[],
   account: Address,
-  relayOrder?: unknown
+  relayCapability?: unknown,
+  acrossOrder: AcrossAttestedOrder | null = null
 ): { batch: BridgeBatch; unread: TokenRef[] } | null {
   const reads: BridgeRead[] = calls.map((call) => readBridgeCall(contracts, call, account));
   if (reads.every((read) => read === undefined)) return null;
@@ -73,10 +76,10 @@ export function readBridgeBatchWithUnread(
   const deposits = reads.filter(isDeposit);
   const orders = deposits.map((deposit) =>
     deposit.kind === 'deposit' && deposit.provider === 'relay'
-      ? readRelayOrder(contracts, relayOrder, deposit)
+      ? readRelayOrder(contracts, relayCapability, deposit)
       : undefined
   );
-  const transfers = deposits.map((deposit, at) => transferOf(contracts, deposit, account, orders[at]));
+  const transfers = deposits.map((deposit, at) => transferOf(contracts, deposit, account, orders[at], acrossOrder));
   const notices = transfers.flatMap((read) => read.notices);
   const approves = reads.flatMap((read, at) =>
     read?.kind === 'approve' ? [{ chainId: calls[at].chainId, read }] : []

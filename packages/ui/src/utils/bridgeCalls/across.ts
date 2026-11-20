@@ -164,7 +164,7 @@ function orderOf(contracts: BridgeContracts, call: BridgeCall): AcrossOrder | un
   return value === 0n && amount > 0n ? order(amount) : undefined;
 }
 
-function decodeStore(data: string | undefined) {
+export function decodeStore(data: string | undefined) {
   const hex = (data ?? '0x').toLowerCase() as Hex;
   try {
     const call = decodeFunctionData({ abi: STORE_ABI, data: hex });

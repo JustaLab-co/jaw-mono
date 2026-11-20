@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { RelayContracts } from './contracts';
 import type { RelayDeposit } from './relay';
 import type { BridgeContracts } from './table';
-import { tokenAmount, tokenOf, type TokenAmount, type TokenRef } from './view';
+import { tokenAmount, tokenOf, unreadableCapability, type TokenAmount, type TokenRef } from './view';
 
 export const ORDER_TYPES = {
   Order: [
@@ -54,8 +54,6 @@ export const ORDER_TYPES = {
     { name: 'amount', type: 'uint256' },
   ],
 } as const;
-
-const MAX_ORDER_CHARS = 32_768;
 
 const bytes = z
   .string()
@@ -139,7 +137,7 @@ export function readRelayOrder(
 ): RelayOrder | OrderUnshown | undefined {
   if (capability === undefined) return undefined;
   const data = (capability as { orderData?: unknown } | null)?.orderData;
-  if (tooLarge(data)) return MISMATCH;
+  if (unreadableCapability(data)) return MISMATCH;
 
   const parsed = orderSchema.safeParse(data);
   if (!parsed.success) return MISMATCH;
@@ -216,12 +214,4 @@ function refundsOf(contracts: BridgeContracts, order: Order): Refund[] | undefin
     refunds.push({ chainId, to });
   }
   return refunds.length > 0 ? refunds : undefined;
-}
-
-function tooLarge(data: unknown): boolean {
-  try {
-    return (JSON.stringify(data) ?? '').length > MAX_ORDER_CHARS;
-  } catch {
-    return true;
-  }
 }

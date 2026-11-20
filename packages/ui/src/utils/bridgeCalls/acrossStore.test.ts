@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { encodeFunctionData, erc20Abi, zeroAddress } from 'viem';
+import { encodeFunctionData, erc20Abi, zeroAddress, type Hex } from 'viem';
 import { readAcrossStore } from './across';
+import type { AcrossAttestedOrder } from './acrossAttestation';
 import { readBridgeBatch } from './batch';
 import { SIGNER } from './fixtures';
 import { snapshotContracts } from './table';
@@ -106,5 +107,29 @@ describe('given the Across v1 batch, approve to the prefunded store then store',
     const batch = readBridgeBatch(contracts, [APPROVE, { ...USDC_STORE, value: '1' }], SIGNER);
     expect(batch?.transfer).toBeUndefined();
     expect(batch?.steps).toEqual([null, { unreadable: true }]);
+  });
+});
+
+describe('given the Across v1 batch and an order Across signed', () => {
+  const signed = (orderId: Hex): AcrossAttestedOrder => ({
+    orderId,
+    destinationChainId: 42161,
+    token: '0xaf88d065e77c8cc2239327c5edb3a432268e5831',
+    recipient: SIGNER,
+    minAmount: 4_990_000n,
+    refund: null,
+    originValidUntil: 2_000_000_000,
+  });
+
+  it('when it is the order the store names, then the screen shows the bridge it signed', () => {
+    const batch = readBridgeBatch(contracts, [APPROVE, USDC_STORE], SIGNER, undefined, signed(ORDER_ID));
+    expect(batch?.transfer?.title).toBe('Bridge to Arbitrum');
+    expect(batch?.notices).toEqual([]);
+  });
+
+  it('when it is another order, then the screen keeps the hidden terms notice', () => {
+    const batch = readBridgeBatch(contracts, [APPROVE, USDC_STORE], SIGNER, undefined, signed(`0x${'ab'.repeat(32)}`));
+    expect(batch?.transfer?.title).toBe('Deposit to Across');
+    expect(batch?.notices).toEqual([ACROSS_HIDDEN]);
   });
 });
