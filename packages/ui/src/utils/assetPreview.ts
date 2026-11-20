@@ -13,6 +13,7 @@ import { getJawPublicClient } from './publicClient';
 import { subscriptDecimal } from './displayFormat';
 import { classifyRevert, type RevertCause } from './transactionFailure';
 import { SYMBOL_CALLDATA, cleanSymbol, decodeSymbol } from './tokenSymbol';
+import { resolveNativeSymbol } from './nativeSymbol';
 
 export interface RawAssetChange {
   token: { address: string; decimals?: number; symbol?: string };
@@ -54,10 +55,13 @@ const MAX_DECIMALS = 255;
  * no usable decimals, which is then in base units.
  * Addresses in `erc721` are rendered as whole-token counts (viem reports NFT decimals
  * as `1` or `undefined`, which would otherwise show as "0.1" or be dropped).
+ * The native row takes `nativeSymbol`, the chain's own: viem's `simulateCalls` names the
+ * native coin "ETH" on every chain, so its symbol would show POL or BNB as ETH.
  */
 export function mapAssetChanges(
   changes: readonly RawAssetChange[],
-  erc721: ReadonlySet<string> = new Set()
+  erc721: ReadonlySet<string> = new Set(),
+  nativeSymbol?: string
 ): AssetDelta[] {
   const out: AssetDelta[] = [];
   for (const c of changes) {
@@ -66,7 +70,7 @@ export function mapAssetChanges(
 
     const isNative = c.token.address.toLowerCase() === ethAddress;
     const isNft = erc721.has(c.token.address.toLowerCase());
-    const symbol = isNative ? (c.token.symbol ?? 'ETH') : cleanSymbol(c.token.symbol);
+    const symbol = isNative ? (nativeSymbol ?? c.token.symbol ?? 'ETH') : cleanSymbol(c.token.symbol);
     const reported = c.token.decimals;
     const usable = reported !== undefined && Number.isInteger(reported) && reported >= 0 && reported <= MAX_DECIMALS;
     const decimals = isNative ? 18 : isNft ? 0 : usable ? reported : 0;
@@ -366,5 +370,8 @@ export async function simulateAssetChanges({
     calls: normalizedCalls,
   }).catch(() => undefined);
   if (!units) return { deltas: [], willRevert: false, unreadable: true };
-  return { deltas: mapAssetChanges(units.changes, units.erc721), willRevert: false };
+  return {
+    deltas: mapAssetChanges(units.changes, units.erc721, resolveNativeSymbol({ chainId })),
+    willRevert: false,
+  };
 }

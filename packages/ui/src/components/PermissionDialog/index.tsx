@@ -16,6 +16,7 @@ import { identityKey } from '../../utils/reverseResolve';
 import { CLEAR_SIGNING_ONLY, ENS_ONLY } from '../../utils/addressIdentity';
 import { getDisplayAddress } from '../../utils';
 import { resolveFeeBlock } from '../../utils/transactionFailure';
+import { resolveNativeSymbol } from '../../utils/nativeSymbol';
 import { isBlockingRevocationProblem, REVOCATION_PROBLEM_TEXT } from '../../utils/permissionExecution';
 import { PermissionDialogProps } from './types';
 import { InlineWarning, PartyRow } from '../primitives';
@@ -69,8 +70,10 @@ export const PermissionDialog = ({
   const displayChainIcon = chainIcon || defaultChainIcon;
 
   const nativeToken = feeTokens?.find((t) => t.isNative);
-  const nativeSymbol = nativeToken?.symbol || nativeCurrencySymbol || 'ETH';
-  const nativeTokenPrice = useFeeTokenPrice(nativeSymbol);
+  const knownNativeSymbol = resolveNativeSymbol({ feeTokenSymbol: nativeToken?.symbol, nativeCurrencySymbol, chainId });
+  const nativeSymbol = knownNativeSymbol ?? '';
+  // No symbol, no price: an amount without a dollar figure beats one priced as another coin.
+  const nativeTokenPrice = useFeeTokenPrice(knownNativeSymbol);
 
   // The spender, the account and every non-wildcard target, named on this chain in one request.
   const identityInputs = chainId

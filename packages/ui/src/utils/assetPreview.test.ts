@@ -71,6 +71,17 @@ describe('mapAssetChanges', () => {
     ]);
   });
 
+  it("names the native row by the chain's coin, not the ETH viem reports on every chain", () => {
+    // viem's simulateCalls labels the native coin "ETH" whatever the chain.
+    const [delta] = mapAssetChanges(
+      [change(ethAddress, -100_000_000_000_000_000n, { decimals: 18, symbol: 'ETH' })],
+      new Set(),
+      'POL'
+    );
+
+    expect(delta).toMatchObject({ symbol: 'POL', isNative: true, amountFormatted: '0.1' });
+  });
+
   it('drops assets the batch left untouched', () => {
     // viem returns a row per candidate, diff included — a preview must not list a 0 change.
     expect(mapAssetChanges([change(USDC, 0n, { decimals: 6, symbol: 'USDC' }, 1_000_000n)])).toEqual([]);
