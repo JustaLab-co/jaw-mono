@@ -513,6 +513,9 @@ describe.each(SIGNS)('$method with a signed-in passkey that does not own the acc
     world.ownerCheckHangs = true;
     await open(request);
     await vi.waitFor(() => expect(signButtons().length).toBeGreaterThan(0), { timeout: 10_000 });
+    // Sign starts out disabled anyway. Give a check that does answer time to, so it is the hung one
+    // keeping it disabled.
+    await settle();
     expect(signButtons().every((b) => b.disabled)).toBe(true);
     expect(world.signed).toEqual([]);
   });
@@ -546,6 +549,7 @@ describe.each(SIGNS)('$method with no passkey signed in', ({ request }) => {
     await shows('productmee');
 
     await click('productmee');
+    await showsSignable();
     await click('Sign');
     expect(world.signed).toEqual([{ passkey: 'cred-productmee', address: PRODUCTMEE }]);
     await expect(answer).resolves.toMatchObject({ approved: true, data: '0xsig' });
@@ -613,6 +617,7 @@ describe('personal_sign after clearing site data, with nothing saved on this dev
     expect(screenText()).not.toContain('Create');
 
     await click('Sign in');
+    await showsSignable();
     await click('Sign');
     expect(world.signed).toEqual([{ passkey: 'cred-productmee', address: PRODUCTMEE }]);
     await expect(answer).resolves.toMatchObject({ approved: true, data: '0xsig' });
