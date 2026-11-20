@@ -112,6 +112,7 @@ export async function renderRequest(method: string, params: unknown[]): Promise<
         finishDeliveredFlow={() => undefined}
         closeDelayMs={0}
         signDelivered={false}
+        connectedAccount={{ address: ACCOUNT, name: null }}
       />
     );
   });
