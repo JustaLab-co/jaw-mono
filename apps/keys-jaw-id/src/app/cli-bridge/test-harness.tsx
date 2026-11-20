@@ -107,6 +107,7 @@ vi.spyOn(crypto.subtle, 'decrypt').mockImplementation((alg, key, data) =>
 export function setUp() {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   FakeSocket.all = [];
+  sessionStorage.clear();
   created.appNames = [];
   created.configs = [];
   created.handlerOptions = [];
