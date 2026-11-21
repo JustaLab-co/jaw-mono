@@ -171,11 +171,11 @@ export const TransactionDialog = ({
     apiKey
   );
   // Under a permission the granter's funds move; until it is known, the batch is not read.
-  const { bridge, settled: tokensRead } = useBridgeBatch(
+  const { bridge, tokensAndQuoteChecked } = useBridgeBatch(
     bridgeContracts,
     transactions,
     isPermissioned ? onBehalfOf : walletAddress,
-    capabilities?.jawRelayOrder,
+    capabilities,
     apiKey
   );
   const canConfirm =
@@ -186,7 +186,7 @@ export const TransactionDialog = ({
     !erc20CannotPay &&
     !permissionBlocks &&
     bridgeSettled &&
-    tokensRead;
+    tokensAndQuoteChecked;
   const transfer = bridge?.transfer;
   const title =
     transfer?.title ?? (isNativeSend ? "You're Sending" : (callTitle(singleCallDecode) ?? 'Review Transaction'));

@@ -1,5 +1,6 @@
 import { decodeFunctionData, erc20Abi, getAddress, isAddress, type Address, type Hex } from 'viem';
-import { readAcrossCall, type AcrossDeposit } from './across';
+import { readAcrossCall, readAcrossStore, type AcrossDeposit, type AcrossOrder } from './across';
+import type { AcrossAttestedOrder } from './acrossAttestation';
 import { readBridgeApprove, type BridgeApprove } from './approve';
 import { readRelayCall, readRelaySwap, type RelayDeposit, type RelaySwap } from './relay';
 import { readRelayOrder } from './relayOrder';
@@ -15,7 +16,7 @@ export type BridgeStep = { unreadable: true } | null;
 /** `alerts` are red: a bridge call this screen cannot read. `notices` are yellow: worth a look, maybe intended. */
 export type BridgeBatch = { transfer?: BridgeTransfer; steps: BridgeStep[]; alerts: string[]; notices: string[] };
 
-type Deposit = AcrossDeposit | RelayDeposit | RelaySwap;
+type Deposit = AcrossDeposit | AcrossOrder | RelayDeposit | RelaySwap;
 export type BridgeRead = Deposit | BridgeApprove | Inert | Unreadable | undefined;
 
 // A lone call has no step number on screen, so the line names no step.
@@ -43,6 +44,7 @@ function unreadableAlerts(reads: BridgeRead[]): string[] {
 export function readBridgeCall(contracts: BridgeContracts, call: BridgeCall, account: Address): BridgeRead {
   return (
     readAcrossCall(contracts, call) ??
+    readAcrossStore(contracts, call) ??
     readRelayCall(contracts, call) ??
     readRelaySwap(contracts, call, account) ??
     readBridgeApprove(contracts, call)
@@ -53,9 +55,10 @@ export function readBridgeBatch(
   contracts: BridgeContracts,
   calls: BridgeCall[],
   account: Address,
-  relayOrder?: unknown
+  relayCapability?: unknown,
+  acrossOrder: AcrossAttestedOrder | null = null
 ): BridgeBatch | null {
-  return readBridgeBatchWithUnread(contracts, calls, account, relayOrder)?.batch ?? null;
+  return readBridgeBatchWithUnread(contracts, calls, account, relayCapability, acrossOrder)?.batch ?? null;
 }
 
 /** The batch and the tokens outside the table that nothing has read yet, for the screen to ask about. */
@@ -63,7 +66,8 @@ export function readBridgeBatchWithUnread(
   contracts: BridgeContracts,
   calls: BridgeCall[],
   account: Address,
-  relayOrder?: unknown
+  relayCapability?: unknown,
+  acrossOrder: AcrossAttestedOrder | null = null
 ): { batch: BridgeBatch; unread: TokenRef[] } | null {
   const reads: BridgeRead[] = calls.map((call) => readBridgeCall(contracts, call, account));
   if (reads.every((read) => read === undefined)) return null;
@@ -72,10 +76,10 @@ export function readBridgeBatchWithUnread(
   const deposits = reads.filter(isDeposit);
   const orders = deposits.map((deposit) =>
     deposit.kind === 'deposit' && deposit.provider === 'relay'
-      ? readRelayOrder(contracts, relayOrder, deposit)
+      ? readRelayOrder(contracts, relayCapability, deposit)
       : undefined
   );
-  const transfers = deposits.map((deposit, at) => transferOf(contracts, deposit, account, orders[at]));
+  const transfers = deposits.map((deposit, at) => transferOf(contracts, deposit, account, orders[at], acrossOrder));
   const notices = transfers.flatMap((read) => read.notices);
   const approves = reads.flatMap((read, at) =>
     read?.kind === 'approve' ? [{ chainId: calls[at].chainId, read }] : []
@@ -123,6 +127,7 @@ function erc20Call(data: string | undefined) {
   }
 }
 
-const isDeposit = (read: BridgeRead): read is Deposit => read?.kind === 'deposit' || read?.kind === 'swap';
+const isDeposit = (read: BridgeRead): read is Deposit =>
+  read?.kind === 'deposit' || read?.kind === 'order' || read?.kind === 'swap';
 
 const stepOf = (read: BridgeRead): BridgeStep => (read?.kind === 'unreadable' ? { unreadable: true } : null);

@@ -8,6 +8,7 @@ const ACROSS_SYNCED = [
   'multicallHandler',
   'eventEmitter',
   'wrappedNative',
+  'prefundedStore',
 ] as const satisfies readonly (keyof AcrossContracts)[];
 const RELAY_SYNCED = ['depository', 'erc20Routers', 'solvers'] as const satisfies readonly (keyof RelayContracts)[];
 
