@@ -35,6 +35,7 @@ describe('fetchTokenPrice', () => {
       AVAXUSDT: '6.503',
       USDTUSD: '0.99901',
       DAIUSDT: '0.00000000', // listed, but delisted at 0
+      MATICUSDT: '0.3794', // halted, still answering with its last trade
     });
     vi.stubGlobal('fetch', fetchMock);
   });
@@ -63,6 +64,11 @@ describe('fetchTokenPrice', () => {
 
   it('keeps pricing cBTC as BTC', async () => {
     expect(await fetchTokenPrice('cBTC')).toBe(59148);
+  });
+
+  it('prices MATIC as POL, not from the halted MATICUSDT pair', async () => {
+    expect(await fetchTokenPrice('MATIC')).toBe(0.07478);
+    expect(pairsAsked(fetchMock)).toEqual(['POLUSDT']);
   });
 
   it('reads a pair listed at 0 as no price, not a price of 0', async () => {

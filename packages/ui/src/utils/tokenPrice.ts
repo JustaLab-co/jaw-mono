@@ -10,6 +10,8 @@ const PRICE_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 const PRICE_SYMBOL_ALIASES: Record<string, string> = {
   CBTC: 'BTC',
   XDAI: 'USDC', // Gnosis' native coin, pegged to the dollar
+  // Renamed to POL and swapped 1:1. Binance halted MATICUSDT but still answers with its last trade.
+  MATIC: 'POL',
 };
 
 /**
