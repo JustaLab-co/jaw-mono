@@ -1,3 +1,13 @@
+## 1.14.6 (2026-11-21)
+
+### 🩹 Fixes
+
+- **ui:** name and price non-ETH native coins in the transaction dialogs ([#666](https://github.com/JustaLab-co/jaw-mono/pull/666))
+
+### ❤️ Thank You
+
+- Nikhil Kumar @nikhilkumar1612
+
 ## 1.14.5 (2026-11-20)
 
 ### 🩹 Fixes
