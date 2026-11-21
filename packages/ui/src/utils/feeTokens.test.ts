@@ -174,6 +174,100 @@ describe('loadFeeTokenOptions', () => {
     expect(symbols(await load())).toEqual(['ETH']);
   });
 
+  describe("a chain's native coin under an ERC-20 address", () => {
+    const POL_ERC20 = '0x0000000000000000000000000000000000001010';
+    const USDC_POLYGON = '0x3c499c542cef5e3811e1192ce70d8cc03d5c3359';
+    const pol = (balance: bigint) => ({ ...ether(balance), metadata: { decimals: 18, name: 'POL', symbol: 'POL' } });
+    const loadPolygon = () =>
+      loadFeeTokenOptions({ capability: dynamic, account: ACCOUNT, chainId: 137, rpcUrl: 'https://rpc.example' });
+
+    it('offers POL on Polygon once, as the native coin, and never asks the paymaster to price its ERC-20', async () => {
+      vi.mocked(handleGetAssetsRequest).mockResolvedValue({
+        '0x89': [
+          pol(2n * 10n ** 18n),
+          erc20(POL_ERC20, 'POL', 2n * 10n ** 18n),
+          erc20(USDC_POLYGON, 'USDC', 5_000_000n, 6),
+        ],
+      });
+      quoteLikePaymaster({ [POL_ERC20]: 10n ** 18n, [USDC_POLYGON]: 4_000_000_000n });
+
+      const result = await loadPolygon();
+
+      expect(result.map((o) => [o.symbol, o.isNative])).toEqual([
+        ['POL', true],
+        ['USDC', false],
+      ]);
+      expect(vi.mocked(fetchTokenQuotes).mock.calls.flatMap(([, , tokens]) => tokens)).toEqual([USDC_POLYGON]);
+    });
+
+    it('asks for no quote when the POL ERC-20 is the only token held besides POL', async () => {
+      vi.mocked(handleGetAssetsRequest).mockResolvedValue({
+        '0x89': [pol(10n ** 18n), erc20(POL_ERC20, 'POL', 10n ** 18n)],
+      });
+
+      expect(symbols(await loadPolygon())).toEqual(['POL']);
+      expect(fetchTokenQuotes).not.toHaveBeenCalled();
+    });
+
+    // Celo: wallet_getAssets reported 0 native and 20 CELO under the GoldToken contract.
+    it('offers CELO held only under its ERC-20 address as the native coin, with its balance', async () => {
+      const CELO_ERC20 = '0x471EcE3750Da237f93B8E339c536989b8978a438';
+      vi.mocked(handleGetAssetsRequest).mockResolvedValue({ '0xa4ec': [erc20(CELO_ERC20, 'CELO', 20n * 10n ** 18n)] });
+      quoteLikePaymaster({ [CELO_ERC20.toLowerCase()]: 10n ** 18n });
+
+      const result = await loadFeeTokenOptions({
+        capability: dynamic,
+        account: ACCOUNT,
+        chainId: 42220,
+        rpcUrl: 'https://rpc.example',
+      });
+
+      expect(result.map((o) => [o.symbol, o.address, o.isNative, o.balance])).toEqual([
+        ['CELO', zeroAddress, true, 20n * 10n ** 18n],
+      ]);
+      expect(fetchTokenQuotes).not.toHaveBeenCalled();
+    });
+
+    it('offers POL once, not twice and not summed, when both the native row and its ERC-20 row are held', async () => {
+      vi.mocked(handleGetAssetsRequest).mockResolvedValue({
+        '0x89': [erc20(POL_ERC20, 'POL', 3n * 10n ** 18n), pol(3n * 10n ** 18n)],
+      });
+      quoteLikePaymaster({ [POL_ERC20]: 10n ** 18n });
+
+      const result = await loadPolygon();
+
+      expect(result.map((o) => [o.symbol, o.isNative, o.balance])).toEqual([['POL', true, 3n * 10n ** 18n]]);
+    });
+
+    it('leaves the POL ERC-20 out of a configured token list on Polygon', async () => {
+      vi.mocked(fetchTokenBalance).mockResolvedValue(10n ** 18n);
+      const token = (address: string, symbol: string) => ({
+        uid: symbol,
+        symbol,
+        address,
+        decimals: 18,
+        interop: false,
+        feeToken: true,
+      });
+
+      const result = await loadFeeTokenOptions({
+        capability: { supported: true, tokens: [token(zeroAddress, 'POL'), token(POL_ERC20, 'POL (ERC-20)')] },
+        account: ACCOUNT,
+        chainId: 137,
+        rpcUrl: 'https://rpc.example',
+      });
+
+      expect(symbols(result)).toEqual(['POL']);
+    });
+
+    it('still offers a token at that address on a chain where it is not the native coin', async () => {
+      vi.mocked(handleGetAssetsRequest).mockResolvedValue({ '0x2105': [erc20(POL_ERC20, 'X', 10n ** 18n)] });
+      quoteLikePaymaster({ [POL_ERC20]: 10n ** 18n });
+
+      expect(symbols(await load())).toEqual(['X']);
+    });
+  });
+
   it('leaves out a native coin with no balance', async () => {
     vi.mocked(handleGetAssetsRequest).mockResolvedValue({ '0x2105': [ether(0n)] });
 

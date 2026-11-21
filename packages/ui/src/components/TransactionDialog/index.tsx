@@ -16,6 +16,7 @@ import { useBridgeBatch } from '../../hooks/useBridgeBatch';
 import { useBridgeContracts } from '../../hooks/useBridgeContracts';
 import { getDisplayAddress } from '../../utils';
 import { formatNativeValue, subscriptDecimal } from '../../utils/displayFormat';
+import { resolveNativeSymbol } from '../../utils/nativeSymbol';
 import { IdentityAvatar } from '../IdentityAvatar';
 import { AppAvatar } from '../AppAvatar';
 import { DialogAppHeader } from '../DialogAppHeader';
@@ -77,8 +78,14 @@ export const TransactionDialog = ({
   const chainIcon = useChainIconURI(currentTransaction?.chainId || 1, apiKey, 24);
 
   const nativeToken = feeTokens?.find((t) => t.isNative);
-  const nativeSymbol = nativeToken?.symbol || nativeCurrencySymbol || 'ETH';
-  const nativeTokenPrice = useFeeTokenPrice(nativeSymbol);
+  const knownNativeSymbol = resolveNativeSymbol({
+    feeTokenSymbol: nativeToken?.symbol,
+    nativeCurrencySymbol,
+    chainId: currentTransaction?.chainId,
+  });
+  const nativeSymbol = knownNativeSymbol ?? '';
+  // No symbol, no price: an amount without a dollar figure beats one priced as another coin.
+  const nativeTokenPrice = useFeeTokenPrice(knownNativeSymbol);
 
   // Inside a Radix modal, native wheel scrolling of a nested container can get eaten —
   // drive scrollTop manually (mirrors the signing dialogs).

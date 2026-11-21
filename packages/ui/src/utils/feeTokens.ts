@@ -16,6 +16,26 @@ const MAX_DYNAMIC_ERC20_TOKENS = 20;
 /** The paymaster quotes at most this many tokens per request. */
 const MAX_TOKENS_PER_QUOTE = 20;
 
+/**
+ * ERC-20 contracts that are a chain's own native coin under another address,
+ * by chain id. Paying the fee "in" one goes through the ERC-20 paymaster: the
+ * same balance as the native option, plus an unlimited approval and the
+ * paymaster's markup. So it is never offered as an ERC-20 fee token; its
+ * balance is offered as the native coin instead, since `wallet_getAssets` can
+ * report the coin only under this address (Celo does) and dropping it would
+ * leave the owner with nothing to pay with.
+ *
+ * Kept here, not in `isNativeToken`: a spend permission on one of these is an
+ * ERC-20 permission on chain, and must keep reading as one.
+ */
+const NATIVE_COIN_ERC20S: Record<number, string> = {
+  137: '0x0000000000000000000000000000000000001010', // Polygon: POL (MRC20)
+  42220: '0x471ece3750da237f93b8e339c536989b8978a438', // Celo: CELO (GoldToken)
+};
+
+const isNativeCoinErc20 = (chainId: number, address: string): boolean =>
+  NATIVE_COIN_ERC20S[chainId] === address.toLowerCase();
+
 type LoadFeeTokenOptionsParams = {
   capability: FeeTokenCapability;
   account: string;
@@ -46,8 +66,9 @@ async function loadStaticOptions({
   chainId,
   rpcUrl,
 }: LoadFeeTokenOptionsParams): Promise<FeeTokenOption[]> {
+  const tokens = (capability.tokens ?? []).filter((token) => !isNativeCoinErc20(chainId, token.address));
   return Promise.all(
-    (capability.tokens ?? []).map(async (token) => {
+    tokens.map(async (token) => {
       try {
         const balance = await fetchTokenBalance(token.address, account, rpcUrl, chainId);
         const native = isNativeToken(token.address);
@@ -94,10 +115,21 @@ async function quoteAll(
  * The native coin when held, then the ERC-20s held that the paymaster can price,
  * most valuable first. `wallet_getAssets` lists ERC-20s by address, so capping
  * before ranking could drop the token the owner would pay with.
+ *
+ * The native coin is the native row, or failing that the coin's own ERC-20 row
+ * read as native: both are the one balance, so it is offered once, never summed.
  */
 async function dynamicAssets(assets: Asset[], chainId: number, apiKey?: string): Promise<Asset[]> {
-  const native = assets.filter((asset) => asset.type === 'native' && BigInt(asset.balance) > 0n).slice(0, 1);
-  const held = assets.filter((asset) => asset.type === 'erc20' && asset.address && BigInt(asset.balance) > 0n);
+  const positive = (asset: Asset) => BigInt(asset.balance) > 0n;
+  const isAlias = (asset: Asset) =>
+    asset.type === 'erc20' && !!asset.address && isNativeCoinErc20(chainId, asset.address);
+
+  const nativeRow = assets.find((asset) => asset.type === 'native' && positive(asset));
+  const aliasRow = assets.find((asset) => isAlias(asset) && positive(asset));
+  const nativeCoin = nativeRow ?? (aliasRow && { ...aliasRow, type: 'native' as const, address: null });
+  const native = nativeCoin ? [nativeCoin] : [];
+
+  const held = assets.filter((asset) => asset.type === 'erc20' && asset.address && !isAlias(asset) && positive(asset));
   if (held.length === 0) return native;
 
   const quotes = await quoteAll(
