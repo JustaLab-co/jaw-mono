@@ -54,7 +54,7 @@ await jaw.provider.request({
 `note` says what the permission is for, in your app's words, so the user and an agent can tell later why it exists. The grant and revoke screens show it, and `wallet_getPermissions` returns it.
 
 - Plain text on one line, at most 200 characters. Spaces around it are trimmed, and an empty note counts as none.
-- A note with a newline, a tab, or a control, zero-width or bidi character is refused with `-32602`.
+- A note with a newline, a tab, a control character, or a character that doesn't show on screen (zero-width, bidi, variation and other default-ignorable characters) is refused with `-32602`. A single emoji selector is fine, so notes with emoji work.
 - It is not signed and not part of the permission hash. It is stored next to the permission, set once when it is granted, and never changed.
 
 ### Capabilities
@@ -146,7 +146,7 @@ Returns permission grant result with generated permission ID.
 }
 ```
 
-`note` is left out when the request had none.
+`note` is the note as stored, and is left out when the request had none.
 
 ## Behavior
 

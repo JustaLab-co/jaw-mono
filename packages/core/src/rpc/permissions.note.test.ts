@@ -65,7 +65,10 @@ function approvedPermission() {
 
 beforeEach(() => {
     vi.mocked(sendTransaction).mockReset().mockResolvedValue('0xfeed');
-    vi.mocked(restCall).mockReset().mockResolvedValue(undefined);
+    // The relay answers a store with the record it stored, as the proxy does.
+    vi.mocked(restCall)
+        .mockReset()
+        .mockImplementation(async (_route, _method, body) => body as never);
     vi.mocked(getTransactionReceipt)
         .mockReset()
         .mockImplementation(async () => {
@@ -143,6 +146,13 @@ const BAD_NOTES: Array<[string, unknown]> = [
     ['a Hangul jungseong filler', 'Daily\u1160DCA'],
     ['a Khmer inherent vowel', 'Daily\u17B4DCA'],
     ['a blank Braille pattern', 'Daily\u2800DCA'],
+    // The rest of the default ignorable code points: each can carry bytes nobody sees.
+    ['a reserved ignorable plane-14 character', 'Daily DCA\u{E0200}\u{E0241}'],
+    ['a Mongolian free variation selector', 'Daily\u180BDCA'],
+    ['the fourth Mongolian free variation selector', 'Daily\u180FDCA'],
+    ['an unassigned tag-block character', 'Daily DCA\u{E0080}'],
+    ['a musical formatting character', 'Daily DCA\u{1D173}'],
+    ['a shorthand format control', 'Daily DCA\u{1BCA0}'],
     ['a number', 42],
     ['an object', { text: 'Daily DCA' }],
 ];
@@ -161,6 +171,10 @@ describe('a note on wallet_grantPermissions, before any popup or dialog opens', 
         // One emoji selector, a keycap: how these characters are normally written.
         ['a red heart, with its emoji selector', 'Love it \u2764\uFE0F'],
         ['a keycap', 'Step \u0031\uFE0F\u20E3'],
+        ['a victory hand', 'Done \u270C\uFE0F'],
+        ['a trade mark sign', 'Brand\u2122\uFE0F'],
+        ['a skin tone', 'Thanks \u{1F44D}\u{1F3FD}'],
+        ['a flag', 'Made in \u{1F1EB}\u{1F1F7}'],
         ['no note', undefined],
         ['an empty note', ''],
         ['a null note', null],
@@ -215,6 +229,20 @@ describe('a note on Grant', () => {
         } finally {
             vi.restoreAllMocks();
         }
+    });
+
+    // A proxy from before notes ignores the field, so the dapp must not be told a note was kept
+    // that wallet_getPermissions will never return.
+    it('returns the note the relay stored, and none when the relay kept none', async () => {
+        vi.mocked(restCall).mockImplementation(async (_route, _method, body) => {
+            const { note: _dropped, ...stored } = body as Record<string, unknown>;
+            return stored as never;
+        });
+
+        const response = await grant('Daily DCA into ETH');
+
+        expect(relayBody().note).toBe('Daily DCA into ETH');
+        expect(response).not.toHaveProperty('note');
     });
 
     it('leaves the note out of the relay body and the response when the app sends none', async () => {
