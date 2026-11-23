@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -22,6 +22,11 @@ import {
   RELAY_USDC_ORDER,
   SIGNER,
 } from '../../utils/bridgeCalls/fixtures';
+import {
+  ACROSS_ATTESTED_QUOTES,
+  ACROSS_QUOTES_LIVE_AT,
+  ACROSS_QUOTE_DEPOSITOR,
+} from '../../utils/bridgeCalls/acrossAttestation.fixtures';
 import type { BridgeCall } from '../../utils/bridgeCalls/view';
 import type { AssetDelta } from '../../utils/assetPreview';
 import { Accordion } from '../ui/accordion';
@@ -59,6 +64,24 @@ vi.mock('../../utils/publicClient', async (original) => {
     ),
   });
   return { ...real, getJawPublicClient: () => client };
+});
+// The next attestation check answers only once `hold` resolves, and `held` is that answer.
+const quoteCheck = vi.hoisted(() => ({
+  hold: undefined as Promise<void> | undefined,
+  held: undefined as Promise<unknown> | undefined,
+}));
+vi.mock('../../utils/bridgeCalls/acrossAttestation', async (original) => {
+  const real = await original<typeof import('../../utils/bridgeCalls/acrossAttestation')>();
+  return {
+    ...real,
+    readAcrossAttestation: (...args: Parameters<typeof real.readAcrossAttestation>) => {
+      const answer = real.readAcrossAttestation(...args);
+      if (!quoteCheck.hold) return answer;
+      quoteCheck.held = quoteCheck.hold.then(() => answer);
+      quoteCheck.hold = undefined;
+      return quoteCheck.held;
+    },
+  };
 });
 vi.mock('../../hooks', () => ({ useChainIconURI: () => undefined, useFeeTokenPrice: () => undefined }));
 vi.mock('../../utils/tokenPrice', () => ({ fetchTokenPrice: async (s: string) => ({ USDC: 1, WETH: 3000 })[s] ?? 0 }));
@@ -128,26 +151,27 @@ function nofeeWith(edit: (args: unknown[]) => void): BridgeCall {
 }
 
 type Extra = Partial<Parameters<typeof TransactionDialog>[0]>;
+const dialog = (transactions: BridgeCall[], extra: Extra = {}) => (
+  <TransactionDialog
+    open
+    onOpenChange={() => undefined}
+    transactions={transactions}
+    walletAddress={SIGNER}
+    gasFee="0"
+    gasFeeLoading={false}
+    gasEstimationError=""
+    sponsored
+    onConfirm={async () => undefined}
+    onCancel={() => undefined}
+    isProcessing={false}
+    networkName="Base"
+    mainnetRpcUrl=""
+    {...extra}
+  />
+);
 const render = (transactions: BridgeCall[], extra: Extra = {}) => {
   const root = document.createElement('div');
-  root.innerHTML = renderToStaticMarkup(
-    <TransactionDialog
-      open
-      onOpenChange={() => undefined}
-      transactions={transactions}
-      walletAddress={SIGNER}
-      gasFee="0"
-      gasFeeLoading={false}
-      gasEstimationError=""
-      sponsored
-      onConfirm={async () => undefined}
-      onCancel={() => undefined}
-      isProcessing={false}
-      networkName="Base"
-      mainnetRpcUrl=""
-      {...extra}
-    />
-  );
+  root.innerHTML = renderToStaticMarkup(dialog(transactions, extra));
   return root;
 };
 
@@ -161,26 +185,7 @@ const renderLive = async (transactions: BridgeCall[], extra: Extra = {}) => {
   const root = document.createElement('div');
   const react = createRoot(root);
   live.push(react);
-  await act(async () => {
-    react.render(
-      <TransactionDialog
-        open
-        onOpenChange={() => undefined}
-        transactions={transactions}
-        walletAddress={SIGNER}
-        gasFee="0"
-        gasFeeLoading={false}
-        gasEstimationError=""
-        sponsored
-        onConfirm={async () => undefined}
-        onCancel={() => undefined}
-        isProcessing={false}
-        networkName="Base"
-        mainnetRpcUrl=""
-        {...extra}
-      />
-    );
-  });
+  await act(async () => react.render(dialog(transactions, extra)));
   return root;
 };
 
@@ -363,6 +368,25 @@ describe('TransactionDialog with a bridge deposit', () => {
     expect(column(root, 'You send')).toContain('USDC');
     expect(root.textContent).not.toContain('You get');
     expect(yellow(root)).toEqual([RELAY_HIDDEN]);
+  });
+
+  it('shows an Across v1 deposit as You send only, with the reason in yellow', () => {
+    const store = '0x794dBdbDBFd3f8A3b887F4513bf5FF29edD04a94';
+    const orderId = '0x1732e19275968d23d44fc2e93f2b92ad6322a61fa1143fea32407016886a299c';
+    const deposit: BridgeCall = {
+      chainId: 8453,
+      to: store,
+      value: '0',
+      data: `0x1e04ce08${word(orderId)}${word(BASE_USDC)}${word('989680')}`,
+    };
+    const root = render([approve(store), deposit]);
+    expect(title(root)).toBe('Deposit to Across');
+    expect(column(root, 'You send')).toMatch(/USDC.*−10/);
+    expect(root.textContent).not.toContain('You get');
+    expect(yellow(root)).toEqual([
+      'Across keeps the destination chain and the recipient in an order outside this transaction. This screen cannot show them. Confirm only if you started this transfer yourself.',
+    ]);
+    expect(headerIcons(root)).toEqual([]);
   });
 
   it('shows a Relay deposit with its order like an Across one: the minimum via Relay on the other chain', () => {
@@ -746,4 +770,150 @@ describe('TransactionDialog with bridge calls it cannot read', () => {
       { numRuns: 60 }
     );
   }, 30_000);
+});
+
+describe('TransactionDialog with an Across deposit and the quote Across signed for it', () => {
+  const { erc20, native, robinhood } = ACROSS_ATTESTED_QUOTES;
+  const signed = (quote: typeof erc20) => ({ jawAcrossOrder: { optional: true, attestation: quote.attestation } });
+  const ACROSS_HIDDEN =
+    'Across keeps the destination chain and the recipient in an order outside this transaction. This screen cannot show them. Confirm only if you started this transfer yourself.';
+  const confirm = (root: HTMLElement) =>
+    [...root.querySelectorAll('button')].find((b) => b.textContent === 'Confirm') as HTMLButtonElement;
+  const details = async (root: HTMLElement) => {
+    const trigger = [...root.querySelectorAll('button')].find((b) => b.textContent === 'Details');
+    await act(async () => trigger?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    return [...root.querySelectorAll('dt')].map((dt) => `${dt.textContent}: ${dt.nextElementSibling?.textContent}`);
+  };
+  const checked = async (
+    quote: typeof erc20,
+    { calls = quote.calls, walletAddress = ACROSS_QUOTE_DEPOSITOR as string } = {}
+  ) => {
+    const root = await renderLive(calls, { walletAddress, capabilities: signed(quote) });
+    await vi.waitFor(() => expect(confirm(root).disabled).toBe(false));
+    return root;
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(ACROSS_QUOTES_LIVE_AT);
+  });
+
+  afterEach(() => {
+    chain.tokens = {};
+    vi.useRealTimers();
+  });
+
+  it('reads like a verified Relay order: the chain, at least the signed minimum, and no stated refund', async () => {
+    const root = await checked(erc20);
+    expect(title(root)).toBe('Bridge to Arbitrum');
+    expect(column(root, 'You send')).toMatch(/USDC.*−10/);
+    expect(column(root, 'You get via Across')).toContain('≥ 9.91');
+    expect(column(root, 'You get via Across')).toContain('on Arbitrum');
+    expect(yellow(root)).toEqual([]);
+    expect(red(root)).toEqual([]);
+    expect(await details(root)).toEqual(['Recipient: This account', 'Refund: Not stated', 'Order: 0xc9e9…31f1']);
+  });
+
+  it('names the chain a signed refund pays out on', async () => {
+    const root = await checked(native);
+    expect(column(root, 'You get via Across')).toContain('≥ 0.0049');
+    expect(await details(root)).toEqual([
+      'Recipient: This account',
+      'Refund on Base: This account',
+      'Order: 0x2b32…39be',
+    ]);
+  });
+
+  it('reads the same when the batch resets the allowance to zero before the signed approve', async () => {
+    const [signedApprove] = erc20.calls;
+    const reset = { ...signedApprove, data: `0x095ea7b3${word(signedApprove.data.slice(34, 74))}${word('0')}` };
+    const root = await checked(erc20, { calls: [reset, ...erc20.calls] });
+    expect(title(root)).toBe('Bridge to Arbitrum');
+    expect(yellow(root)).toEqual([]);
+    expect(red(root)).toEqual([]);
+  });
+
+  it('reads a native deposit whose value arrives as a hex quantity', async () => {
+    const [store] = native.calls;
+    const root = await checked(native, { calls: [{ ...store, value: `0x${BigInt(store.value).toString(16)}` }] });
+    expect(title(root)).toBe('Bridge to Arbitrum');
+    expect(column(root, 'You get via Across')).toContain('≥ 0.0049');
+  });
+
+  it('reads a token outside the table from its chain once the quote is verified', async () => {
+    chain.tokens['0xd0601ce157db5bdc3162bbac2a2c8af5320d9eec'] = { symbol: 'AAPL', decimals: 18n };
+    const root = await checked(robinhood);
+    expect(title(root)).toBe('Bridge to Robinhood Chain');
+    expect(column(root, 'You get via Across')).toMatch(/AAPL.*≥ 0\.3348/);
+    expect(yellow(root)).toEqual([
+      'This screen has not verified the token AAPL (0xd060...9EEC). Check it before you confirm.',
+    ]);
+  });
+
+  it('keeps the terms hidden, as for a Relay order, when the token they pay out in cannot be read', async () => {
+    const root = await checked(robinhood);
+    expect(title(root)).toBe('Deposit to Across');
+    expect(yellow(root)).toEqual([
+      'This Across order includes an unrecognized token, so its terms are not shown.',
+      ACROSS_HIDDEN,
+    ]);
+    expect(root.textContent).not.toContain('You get');
+    expect(root.textContent).not.toContain('base units');
+  });
+
+  it('falls back to the hidden-terms notice once the quote expires', async () => {
+    vi.setSystemTime(Number(erc20.attestation.typedData.message.expiresAt) * 1000);
+    const root = await checked(erc20);
+    expect(title(root)).toBe('Deposit to Across');
+    expect(yellow(root)).toEqual([ACROSS_HIDDEN]);
+    expect(root.textContent).not.toContain('You get');
+  });
+
+  it('falls back to the hidden-terms notice when the dialog stays open until the quote expires', async () => {
+    // useFakeTimers does nothing while the Date-only fake from beforeEach is installed.
+    vi.useRealTimers();
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    vi.setSystemTime(ACROSS_QUOTES_LIVE_AT);
+    const root = await checked(erc20);
+    expect(title(root)).toBe('Bridge to Arbitrum');
+
+    const expiry = Number(erc20.attestation.typedData.message.expiresAt) * 1000;
+    await act(async () => vi.advanceTimersByTime(expiry - 1000 - Date.now()));
+    expect(title(root)).toBe('Bridge to Arbitrum');
+    await act(async () => vi.advanceTimersByTime(1000));
+    expect(title(root)).toBe('Deposit to Across');
+    expect(yellow(root)).toEqual([ACROSS_HIDDEN]);
+    expect(root.textContent).not.toContain('You get');
+    expect(confirm(root).disabled).toBe(false);
+  });
+
+  it('shows the check of the request on screen, not a late answer for the one it replaced', async () => {
+    let release: () => void = () => undefined;
+    quoteCheck.hold = new Promise((resolve) => (release = resolve));
+    const props = { walletAddress: ACROSS_QUOTE_DEPOSITOR };
+    const root = await renderLive(erc20.calls, { ...props, capabilities: signed(erc20) });
+    const stale = quoteCheck.held;
+    await act(async () => live.at(-1)?.render(dialog(erc20.calls, { ...props, capabilities: signed(native) })));
+    await vi.waitFor(() => expect(confirm(root).disabled).toBe(false));
+
+    await act(async () => {
+      release();
+      expect(await stale).toMatchObject({ orderId: erc20.attestation.typedData.message.orderId });
+    });
+    expect(title(root)).toBe('Deposit to Across');
+    expect(yellow(root)).toEqual([ACROSS_HIDDEN]);
+  });
+
+  it('keeps the hidden-terms notice when the quote was not signed for this account', async () => {
+    const root = await checked(erc20, { walletAddress: SIGNER });
+    expect(title(root)).toBe('Deposit to Across');
+    expect(yellow(root)).toEqual([ACROSS_HIDDEN]);
+    expect(root.textContent).not.toContain('You get');
+  });
+
+  it('keeps Confirm disabled until the signature is checked', () => {
+    const props = { walletAddress: ACROSS_QUOTE_DEPOSITOR };
+    expect(confirm(render(erc20.calls, { ...props, capabilities: signed(erc20) })).disabled).toBe(true);
+    expect(confirm(render(erc20.calls, props)).disabled).toBe(false);
+  });
 });

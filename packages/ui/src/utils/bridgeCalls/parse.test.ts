@@ -16,6 +16,7 @@ const reason = (raw: unknown) => {
 
 const BASE_USDC = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 const PROXY = '0x5567954cD026CEbFE486062cb75848e0f1c12E58';
+const STORE = '0x794dBdbDBFd3f8A3b887F4513bf5FF29edD04a94';
 
 // Approval proxies come only from the build, so a parsed chain is the compiled one without them.
 const parsedOf = (chain: BridgeChain): BridgeChain => {
@@ -42,6 +43,16 @@ describe('given the body the proxy serves for the bridge table', () => {
       const across = b.chains['4663'].across!;
       across.lifiDiamond = across.lifiDiamond!.toLowerCase() as typeof across.lifiDiamond;
     });
+    expect(reason(raw)).toContain('not a checksummed address');
+  });
+
+  it('when a chain carries an Across v1 prefunded store, then the live table keeps it', () => {
+    const result = parse(body((b) => (b.chains['8453'].across!.prefundedStore = STORE)));
+    expect(result.ok && result.contracts.chain(8453)?.across?.prefundedStore).toBe(STORE);
+  });
+
+  it('when the prefunded store is lowercase, then it is rejected as not checksummed', () => {
+    const raw = body((b) => (b.chains['8453'].across!.prefundedStore = STORE.toLowerCase() as typeof STORE));
     expect(reason(raw)).toContain('not a checksummed address');
   });
 
@@ -129,6 +140,10 @@ describe('given the body the proxy serves for the bridge table', () => {
     ['a Relay router and the depository', (c: BridgeChain) => (c.relay!.erc20Routers = [c.relay!.depository])],
     ['a Relay solver and the Across spoke pool', (c: BridgeChain) => (c.relay!.solvers = [c.across!.spokePool])],
     ['a Relay router and a Relay solver', (c: BridgeChain) => (c.relay!.erc20Routers = [...c.relay!.solvers])],
+    [
+      'the Across prefunded store and the spoke pool',
+      (c: BridgeChain) => (c.across!.prefundedStore = c.across!.spokePool),
+    ],
   ])('when one chain gives %s the same address, then it is rejected', (_name, change) => {
     expect(reason(body((b) => change(b.chains['8453'])))).toBe('chain 8453: an address holds two roles');
   });
