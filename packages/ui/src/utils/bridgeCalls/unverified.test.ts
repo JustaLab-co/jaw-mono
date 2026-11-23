@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { getAddress, hashStruct, type Address, type Hex } from 'viem';
+import type { AcrossAttestedOrder } from './acrossAttestation';
+import { ACROSS_ATTESTED_QUOTES, ACROSS_QUOTE_DEPOSITOR } from './acrossAttestation.fixtures';
 import { readBridgeBatch, readBridgeBatchWithUnread } from './batch';
 import { BRIDGE_CHAINS } from './contracts';
 import { ACROSS_CALLS, RELAY_USDC_APPROVE, RELAY_USDC_DEPOSIT, RELAY_USDC_ORDER, SIGNER } from './fixtures';
@@ -161,5 +163,47 @@ describe('given a Relay order that pays out a token', () => {
     const deposit = { ...RELAY_USDC_DEPOSIT, data: (RELAY_USDC_DEPOSIT.data ?? '').slice(0, -64) + id.slice(2) };
     const first = readBridgeBatchWithUnread(contracts, [RELAY_USDC_APPROVE, deposit], SIGNER, { orderData: order });
     expect(first?.unread).toEqual([{ chainId: 4663, address: AAPL.toLowerCase() as Address }]);
+  });
+});
+
+describe('given an order Across signed that pays out a token outside the table', () => {
+  const { calls } = ACROSS_ATTESTED_QUOTES.robinhood;
+  const ACCOUNT = ACROSS_QUOTE_DEPOSITOR;
+  // What the screen reads from the live Robinhood Chain quote once its signature checks out.
+  const order: AcrossAttestedOrder = {
+    orderId: '0x11b6c567ecf89c9e72d5c9895687acd961d0c4ca7c5c0be1c8e28000eedd17a4',
+    destinationChainId: 4663,
+    token: BOUGHT.toLowerCase() as Address,
+    recipient: ACCOUNT,
+    minAmount: 334_882_914_395_428_028n,
+    refund: { recipient: ACCOUNT, tokens: [{ chainId: 8453, address: '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913' }] },
+    originValidUntil: 1_795_182_702,
+  };
+  const batchFor = async (tokens: Record<string, Answer>) => {
+    const first = readBridgeBatchWithUnread(contracts, calls, ACCOUNT, undefined, order);
+    const reads = await readTokens(first?.unread ?? [], nodeFor(tokens));
+    return readBridgeBatch(contracts.withReads(reads), calls, ACCOUNT, undefined, order);
+  };
+
+  it('when the token is not read yet, then the order is hidden and the batch asks for the token on its own chain', () => {
+    const first = readBridgeBatchWithUnread(contracts, calls, ACCOUNT, undefined, order);
+    expect(first?.batch.transfer?.title).toBe('Deposit to Across');
+    expect(first?.unread).toEqual([{ chainId: 4663, address: order.token }]);
+  });
+
+  it('when the token answers, then the terms show with a notice', async () => {
+    const batch = await batchFor(answer(BOUGHT, { symbol: 'AAPL', decimals: 18n }));
+    expect(batch?.transfer?.title).toBe('Bridge to Robinhood Chain');
+    expect(batch?.transfer?.receive?.amount.token).toMatchObject({ known: false, unverified: true, symbol: 'AAPL' });
+  });
+
+  it('when that token cannot be read, then the order stays hidden as an unrecognized token, as a Relay order does', async () => {
+    const batch = await batchFor(answer(BOUGHT, { code: false }));
+    expect(batch?.transfer?.title).toBe('Deposit to Across');
+    expect(batch?.transfer?.receive).toBeUndefined();
+    expect(batch?.notices).toEqual([
+      'This Across order includes an unrecognized token, so its terms are not shown.',
+      'Across keeps the destination chain and the recipient in an order outside this transaction. This screen cannot show them. Confirm only if you started this transfer yourself.',
+    ]);
   });
 });

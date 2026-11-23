@@ -850,6 +850,17 @@ describe('TransactionDialog with an Across deposit and the quote Across signed f
     ]);
   });
 
+  it('keeps the terms hidden, as for a Relay order, when the token they pay out in cannot be read', async () => {
+    const root = await checked(robinhood);
+    expect(title(root)).toBe('Deposit to Across');
+    expect(yellow(root)).toEqual([
+      'This Across order includes an unrecognized token, so its terms are not shown.',
+      ACROSS_HIDDEN,
+    ]);
+    expect(root.textContent).not.toContain('You get');
+    expect(root.textContent).not.toContain('base units');
+  });
+
   it('falls back to the hidden-terms notice once the quote expires', async () => {
     vi.setSystemTime(Number(erc20.attestation.typedData.message.expiresAt) * 1000);
     const root = await checked(erc20);

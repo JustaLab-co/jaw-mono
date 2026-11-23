@@ -95,6 +95,7 @@ export function readBridgeBatchWithUnread(
     unread: [
       ...unreadRefs(deposits.flatMap((deposit, at) => [deposit.send, transfers[at].transfer.receive?.amount])),
       ...orders.flatMap((order) => (order?.kind === 'unshown' && order.token ? [order.token] : [])),
+      ...transfers.flatMap(({ unread }) => (unread ? [unread] : [])),
       ...unreadRefs(approves.map(({ chainId, read }) => ({ chainId, amount: read.amount, token: read.token }))),
     ],
   };

@@ -7,7 +7,15 @@ import type { BridgeChain } from './contracts';
 import type { RelayDeposit, RelaySwap } from './relay';
 import type { OrderUnshown, RelayOrder } from './relayOrder';
 import type { BridgeContracts } from './table';
-import { tokenAmount, type BridgeProvider, type Received, type Token, type TokenAmount } from './view';
+import {
+  tokenAmount,
+  unreadRefs,
+  type BridgeProvider,
+  type Received,
+  type Token,
+  type TokenAmount,
+  type TokenRef,
+} from './view';
 
 export type Detail = { label: string; value: string; copy?: string };
 
@@ -27,7 +35,8 @@ export type BridgeTransfer = {
   details: Detail[];
 };
 
-export type TransferRead = { transfer: BridgeTransfer; notices: string[] };
+/** `unread` is the token whose symbol and decimals would let the terms show. */
+export type TransferRead = { transfer: BridgeTransfer; notices: string[]; unread?: TokenRef };
 
 export const PROVIDER_NAME: Record<BridgeProvider, string> = { across: 'Across', relay: 'Relay' };
 
@@ -40,6 +49,7 @@ const unknownChain = (id: number) =>
   `This screen does not know chain ${id} and cannot confirm that the recipient there is this account. Check it before you confirm.`;
 const hiddenTerms = (provider: BridgeProvider) =>
   `${PROVIDER_NAME[provider]} keeps the destination chain and the recipient in an order outside this transaction. This screen cannot show them. Confirm only if you started this transfer yourself.`;
+const ACROSS_UNRECOGNIZED_TOKEN = 'This Across order includes an unrecognized token, so its terms are not shown.';
 const orderDetail = (id: string): Detail => ({ label: 'Order', value: `${id.slice(0, 6)}…${id.slice(-4)}`, copy: id });
 
 export function transferOf(
@@ -141,7 +151,12 @@ function acrossOrderTransfer(
     [order.destinationChainId, ...(order.refund?.tokens ?? []).map((token) => token.chainId)].every(
       (chainId) => contracts.chain(chainId) !== undefined
     );
-  if (!order || order.orderId !== deposit.orderId || !chainsInTable) {
+  const ours = chainsInTable && order.orderId === deposit.orderId;
+  // The terms show only once the token they pay out in can be named.
+  const [unread] = ours
+    ? unreadRefs([tokenAmount(contracts, order.destinationChainId, order.token, order.minAmount)])
+    : [];
+  if (!ours || unread) {
     return {
       transfer: {
         provider: 'across',
@@ -150,7 +165,8 @@ function acrossOrderTransfer(
         origin: labelOf(contracts, deposit.send.chainId),
         details: [orderDetail(deposit.orderId)],
       },
-      notices: [hiddenTerms('across'), ...notices],
+      notices: [...(unread ? [ACROSS_UNRECOGNIZED_TOKEN] : []), hiddenTerms('across'), ...notices],
+      unread,
     };
   }
 
