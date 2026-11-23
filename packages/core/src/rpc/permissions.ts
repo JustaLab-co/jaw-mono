@@ -286,7 +286,7 @@ export type WalletGrantPermissionsResponse = {
     permissionId: Hex;
     /** Chain ID in hex format */
     chainId: Hex;
-    /** The note the app sent, trimmed. Left out when there is none. */
+    /** The note as the relay stored it. Left out when there is none, or the relay did not keep it. */
     note?: string;
 };
 
@@ -462,29 +462,31 @@ function resolveCallSelector(call: unknown, index: number): Hex {
 const PERMISSION_NOTE_MAX_LENGTH = 200;
 
 /**
- * Characters a note may not hold. Each part hides, reorders or breaks text on a screen, or carries
- * data a person cannot see while an agent reading the note still gets it. A note is refused rather
- * than stripped, so what is stored is what the app sent. The relay applies the same rule, and the
- * two lists change together. No lookbehind, which older Safari cannot parse.
+ * Characters a note may not hold. Each hides, reorders or breaks text on a screen, or carries data a
+ * person cannot see while an agent reading the note still gets it. A note is refused rather than
+ * stripped, so what is stored is what the app sent. The relay applies the same rule, and the two
+ * change together. Built on a Unicode property rather than a list, so a new ignorable character is
+ * covered without naming it. The `u` flag reads a surrogate pair as one character, which leaves
+ * `[\uD800-\uDFFF]` matching only half of one. No lookbehind, which older Safari cannot parse.
  */
 const NOTE_HIDDEN_CHARACTERS = new RegExp(
-    // eslint-disable-next-line no-misleading-character-class -- each combining mark is listed on its own, on purpose
     [
-        // C0 and C1 controls (newlines and tabs included), the soft hyphen, the combining grapheme
-        // joiner, the Arabic letter mark, the Hangul and Khmer fillers, the Mongolian vowel
-        // separator, zero-width and bidi marks, the line and paragraph separators, the blank
-        // Braille pattern, variation selectors 1-14, the byte order mark and the interlinear
-        // annotation marks.
-        '[\\u0000-\\u001F\\u007F-\\u009F\\u00AD\\u034F\\u061C\\u115F\\u1160\\u17B4\\u17B5\\u180E\\u200B-\\u200F\\u2028-\\u202E\\u2060-\\u206F\\u2800\\u3164\\uFE00-\\uFE0D\\uFEFF\\uFFA0\\uFFF9-\\uFFFB]',
-        // The text and emoji selectors twice in a row. One is how an emoji like a red heart is written.
+        // Controls (newlines and tabs included) and the line and paragraph separators: one line only.
+        '\\p{Cc}|[\\u2028\\u2029]',
+        // Every default ignorable code point (zero-width and bidi marks, fillers, variation and tag
+        // characters, the byte order mark, ...) except the text and emoji selectors, which are how
+        // an emoji like a red heart is written.
+        '(?![\\uFE0E\\uFE0F])\\p{Default_Ignorable_Code_Point}',
+        // Those two selectors twice in a row carry data; once is the emoji.
         '[\\uFE0E\\uFE0F]{2,}',
-        // Tag characters (U+E0000-U+E007F) and supplementary variation selectors (U+E0100-U+E01EF).
-        '\\uDB40[\\uDC00-\\uDC7F\\uDD00-\\uDDEF]',
-        // Half of a character: a high surrogate with no low one after it, or a low one with no high
-        // one before it. `.slice(0, 200)` leaves one when it cuts an emoji, and the relay cannot store it.
-        '[\\uD800-\\uDBFF](?![\\uDC00-\\uDFFF])',
-        '(?:^|[^\\uD800-\\uDBFF])[\\uDC00-\\uDFFF]',
-    ].join('|')
+        // Blank or invisible on screen, but not default ignorable: the blank Braille pattern and the
+        // interlinear annotation marks.
+        '[\\u2800\\uFFF9-\\uFFFB]',
+        // Half of a character, as `.slice(0, 200)` leaves when it cuts an emoji. The relay cannot store
+        // it, and the grant has landed on chain by then.
+        '[\\uD800-\\uDFFF]',
+    ].join('|'),
+    'u'
 );
 
 /** Ordinary spaces (U+0020) around a note dropped, in one pass: a regex retries a long run. */
@@ -627,7 +629,10 @@ export async function grantPermissions(
     // Extract the permission hash from the PermissionApproved event
     const permissionHash = await extractPermissionHashFromTransaction(txHash, chain);
 
-    await storePermissionInRelay(permissionHash, permission, chainId, apiKey, storedNote);
+    // The note comes back as the relay kept it: a proxy from before notes drops the field, and the
+    // dapp must not be told of a note wallet_getPermissions will never return.
+    const stored = await storePermissionInRelay(permissionHash, permission, chainId, apiKey, storedNote);
+    const keptNote = typeof stored?.note === 'string' && stored.note !== '' ? stored.note : undefined;
 
     // Convert internal Permission to JSON-serializable response format
     const responseCalls: CallPermissionDetail[] = permission.calls.map((call) => ({
@@ -653,7 +658,7 @@ export async function grantPermissions(
         spends: responseSpends,
         permissionId: permissionHash,
         chainId: chainId as Hex,
-        ...(storedNote ? { note: storedNote } : {}),
+        ...(keptNote ? { note: keptNote } : {}),
     };
 }
 
