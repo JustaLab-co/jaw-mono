@@ -41,6 +41,10 @@ jobs:
       - name: Check code formatting
         run: bunx prettier --check .
 
+      # tools/ is not an nx project, so nx affected never runs this.
+      - name: Test the bridge probe's pairs
+        run: bun test ./tools/bridge-table
+
       - uses: nrwl/nx-set-shas@v4
 
       # e2e is published-e2e: the SDK packages installed from a local registry.

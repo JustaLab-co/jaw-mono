@@ -1,96 +1,24 @@
 // Fetches real quotes from Across and Relay and runs each through the signing screen's readers
 // against the pinned table. A quote that comes back and does not read fails the run; a quote the API
-// refuses is skipped. Catches shapes the pinned table cannot list: a new destination chain, a new swap router.
+// refuses is skipped. Catches shapes the pinned table cannot list: a new destination chain, a moved contract.
+// Across quotes come through the proxy (JAW_PROXY_URL, default production).
 //
 //   bun tools/bridge-table/bridge-probe.mts      Exits 1 if any quote reads as unreadable.
-import { zeroAddress, type Address } from 'viem';
-import { readAcrossCall } from '../../packages/ui/src/utils/bridgeCalls/across.ts';
 import { readBridgeCall } from '../../packages/ui/src/utils/bridgeCalls/batch.ts';
-import { BRIDGE_CHAINS, JAW_FEE_RECIPIENT } from '../../packages/ui/src/utils/bridgeCalls/contracts.ts';
+import { BRIDGE_CHAINS } from '../../packages/ui/src/utils/bridgeCalls/contracts.ts';
 import { readRelayOrder } from '../../packages/ui/src/utils/bridgeCalls/relayOrder.ts';
 import { snapshotContracts } from '../../packages/ui/src/utils/bridgeCalls/table.ts';
 import type { BridgeCall } from '../../packages/ui/src/utils/bridgeCalls/view.ts';
+import { probePairs, type Pair, type Provider } from './pairs.mts';
 
-type Provider = 'across' | 'relay';
-type Pair = {
-  name: string;
-  from: number;
-  to: number;
-  send: Address;
-  receive: Address;
-  amount: bigint;
-  only?: Provider;
-};
-
-const BASE = 8453;
-const ARBITRUM = 42161;
-const NATIVE = zeroAddress;
-const USDC = {
-  1: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
-  10: '0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85',
-  [BASE]: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
-  [ARBITRUM]: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831',
-} as const;
-const WETH_ARBITRUM = '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1';
-const NVDA_ROBINHOOD = '0xd0601CE157Db5bdC3162BbaC2a2C8aF5320D9EEC';
-const TEN_USDC = 10_000_000n;
-const ETH_AMOUNT = 10n ** 16n;
 const ACCOUNT = '0x1111111111111111111111111111111111111111';
-
-const PAIRS: Pair[] = [
-  {
-    name: 'USDC Base -> USDC Arbitrum',
-    from: BASE,
-    to: ARBITRUM,
-    send: USDC[BASE],
-    receive: USDC[ARBITRUM],
-    amount: TEN_USDC,
-  },
-  { name: 'USDC Ethereum -> USDC Optimism', from: 1, to: 10, send: USDC[1], receive: USDC[10], amount: TEN_USDC },
-  {
-    name: 'USDC Base -> WETH Arbitrum',
-    from: BASE,
-    to: ARBITRUM,
-    send: USDC[BASE],
-    receive: WETH_ARBITRUM,
-    amount: TEN_USDC,
-  },
-  // Relay routes a same-chain swap through its approval proxy, not the depository.
-  {
-    name: 'USDC Base -> ETH Base',
-    from: BASE,
-    to: BASE,
-    send: USDC[BASE],
-    receive: NATIVE,
-    amount: TEN_USDC,
-    only: 'relay',
-  },
-  { name: 'ETH Base -> ETH Optimism', from: BASE, to: 10, send: NATIVE, receive: NATIVE, amount: ETH_AMOUNT },
-  // Across swaps small amounts into stocks through Uniswap and larger ones through LiFi.
-  {
-    name: 'USDC Base -> NVDA Robinhood, small',
-    from: BASE,
-    to: 4663,
-    send: USDC[BASE],
-    receive: NVDA_ROBINHOOD,
-    amount: 3_000_000n,
-    only: 'across',
-  },
-  {
-    name: 'USDC Base -> NVDA Robinhood, large',
-    from: BASE,
-    to: 4663,
-    send: USDC[BASE],
-    receive: NVDA_ROBINHOOD,
-    amount: 100_000_000n,
-    only: 'across',
-  },
-];
+const PROXY = process.env.JAW_PROXY_URL ?? 'https://api.justaname.id/proxy/v2';
 
 class Skipped extends Error {}
 
 let failed = 0;
 let skipped = 0;
+let acrossQuotes = 0;
 const line = (tag: string, text: string) => console.log(`${tag} ${text}`);
 const show = (read: unknown) => JSON.stringify(read ?? 'undefined', (_, v) => (typeof v === 'bigint' ? `${v}n` : v));
 
@@ -111,27 +39,23 @@ async function get(url: string, init?: RequestInit): Promise<any> {
   }
 }
 
-const query = (params: Record<string, string>) => new URLSearchParams(params).toString();
-
+// Across quotes come through the proxy, which holds the Across API key and returns
+// the calls the wallet signs.
 async function acrossCalls(pair: Pair): Promise<BridgeCall[]> {
-  const quote = await get(
-    `https://app.across.to/api/swap/approval?${query({
-      tradeType: 'exactInput',
-      amount: String(pair.amount),
-      inputToken: pair.send,
-      originChainId: String(pair.from),
-      outputToken: pair.receive,
-      destinationChainId: String(pair.to),
-      depositor: ACCOUNT,
-      recipient: ACCOUNT,
-      // Mirrors the fee the backend adds, which puts a transfer of the bought token in a destination swap.
-      appFee: '0.0025',
-      appFeeRecipient: JAW_FEE_RECIPIENT,
-    })}`
-  );
-  if (!quote.swapTx) throw new Skipped('quote has no swapTx');
-  const { chainId, to, data, value } = quote.swapTx;
-  return [{ chainId, to, data, value }];
+  const query = new URLSearchParams({
+    providers: 'across',
+    originChainId: String(pair.from),
+    destinationChainId: String(pair.to),
+    originToken: pair.send,
+    destinationToken: pair.receive,
+    amount: String(pair.amount),
+    depositor: ACCOUNT,
+    recipient: ACCOUNT,
+  });
+  const quote = (await get(`${PROXY}/move-asset/quote?${query}`))?.result?.data;
+  if (quote?.provider !== 'across') throw new Skipped(`proxy answered ${quote?.provider ?? 'no quote'}`);
+  acrossQuotes++;
+  return quote.transactions.map(({ chainId, to, data, value }: BridgeCall) => ({ chainId, to, data, value }));
 }
 
 async function relayCalls(pair: Pair) {
@@ -161,37 +85,49 @@ async function relayCalls(pair: Pair) {
 const contracts = snapshotContracts();
 const labelOf = (provider: Provider, pair: Pair) => `${provider.padEnd(6)} ${pair.name}`;
 
-// Returns what is wrong with the quote, or undefined when every call reads. A Relay order the screen
-// does not show is only a warning: it still shows the deposit, and Relay picks the solver per quote.
-async function problemOf(provider: Provider, pair: Pair): Promise<string | undefined> {
+// Returns what the quote's one bridge call reads as, or what is wrong with the quote. A Relay order the
+// screen does not show is only a warning: it still shows the deposit, and Relay picks the solver per quote.
+async function readQuote(provider: Provider, pair: Pair): Promise<{ read: string } | { problem: string }> {
   if (provider === 'across') {
-    const [call] = await acrossCalls(pair);
-    const read = readAcrossCall(contracts, call);
-    return read?.kind === 'deposit' ? undefined : show(read);
+    const calls = await acrossCalls(pair);
+    const orders: string[] = [];
+    for (const call of calls) {
+      const read = readBridgeCall(contracts, call, ACCOUNT);
+      // A SpokePool deposit is what the proxy returns until it moves to Across API v1.
+      if (read?.kind === 'order' || (read?.kind === 'deposit' && read.provider === 'across')) orders.push(read.kind);
+      else if (read?.kind !== 'approve') return { problem: show(read) };
+    }
+    return orders.length === 1 ? { read: orders[0] } : { problem: `${orders.length} orders in ${calls.length} calls` };
   }
   const { calls, orderData } = await relayCalls(pair);
-  let deposits = 0;
+  const deposits: string[] = [];
   for (const call of calls) {
     const read = readBridgeCall(contracts, call, ACCOUNT);
     if (read?.kind === 'swap') {
-      deposits++;
+      deposits.push(read.kind);
     } else if (read?.kind === 'deposit' && read.provider === 'relay') {
-      deposits++;
+      deposits.push(read.kind);
       const order = readRelayOrder(contracts, { orderData }, read);
       if (order?.kind === 'unshown') line('warn', `${labelOf('relay', pair)}: ${order.reason}`);
     } else if (read?.kind !== 'approve') {
-      return show(read);
+      return { problem: show(read) };
     }
   }
-  return deposits === 1 ? undefined : `${deposits} deposits in ${calls.length} calls`;
+  return deposits.length === 1
+    ? { read: deposits[0] }
+    : { problem: `${deposits.length} deposits in ${calls.length} calls` };
 }
 
 async function probe(provider: Provider, pair: Pair) {
   const label = labelOf(provider, pair);
   try {
-    const problem = await problemOf(provider, pair);
-    if (problem) failed++;
-    line(problem ? 'FAIL' : 'ok  ', problem ? `${label}: ${problem}` : label);
+    const quote = await readQuote(provider, pair);
+    if ('problem' in quote) {
+      failed++;
+      line('FAIL', `${label}: ${quote.problem}`);
+    } else {
+      line('ok  ', `${label}: ${quote.read}`);
+    }
   } catch (err) {
     if (!(err instanceof Skipped)) throw err;
     skipped++;
@@ -199,37 +135,21 @@ async function probe(provider: Provider, pair: Pair) {
   }
 }
 
-// One bridge into every chain the table lists for Across, so a new destination shape shows up.
-async function intoChain(id: number, name: string): Promise<Pair | undefined> {
-  const tokens: { address: Address; symbol: string; decimals: number }[] = await get(
-    `https://app.across.to/api/swap/tokens?${query({ chainId: String(id) })}`
-  ).catch(() => []);
-  const token = tokens.find((t) => t.symbol === 'USDC') ?? tokens.find((t) => t.symbol === 'WETH');
-  if (!token) return undefined;
-  const usdc = token.symbol === 'USDC';
-  return {
-    name: `${usdc ? 'USDC' : 'ETH'} Base -> ${token.symbol} ${name}`,
-    from: BASE,
-    to: id,
-    send: usdc ? USDC[BASE] : NATIVE,
-    receive: token.address,
-    amount: usdc ? TEN_USDC : ETH_AMOUNT,
-    only: 'across',
-  };
+const { pairs, unprobed } = probePairs(BRIDGE_CHAINS);
+for (const reason of unprobed) {
+  skipped++;
+  line('skip', `across ${reason}`);
 }
-
-const intoChains = await Promise.all(
-  Object.entries(BRIDGE_CHAINS)
-    .filter(([id, chain]) => chain.across && Number(id) !== BASE)
-    .map(([id, chain]) => intoChain(Number(id), chain.name))
-);
-const pairs = [...PAIRS, ...intoChains.filter((pair) => pair !== undefined)].filter(
-  (pair, i, all) => all.findIndex((other) => other.name === pair.name) === i
-);
 
 for (const pair of pairs) {
   if (pair.only !== 'relay') await probe('across', pair);
   if (pair.only !== 'across') await probe('relay', pair);
+}
+
+// A missing or refused key, or a dead endpoint, skips every Across quote, which would read as a clean run.
+if (acrossQuotes === 0) {
+  failed++;
+  line('FAIL', 'across: no quote came back, check the proxy and the skip lines above');
 }
 
 console.log(`\n${failed} unreadable, ${skipped} skipped`);

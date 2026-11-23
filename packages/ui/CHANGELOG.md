@@ -1,3 +1,13 @@
+## 1.15.0 (2026-11-23)
+
+### 🚀 Features
+
+- **ui:** accept the across v1 prefunded store from the network ([#667](https://github.com/JustaLab-co/jaw-mono/pull/667))
+
+### ❤️ Thank You
+
+- Mariano Aguero @mariano-aguero
+
 ## 1.14.6 (2026-11-21)
 
 ### 🩹 Fixes

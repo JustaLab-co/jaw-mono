@@ -462,17 +462,39 @@ function resolveCallSelector(call: unknown, index: number): Hex {
 const PERMISSION_NOTE_MAX_LENGTH = 200;
 
 /**
- * Characters a note may not hold, because they hide, reorder or break text on a screen: C0 and C1
- * controls (newlines and tabs included), the line and paragraph separators, so a note is one line;
- * zero-width, bidi and other invisible marks (soft hyphen, Arabic letter mark, Mongolian vowel
- * separator, interlinear annotations, the byte order mark); and Unicode tag characters
- * (U+E0000-U+E007F, matched as their surrogate pair), which a person cannot see and an agent still
- * reads. A note is refused rather than stripped, so what is stored is what the app sent. The relay
- * applies the same rule.
+ * Characters a note may not hold. Each part hides, reorders or breaks text on a screen, or carries
+ * data a person cannot see while an agent reading the note still gets it. A note is refused rather
+ * than stripped, so what is stored is what the app sent. The relay applies the same rule, and the
+ * two lists change together. No lookbehind, which older Safari cannot parse.
  */
-const NOTE_HIDDEN_CHARACTERS =
-    // eslint-disable-next-line no-control-regex -- the control characters are what this refuses
-    /[\u0000-\u001F\u007F-\u009F\u00AD\u061C\u180E\u200B-\u200F\u2028-\u202E\u2060-\u206F\uFEFF\uFFF9-\uFFFB]|\uDB40[\uDC00-\uDC7F]/;
+const NOTE_HIDDEN_CHARACTERS = new RegExp(
+    // eslint-disable-next-line no-misleading-character-class -- each combining mark is listed on its own, on purpose
+    [
+        // C0 and C1 controls (newlines and tabs included), the soft hyphen, the combining grapheme
+        // joiner, the Arabic letter mark, the Hangul and Khmer fillers, the Mongolian vowel
+        // separator, zero-width and bidi marks, the line and paragraph separators, the blank
+        // Braille pattern, variation selectors 1-14, the byte order mark and the interlinear
+        // annotation marks.
+        '[\\u0000-\\u001F\\u007F-\\u009F\\u00AD\\u034F\\u061C\\u115F\\u1160\\u17B4\\u17B5\\u180E\\u200B-\\u200F\\u2028-\\u202E\\u2060-\\u206F\\u2800\\u3164\\uFE00-\\uFE0D\\uFEFF\\uFFA0\\uFFF9-\\uFFFB]',
+        // The text and emoji selectors twice in a row. One is how an emoji like a red heart is written.
+        '[\\uFE0E\\uFE0F]{2,}',
+        // Tag characters (U+E0000-U+E007F) and supplementary variation selectors (U+E0100-U+E01EF).
+        '\\uDB40[\\uDC00-\\uDC7F\\uDD00-\\uDDEF]',
+        // Half of a character: a high surrogate with no low one after it, or a low one with no high
+        // one before it. `.slice(0, 200)` leaves one when it cuts an emoji, and the relay cannot store it.
+        '[\\uD800-\\uDBFF](?![\\uDC00-\\uDFFF])',
+        '(?:^|[^\\uD800-\\uDBFF])[\\uDC00-\\uDFFF]',
+    ].join('|')
+);
+
+/** Ordinary spaces (U+0020) around a note dropped, in one pass: a regex retries a long run. */
+function trimSpaces(value: string): string {
+    let start = 0;
+    let end = value.length;
+    while (start < end && value.charCodeAt(start) === 0x20) start++;
+    while (end > start && value.charCodeAt(end - 1) === 0x20) end--;
+    return value.slice(start, end);
+}
 
 /**
  * The note a grant carries, as hosts show it and the relay stores it: ordinary spaces around it
@@ -480,14 +502,14 @@ const NOTE_HIDDEN_CHARACTERS =
  * `trim()` would also drop a byte order mark, which the rule refuses.
  *
  * Throws -32602 for a note that is not a string, is longer than 200 characters once trimmed, or
- * holds a control, zero-width or bidi character.
+ * holds a character in NOTE_HIDDEN_CHARACTERS.
  */
 export function normalizePermissionNote(note: unknown): string | undefined {
     if (note === undefined || note === null) return undefined;
     if (typeof note !== 'string') {
         throw standardErrors.rpc.invalidParams(`${GRANT_METHOD}: note must be a string, got ${describeValue(note)}`);
     }
-    const trimmed = note.replace(/^ +| +$/g, '');
+    const trimmed = trimSpaces(note);
     if (trimmed === '') return undefined;
     if (trimmed.length > PERMISSION_NOTE_MAX_LENGTH) {
         throw standardErrors.rpc.invalidParams(
