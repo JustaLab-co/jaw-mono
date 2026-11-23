@@ -20,6 +20,7 @@ import {
 import { JAW_FEE_RECIPIENT, type AcrossContracts } from './contracts';
 import type { BridgeContracts } from './table';
 import {
+  callValue,
   pinnedToken,
   tokenAmount,
   type BridgeCall,
@@ -46,6 +47,7 @@ const LIFI_ABI = parseAbi([
   'function swapTokensSingleV3ERC20ToERC20(bytes32 transactionId, string integrator, string referrer, address receiver, uint256 minAmountOut, SwapData swapData)',
 ]);
 const EMITTER_ABI = parseAbi(['function emitData(bytes data)']);
+const STORE_ABI = parseAbi(['function store(bytes32 orderId, address token, uint256 amount)']);
 const ROUTER_ABI = parseAbi([
   'function execute(bytes commands, bytes[] inputs)',
   'function execute(bytes commands, bytes[] inputs, uint256 deadline)',
@@ -91,6 +93,9 @@ export type AcrossDeposit = {
   fillDeadline: number;
 };
 
+/** An Across API v1 deposit: the destination, recipient and output live in the order, not in the call. */
+export type AcrossOrder = { kind: 'order'; provider: 'across'; send: TokenAmount; orderId: Hex };
+
 type Call = { target: Address; callData: Hex; value: bigint };
 type Program = { calls: readonly Call[]; fallbackRecipient: Address };
 type Fee = { recipient: Address; amount: bigint };
@@ -133,6 +138,39 @@ export function readAcrossCall(
     return (fields && depositOf(contracts, call.chainId, fields)) ?? UNREADABLE;
   } catch {
     return UNREADABLE;
+  }
+}
+
+/** Undefined when the call is not to the pinned prefunded store; unreadable when it breaks a rule. */
+export function readAcrossStore(contracts: BridgeContracts, call: BridgeCall): AcrossOrder | Unreadable | undefined {
+  const store = contracts.chain(call.chainId)?.across?.prefundedStore;
+  if (!store || !isAddress(call.to, { strict: false }) || !isAddressEqual(call.to, store)) return undefined;
+  return orderOf(contracts, call) ?? UNREADABLE;
+}
+
+// A native deposit stores token zero and amount 0 and sends the amount as value; an ERC-20 one sends no value.
+function orderOf(contracts: BridgeContracts, call: BridgeCall): AcrossOrder | undefined {
+  const decoded = decodeStore(call.data);
+  if (!decoded) return undefined;
+  const [orderId, token, amount] = decoded.args;
+  const value = callValue(call.value);
+  const order = (sent: bigint): AcrossOrder => ({
+    kind: 'order',
+    provider: 'across',
+    send: tokenAmount(contracts, call.chainId, token, sent),
+    orderId,
+  });
+  if (token === zeroAddress) return amount === 0n && value ? order(value) : undefined;
+  return value === 0n && amount > 0n ? order(amount) : undefined;
+}
+
+export function decodeStore(data: string | undefined) {
+  const hex = (data ?? '0x').toLowerCase() as Hex;
+  try {
+    const call = decodeFunctionData({ abi: STORE_ABI, data: hex });
+    return encodeFunctionData({ abi: STORE_ABI, ...call }) === hex ? call : undefined;
+  } catch {
+    return undefined;
   }
 }
 

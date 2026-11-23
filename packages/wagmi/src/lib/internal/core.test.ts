@@ -169,3 +169,21 @@ test('grantPermissions sends no note key when the caller gives none', async () =
   const params = (requests[0].params as [Record<string, unknown>])[0];
   expect(params).not.toHaveProperty('note');
 });
+
+test('grantPermissions forwards the target chain as hex, without switching the connector', async () => {
+  const { connector, requests } = fakeConnection();
+
+  await grantPermissions(config, { connector: connector as never, ...GRANT, chainId: mainnet.id });
+
+  const params = (requests[0].params as [Record<string, unknown>])[0];
+  expect(params.chainId).toBe('0x1');
+});
+
+test('grantPermissions leaves the chain to the wallet when the caller names none', async () => {
+  const { connector, requests } = fakeConnection();
+
+  await grantPermissions(config, { connector: connector as never, ...GRANT });
+
+  const params = (requests[0].params as [Record<string, unknown>])[0];
+  expect(params.chainId).toBeUndefined();
+});
