@@ -68,6 +68,8 @@ interface WalletGrantPermissionsResponse {
   permissionId: Hex;
   /** Chain ID in hex */
   chainId: Hex;
+  /** The note the request carried, trimmed. Left out when it had none */
+  note?: string;
 }
 ```
 
@@ -211,6 +213,16 @@ Target chain ID. Defaults to the connected chain.
 Type: `Connector`
 
 Specific connector to use. Defaults to the active connector.
+
+### note (optional)
+
+Type: `string`
+
+What the permission is for, in your app's words. The grant and revoke screens show it, and `usePermissions` returns it, so the user and an agent can tell later why it exists. Plain text on one line, at most 200 characters. It is not signed and not part of the permission hash. See [wallet_grantPermissions](/api-reference/wallet_grantPermissions#note) for the rules.
+
+```typescript
+note: 'Pays your 10 USDC monthly subscription';
+```
 
 ## Examples
 

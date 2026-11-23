@@ -3,7 +3,7 @@ import { createConfig, http } from '@wagmi/core';
 import { arbitrum, mainnet } from 'viem/chains';
 import type { EIP1193Parameters } from 'viem';
 
-import { addFunds, getPermissions, sign } from './core.js';
+import { addFunds, getPermissions, grantPermissions, sign } from './core.js';
 
 const ACCOUNT = '0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266' as const;
 
@@ -139,4 +139,33 @@ test('addFunds takes no arguments at all', async () => {
 
   await expect(addFunds(config, { connector: connector as never })).resolves.toBeNull();
   expect((requests[0].params as [Record<string, unknown>])[0]).toEqual({ chainId: undefined });
+});
+
+const GRANT = {
+  expiry: 2_000_000_000,
+  spender: '0x2222222222222222222222222222222222222222' as const,
+  permissions: {
+    calls: [
+      { target: '0x3333333333333333333333333333333333333333' as const, functionSignature: 'transfer(address,uint256)' },
+    ],
+  },
+};
+
+test('grantPermissions forwards the note in wallet_grantPermissions params', async () => {
+  const { connector, requests } = fakeConnection();
+
+  await grantPermissions(config, { connector: connector as never, ...GRANT, note: 'Daily DCA into ETH' });
+
+  expect(requests[0].method).toBe('wallet_grantPermissions');
+  const params = (requests[0].params as [Record<string, unknown>])[0];
+  expect(params.note).toBe('Daily DCA into ETH');
+});
+
+test('grantPermissions sends no note key when the caller gives none', async () => {
+  const { connector, requests } = fakeConnection();
+
+  await grantPermissions(config, { connector: connector as never, ...GRANT });
+
+  const params = (requests[0].params as [Record<string, unknown>])[0];
+  expect(params).not.toHaveProperty('note');
 });

@@ -553,6 +553,29 @@ describe('AppSpecificSigner', () => {
             );
         });
 
+        it('should hand the UI handler the note of a grant', async () => {
+            (mockUIHandler.request as Mock).mockResolvedValue({
+                id: 'test-response-id',
+                approved: true,
+                data: { permissionId: '0xabababababababababababababababababababababababababababababababab' },
+            } as UIResponse);
+
+            await signer.request({
+                method: 'wallet_grantPermissions',
+                params: [
+                    {
+                        expiry: 1234567890,
+                        spender: '0x2222222222222222222222222222222222222222',
+                        permissions: { calls: [] },
+                        note: 'Daily DCA into ETH',
+                    },
+                ],
+            });
+
+            const uiRequest = (mockUIHandler.request as Mock).mock.calls.at(-1)?.[0] as { data: { note?: string } };
+            expect(uiRequest.data.note).toBe('Daily DCA into ETH');
+        });
+
         it('should handle wallet_revokePermissions request', async () => {
             // Arrange - Using WalletRevokePermissionsRequest params structure
             const revokeData = {

@@ -1235,7 +1235,8 @@ export class Account {
             this._apiKey,
             paymaster.url,
             paymaster.context,
-            [approvalCall, prefundCall].filter((call) => call !== null)
+            [approvalCall, prefundCall].filter((call) => call !== null),
+            { note: options?.note }
         );
     }
 

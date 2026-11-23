@@ -92,6 +92,8 @@ type WalletGetPermissionsResponse = {
   calls: Array<{ target: string; selector: string; checker?: string }>;
   /** Spend limits */
   spends: Array<{ token: string; allowance: string; unit: SpendPeriod; multiplier: number }>;
+  /** What the app said the permission is for when it asked. Not signed. Left out when it has none */
+  note?: string;
 }[];
 ```
 
