@@ -264,6 +264,8 @@ describe('PermissionModal and the note of a permission', () => {
 
     expect(onError).toHaveBeenCalledTimes(1);
     expect(onError.mock.calls[0][1]).toBe(-32602);
+    // Nothing was shown: no screen, so no Confirm that could still grant.
+    expect(dialogProps.onConfirm).toBeUndefined();
     expect(dialogProps.note).toBeUndefined();
     expect(grantPermissions).not.toHaveBeenCalled();
   });
