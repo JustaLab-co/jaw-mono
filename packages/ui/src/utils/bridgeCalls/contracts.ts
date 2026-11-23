@@ -14,6 +14,8 @@ export type AcrossContracts = {
   swapRouter?: Address;
   /** The LiFi diamond Across quotes destination swaps through on this chain; without it that swap is unreadable. */
   lifiDiamond?: Address;
+  /** Across API v1: the approval spender and the target of store(orderId, token, amount). */
+  prefundedStore?: Address;
 };
 
 /**
