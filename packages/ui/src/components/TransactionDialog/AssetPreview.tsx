@@ -3,7 +3,8 @@ import { ethAddress, formatUnits, zeroAddress } from 'viem';
 import { ArrowDownLeft, ArrowUpRight, ChevronDown } from 'lucide-react';
 import { AssetDelta, formatAssetAmount } from '../../utils/assetPreview';
 import { PROVIDER_NAME, type BridgeTransfer, type ChainLabel } from '../../utils/bridgeCalls/transfer';
-import type { Received, Token, TokenAmount } from '../../utils/bridgeCalls/view';
+import { pinnedToken, type Received, type Token, type TokenAmount } from '../../utils/bridgeCalls/view';
+import type { BridgeContracts } from '../../utils/bridgeCalls/table';
 import { useChainIcons } from '../../hooks/useChainIcons';
 import { ChainIcon } from '../AddFundsDialog/ChainIcon';
 import { WarningNotice } from '../primitives';
@@ -26,8 +27,12 @@ interface AssetPreviewProps {
    * the calls run as the granter. The columns must not say "you".
    */
   onBehalf?: boolean;
+  /** The simulation answered for the current calls. */
+  simulated?: boolean;
   /** Source of "You get": the simulation cannot see the other chain. */
   bridge?: BridgeTransfer;
+  /** Its pinned tokens are the only simulated tokens priced on the generic screen. */
+  contracts?: BridgeContracts;
   apiKey?: string;
 }
 
@@ -90,6 +95,7 @@ function AssetRow({
   price,
   chain,
   prefix,
+  withheld,
 }: {
   delta: AssetDelta;
   nativeSymbol: string;
@@ -98,6 +104,8 @@ function AssetRow({
   chain?: ChainBadge;
   /** Replaces the sign, for a figure that is a bound rather than an exact amount. */
   prefix?: string;
+  /** Its symbol has a price, but the token is not pinned, so the price is not shown. */
+  withheld?: boolean;
 }) {
   const out = delta.direction === 'out';
   const sign = prefix ?? (out ? '−' : '+');
@@ -149,6 +157,7 @@ function AssetRow({
         {usd > 0 && <span className="text-muted-foreground text-body-xs">{formatUsd(usd)}</span>}
         {delta.baseUnits && <RowNote>Could not read the decimals.</RowNote>}
       </div>
+      {withheld && <span className="text-muted-foreground text-body-xs basis-full text-right">{UNPRICED}</span>}
     </div>
   );
 }
@@ -169,6 +178,7 @@ function DeltaColumn({
   heading,
   via,
   prefix,
+  noteWithheld,
   children,
 }: {
   direction: 'out' | 'in';
@@ -184,6 +194,8 @@ function DeltaColumn({
   /** The bridge that carries the funds, named in the heading. */
   via?: string;
   prefix?: string;
+  /** Say so on a row whose symbol has a price that is not shown. */
+  noteWithheld?: boolean;
   children?: ReactNode;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -221,23 +233,31 @@ function DeltaColumn({
       </div>
       <div className="flex flex-col gap-3 p-2">
         {children}
-        {shown.map((d) => (
-          <AssetRow
-            key={`${direction}-${d.address}`}
-            delta={d}
-            nativeSymbol={nativeSymbol}
-            chainId={chainId}
-            price={d.unverified ? undefined : prices[symbolFor(d, nativeSymbol)]}
-            chain={chain}
-            prefix={prefix}
-          />
-        ))}
+        {shown.map((d) => {
+          const price = prices[symbolFor(d, nativeSymbol)];
+          return (
+            <AssetRow
+              key={`${direction}-${d.address}`}
+              delta={d}
+              nativeSymbol={nativeSymbol}
+              chainId={chainId}
+              price={d.unverified ? undefined : price}
+              chain={chain}
+              prefix={prefix}
+              withheld={noteWithheld && d.unverified && price > 0}
+            />
+          );
+        })}
       </div>
     </div>
   );
 }
 
 const SIMULATED_ONLY = 'Simulated, not guaranteed.';
+
+const NOTHING_ARRIVES = 'The simulation sees nothing arriving.';
+
+const UNPRICED = 'Unverified token, so no USD value.';
 
 const SIMULATION_FAILED =
   'Could not simulate this transaction. Balance changes are unknown; review each call before you approve.';
@@ -328,12 +348,15 @@ function BridgeColumns({
   bridge,
   out,
   received,
+  nothingArrives,
   apiKey,
   ...columnProps
 }: {
   bridge: BridgeTransfer;
   out: AssetDelta[];
   received: AssetDelta[];
+  /** A clean simulation of a same-chain transfer saw nothing come in. */
+  nothingArrives: boolean;
   apiKey?: string;
   nativeSymbol: string;
   chainId?: number;
@@ -358,9 +381,9 @@ function BridgeColumns({
           </PlainRow>
         )}
       </DeltaColumn>
-      {!receive && received.length > 0 && (
+      {!receive && (received.length > 0 || nothingArrives) && (
         <DeltaColumn direction="in" deltas={received} {...columnProps}>
-          <RowNote>{SIMULATED_ONLY}</RowNote>
+          <RowNote>{nothingArrives ? NOTHING_ARRIVES : SIMULATED_ONLY}</RowNote>
         </DeltaColumn>
       )}
       {receive && destination !== undefined && bridge.destination && (
@@ -396,7 +419,9 @@ export const AssetPreview = ({
   nativeSymbol,
   chainId,
   onBehalf,
+  simulated,
   bridge,
+  contracts,
   apiKey,
 }: AssetPreviewProps) => {
   const [prices, setPrices] = useState<Record<string, number>>({});
@@ -413,13 +438,27 @@ export const AssetPreview = ({
   // its own word, so it keys no price.
   else if (bridge?.sameChain && !error)
     bridgeIn = assetsIn.map((d) => (d.isNative ? { ...d, symbol: nativeSymbol } : { ...d, unverified: true }));
-  const shown = bridgeOut ? bridgeOut : [...assetsOut, ...assetsIn];
-  // An unverified symbol is the token's own word, and a base units row has no price to scale, so
-  // neither keys a price. A token with no symbol has nothing to key on.
-  const trusted = (list: AssetDelta[]) => list.filter((d) => !d.unverified && !d.baseUnits && (d.isNative || d.symbol));
+  const nothingArrives = !!bridge?.sameChain && !!simulated && !error && assetsIn.length === 0;
+
+  // A simulated token names itself, so the generic screen prices it only at an address the table
+  // pins, by the table's symbol. Any other token's symbol is still looked up, to say why its price
+  // is not shown.
+  const pinnedOrUnverified = (d: AssetDelta): AssetDelta => {
+    if (d.isNative) return d;
+    const pinned = contracts && chainId !== undefined ? pinnedToken(contracts, chainId, d.address) : undefined;
+    return pinned ? { ...d, symbol: pinned.symbol } : { ...d, unverified: true };
+  };
+  const genericOut = assetsOut.map(pinnedOrUnverified);
+  const genericIn = assetsIn.map(pinnedOrUnverified);
+
+  const shown = bridgeOut ? bridgeOut : [...genericOut, ...genericIn];
+  // On a bridge view an unverified symbol is the token's own word and keys no price. A base units
+  // row has no price to scale. A token with no symbol has nothing to key on.
+  const priceable = (list: AssetDelta[]) =>
+    list.filter((d) => (!bridge || !d.unverified) && !d.baseUnits && (d.isNative || d.symbol));
   const symbols = [
-    ...trusted(shown).map((d) => symbolFor(d, nativeSymbol)),
-    ...trusted(bridgeIn).map((d) => d.symbol ?? ''),
+    ...priceable(shown).map((d) => symbolFor(d, nativeSymbol)),
+    ...priceable(bridgeIn).map((d) => d.symbol ?? ''),
   ]
     .filter(Boolean)
     .sort()
@@ -443,7 +482,14 @@ export const AssetPreview = ({
     return (
       <>
         {error && <WarningNotice messages={[SIMULATION_FAILED]} />}
-        <BridgeColumns bridge={bridge} out={bridgeOut} received={bridgeIn} apiKey={apiKey} {...columnProps} />
+        <BridgeColumns
+          bridge={bridge}
+          out={bridgeOut}
+          received={bridgeIn}
+          nothingArrives={nothingArrives}
+          apiKey={apiKey}
+          {...columnProps}
+        />
       </>
     );
   }
@@ -454,8 +500,8 @@ export const AssetPreview = ({
   // the full width rather than leaving a gap.
   return (
     <div className="flex items-stretch gap-3">
-      {assetsOut.length > 0 && <DeltaColumn direction="out" deltas={assetsOut} {...columnProps} />}
-      {assetsIn.length > 0 && <DeltaColumn direction="in" deltas={assetsIn} {...columnProps} />}
+      {genericOut.length > 0 && <DeltaColumn direction="out" deltas={genericOut} noteWithheld {...columnProps} />}
+      {genericIn.length > 0 && <DeltaColumn direction="in" deltas={genericIn} noteWithheld {...columnProps} />}
     </div>
   );
 };

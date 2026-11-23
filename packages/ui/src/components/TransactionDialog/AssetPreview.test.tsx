@@ -10,6 +10,7 @@ vi.mock('../../utils/tokenPrice', () => ({ fetchTokenPrice: prices.fetch }));
 import { AssetPreview } from './AssetPreview';
 import { mapAssetChanges, type AssetDelta } from '../../utils/assetPreview';
 import type { BridgeTransfer } from '../../utils/bridgeCalls/transfer';
+import { snapshotContracts } from '../../utils/bridgeCalls/table';
 
 const WARNING = 'Could not simulate this transaction';
 
@@ -82,8 +83,14 @@ describe('AssetPreview', () => {
   });
 });
 
+// USDC and WETH sit at their pinned Base addresses, so on Base the generic screen prices them.
+const onBase = { chainId: 8453, contracts: snapshotContracts() };
+const BASE_PINNED: Record<string, string> = {
+  USDC: '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913',
+  WETH: '0x4200000000000000000000000000000000000006',
+};
 const delta = (over: Partial<AssetDelta> & { symbol: string }): AssetDelta => ({
-  address: `0x${over.symbol.charCodeAt(0).toString(16).padStart(40, '0')}`,
+  address: BASE_PINNED[over.symbol] ?? `0x${over.symbol.charCodeAt(0).toString(16).padStart(40, '0')}`,
   decimals: 6,
   diff: -1n,
   direction: 'out',
@@ -186,7 +193,7 @@ describe('AssetPreview rows, prices and tooltips', () => {
 
   it('a priced row shows its value in dollars and an unpriced one shows none', async () => {
     prices.fetch.mockImplementation(async (s) => (s === 'USDC' ? 2 : 0));
-    await mount({ assetsOut: [usdc], assetsIn: [ethReceived] });
+    await mount({ assetsOut: [usdc], assetsIn: [ethReceived], ...onBase });
     await settle();
     expect(host.textContent).toContain('$10.00');
     expect(host.textContent!.match(/\$/g)).toHaveLength(1);
@@ -194,12 +201,12 @@ describe('AssetPreview rows, prices and tooltips', () => {
 
   it('a value of exactly one cent is shown, below it reads <$0.01', async () => {
     prices.fetch.mockResolvedValue(2);
-    await mount({ assetsOut: [delta({ symbol: 'USDC', amountFormatted: '0.005' })] });
+    await mount({ assetsOut: [delta({ symbol: 'USDC', amountFormatted: '0.005' })], ...onBase });
     await settle();
     expect(host.textContent).toContain('$0.01');
     expect(host.textContent).not.toContain('<$0.01');
 
-    await mount({ assetsOut: [delta({ symbol: 'USDC', amountFormatted: '0.004' })] });
+    await mount({ assetsOut: [delta({ symbol: 'USDC', amountFormatted: '0.004' })], ...onBase });
     await settle();
     expect(host.textContent).toContain('<$0.01');
   });
@@ -218,8 +225,8 @@ describe('AssetPreview rows, prices and tooltips', () => {
   it('a price that arrives after the assets changed is dropped', async () => {
     const first = Promise.withResolvers<number>();
     prices.fetch.mockImplementation((s) => (s === 'USDC' ? first.promise : Promise.resolve(3)));
-    await mount({ assetsOut: [usdc] });
-    await mount({ assetsOut: [delta({ symbol: 'WETH', amountFormatted: '1' })] });
+    await mount({ assetsOut: [usdc], ...onBase });
+    await mount({ assetsOut: [delta({ symbol: 'WETH', amountFormatted: '1' })], ...onBase });
     await settle();
     expect(host.textContent).toContain('$3.00');
 
@@ -245,6 +252,43 @@ describe('AssetPreview rows, prices and tooltips', () => {
     expect(content.getAttribute('data-side')).toBe('top');
     expect(content.textContent).toContain('−1.234567891 USDC');
     vi.unstubAllGlobals();
+  });
+});
+
+describe('AssetPreview generic screen prices only pinned tokens', () => {
+  const UNPRICED = 'Unverified token, so no USD value.';
+  const fakeSol = simulatedRows('0x000000000000000000000000000000000000ad01', 10_000_000_000n, 6, 'SOL');
+
+  it('does not price a token at an address outside the table by the symbol it reports, and says so', async () => {
+    prices.fetch.mockImplementation(async (s) => (s === 'SOL' ? 150 : 0));
+    await mount({ assetsIn: fakeSol, ...onBase });
+    await settle();
+    expect(host.textContent).toContain('+10000');
+    expect(host.textContent).not.toContain('$');
+    expect(host.textContent).toContain(UNPRICED);
+  });
+
+  it('adds no note to a token outside the table whose symbol has no price either', async () => {
+    await mount({ assetsIn: fakeSol, ...onBase });
+    await settle();
+    expect(host.textContent).not.toContain(UNPRICED);
+  });
+
+  it('prices a pinned token by the symbol the table gives it, not the one it reports', async () => {
+    prices.fetch.mockImplementation(async (s) => (s === 'USDC' ? 1 : 0));
+    await mount({ assetsIn: simulatedRows(BASE_PINNED.USDC, 10_000_000n, 6, 'USDC.e'), ...onBase });
+    await settle();
+    expect(host.textContent).toContain('$10.00');
+    expect(host.textContent).not.toContain(UNPRICED);
+  });
+
+  it('prices nothing but the native coin on a chain the table lacks', async () => {
+    prices.fetch.mockResolvedValue(2);
+    await mount({ assetsOut: [usdc], assetsIn: [ethReceived], chainId: 999_999, contracts: snapshotContracts() });
+    await settle();
+    expect(host.textContent!.match(/\$/g)).toHaveLength(1);
+    expect(host.textContent).toContain('$0.02');
+    expect(host.textContent).toContain(UNPRICED);
   });
 });
 
@@ -483,9 +527,24 @@ describe('AssetPreview bridge views and the simulated receive side', () => {
   });
 
   it('a same-chain swap shows no receive side when the simulation failed', () => {
-    const out = html({ assetsIn: [ethIn], bridge: sameChainSwap, error: true });
+    const out = html({ assetsIn: [ethIn], bridge: sameChainSwap, error: true, simulated: true });
     expect(out).not.toContain('You get');
     expect(out).not.toContain(NOTE);
+  });
+
+  it('a same-chain swap the simulation sees pay nothing back says nothing arrives', () => {
+    const out = html({ assetsOut: [usdcOut], bridge: sameChainSwap, simulated: true });
+    expect(getSide(out)).toContain('The simulation sees nothing arriving.');
+    expect(out).not.toContain(NOTE);
+  });
+
+  it('a same-chain swap says nothing about what arrives before the simulation answers', () => {
+    expect(html({ assetsOut: [usdcOut], bridge: sameChainSwap })).not.toContain('You get');
+  });
+
+  it('a deposit that crosses chains never says nothing arrives, since the simulation cannot see the other chain', () => {
+    const out = html({ assetsOut: [usdcOut], bridge: unorderedDeposit, simulated: true });
+    expect(out).not.toContain('You get');
   });
 
   it('a Relay deposit with no order, which may cross chains, still drops the simulated receive', () => {

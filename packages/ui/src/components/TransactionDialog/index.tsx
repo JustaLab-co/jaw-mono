@@ -361,7 +361,9 @@ export const TransactionDialog = ({
                 error={assetPreviewError ?? false}
                 nativeSymbol={nativeSymbol}
                 chainId={currentTransaction?.chainId}
+                simulated={assetPreviewSimulated}
                 bridge={transfer}
+                contracts={bridgeContracts}
                 apiKey={apiKey}
               />
             )}

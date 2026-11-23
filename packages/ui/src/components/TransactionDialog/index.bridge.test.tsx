@@ -558,10 +558,127 @@ describe('BridgeDetails', () => {
 });
 
 describe('TransactionDialog with a same-chain Relay swap', () => {
+  const NOTHING_ARRIVES = 'The simulation sees nothing arriving.';
+  const SIMULATED_ONLY = 'Simulated, not guaranteed.';
+  const PROXY = '0x5567954cD026CEbFE486062cb75848e0f1c12E58';
+  const proxyAbi = parseAbi([
+    'function transferAndMulticall(address[] tokens, uint256[] amounts, (address target, bool allowFailure, uint256 value, bytes callData)[] calls, address refundTo, address nftRecipient, bytes metadata)',
+  ]);
+  const usdcOut: AssetDelta = {
+    address: BASE_USDC.toLowerCase(),
+    symbol: 'USDC',
+    decimals: 6,
+    diff: -10_000_000n,
+    direction: 'out',
+    amountFormatted: '10',
+    isNative: false,
+  };
+  const ethIn: AssetDelta = {
+    address: '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+    symbol: 'ETH',
+    decimals: 18,
+    diff: 3_000_000_000_000_000n,
+    direction: 'in',
+    amountFormatted: '0.003',
+    isNative: true,
+  };
+  // The shape the summary reads as a swap, whose only inner call hands the pulled USDC to someone else.
+  const payOut: BridgeCall = {
+    chainId: 8453,
+    to: PROXY,
+    value: '0x0',
+    data: encodeFunctionData({
+      abi: proxyAbi,
+      functionName: 'transferAndMulticall',
+      args: [
+        [BASE_USDC],
+        [10_000_000n],
+        [
+          {
+            target: BASE_USDC,
+            allowFailure: false,
+            value: 0n,
+            callData: ('0xa9059cbb' + word(OTHER) + word('989680')) as Hex,
+          },
+        ],
+        RELAY_SWAP_ACCOUNT,
+        RELAY_SWAP_ACCOUNT,
+        '0x',
+      ],
+    }),
+  };
+
   it('shows the swap with no Details section, since it has no terms to list', () => {
     const root = render([RELAY_SWAP_APPROVE, RELAY_SWAP], { walletAddress: RELAY_SWAP_ACCOUNT });
     expect(title(root)).toBe('Swap through Relay');
     expect([...root.querySelectorAll('button')].map((b) => b.textContent)).not.toContain('Details');
+  });
+
+  it('shows what the simulation sees arrive, marked as not guaranteed', () => {
+    const root = render([RELAY_SWAP_APPROVE, RELAY_SWAP], {
+      walletAddress: RELAY_SWAP_ACCOUNT,
+      assetsOut: [usdcOut],
+      assetsIn: [ethIn],
+      assetPreviewSimulated: true,
+    });
+    expect(column(root, 'You get')).toContain('+0.003');
+    expect(column(root, 'You get')).toContain(SIMULATED_ONLY);
+    expect(root.textContent).not.toContain(NOTHING_ARRIVES);
+  });
+
+  it('says the simulation sees nothing arriving when the swap pays nothing back to the account', () => {
+    const root = render([approve(PROXY), payOut], {
+      walletAddress: RELAY_SWAP_ACCOUNT,
+      assetsOut: [usdcOut],
+      assetsIn: [],
+      assetPreviewSimulated: true,
+    });
+    expect(title(root)).toBe('Swap through Relay');
+    expect(column(root, 'You get')).toContain(NOTHING_ARRIVES);
+    expect(root.textContent).not.toContain(SIMULATED_ONLY);
+  });
+
+  it('says nothing about what arrives while the simulation runs', () => {
+    const root = render([approve(PROXY), payOut], { walletAddress: RELAY_SWAP_ACCOUNT, assetPreviewLoading: true });
+    expect(root.textContent).not.toContain('You get');
+  });
+
+  it('leaves the failed simulation notice alone to say nothing is known', () => {
+    const root = render([approve(PROXY), payOut], {
+      walletAddress: RELAY_SWAP_ACCOUNT,
+      assetsOut: [],
+      assetsIn: [],
+      assetPreviewSimulated: true,
+      assetPreviewError: true,
+    });
+    expect(root.textContent).toContain('Could not simulate this transaction');
+    expect(root.textContent).not.toContain('You get');
+  });
+});
+
+describe('TransactionDialog prices on the generic screen', () => {
+  const CHAIN_SOL = '0x000000000000000000000000000000000000ad01';
+  const tokenIn = (address: string, symbol: string): AssetDelta => ({
+    address,
+    symbol,
+    decimals: 6,
+    diff: 10_000_000n,
+    direction: 'in',
+    amountFormatted: '10',
+    isNative: false,
+  });
+  const plainCall: BridgeCall = { chainId: 8453, to: OTHER, value: '0x0', data: '0x12345678' };
+
+  it('prices a token pinned at its address on the chain of the request', async () => {
+    const root = await renderLive([plainCall], { assetsIn: [tokenIn(BASE_USDC.toLowerCase(), 'USDC')] });
+    expect(column(root, 'You get')).toContain('$10.00');
+  });
+
+  it('does not price a token outside the table by the symbol it reports, and says so', async () => {
+    const root = await renderLive([plainCall], { assetsIn: [tokenIn(CHAIN_SOL, 'USDC')] });
+    expect(column(root, 'You get')).toContain('USDC');
+    expect(column(root, 'You get')).not.toContain('$');
+    expect(column(root, 'You get')).toContain('Unverified token, so no USD value.');
   });
 });
 
