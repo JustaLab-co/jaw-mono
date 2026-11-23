@@ -45,7 +45,7 @@ describe('given a live Across quote and the calls it signed', () => {
       recipient: ACCOUNT,
       minAmount: 9_910_089n,
       refund: null,
-      originValidUntil: 1_795_182_703,
+      expiresAt: 1_795_182_104,
     });
   });
 
@@ -63,7 +63,7 @@ describe('given a live Across quote and the calls it signed', () => {
           { chainId: 8453, address: '0x4200000000000000000000000000000000000006' },
         ],
       },
-      originValidUntil: 1_795_182_701,
+      expiresAt: 1_795_182_105,
     });
   });
 
@@ -75,7 +75,7 @@ describe('given a live Across quote and the calls it signed', () => {
       recipient: ACCOUNT,
       minAmount: 334_882_914_395_428_028n,
       refund: { recipient: ACCOUNT, tokens: [{ chainId: 8453, address: BASE_USDC }] },
-      originValidUntil: 1_795_182_702,
+      expiresAt: 1_795_182_106,
     });
   });
 
@@ -115,18 +115,20 @@ describe('given a live Across quote, when the signature does not come from Acros
   });
 });
 
-describe('given a live Across quote, when the clock reaches the time Across stops picking the deposit up', () => {
-  const validUntil = Number(erc20.attestation.typedData.message.originValidUntil) * 1000;
+describe('given a live Across quote, when the clock reaches the time the quote expires', () => {
+  const { expiresAt, originValidUntil } = erc20.attestation.typedData.message;
+  const expiry = Number(expiresAt) * 1000;
 
   it('when a second remains, then it verifies', async () => {
-    expect(await read(capability(erc20.attestation), erc20.calls, ACCOUNT, validUntil - 1000)).not.toBeNull();
+    expect(await read(capability(erc20.attestation), erc20.calls, ACCOUNT, expiry - 1000)).not.toBeNull();
   });
 
   it.each([
-    ['at that second', 0],
-    ['a second later', 1000],
-  ])('when it is %s, then it is not verified', async (_, past) => {
-    expect(await read(capability(erc20.attestation), erc20.calls, ACCOUNT, validUntil + past)).toBeNull();
+    ['at that second', expiry],
+    ['a second later', expiry + 1000],
+    ['a second before Across stops picking the deposit up', Number(originValidUntil) * 1000 - 1000],
+  ])('when it is %s, then it is not verified', async (_, now) => {
+    expect(await read(capability(erc20.attestation), erc20.calls, ACCOUNT, now)).toBeNull();
   });
 });
 

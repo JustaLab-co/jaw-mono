@@ -850,15 +850,15 @@ describe('TransactionDialog with an Across deposit and the quote Across signed f
     ]);
   });
 
-  it('falls back to the hidden-terms notice once Across stops picking the deposit up', async () => {
-    vi.setSystemTime(Number(erc20.attestation.typedData.message.originValidUntil) * 1000);
+  it('falls back to the hidden-terms notice once the quote expires', async () => {
+    vi.setSystemTime(Number(erc20.attestation.typedData.message.expiresAt) * 1000);
     const root = await checked(erc20);
     expect(title(root)).toBe('Deposit to Across');
     expect(yellow(root)).toEqual([ACROSS_HIDDEN]);
     expect(root.textContent).not.toContain('You get');
   });
 
-  it('falls back to the hidden-terms notice when the dialog stays open until Across stops picking the deposit up', async () => {
+  it('falls back to the hidden-terms notice when the dialog stays open until the quote expires', async () => {
     // useFakeTimers does nothing while the Date-only fake from beforeEach is installed.
     vi.useRealTimers();
     vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
@@ -866,8 +866,10 @@ describe('TransactionDialog with an Across deposit and the quote Across signed f
     const root = await checked(erc20);
     expect(title(root)).toBe('Bridge to Arbitrum');
 
-    const validUntil = Number(erc20.attestation.typedData.message.originValidUntil) * 1000;
-    await act(async () => vi.advanceTimersByTime(validUntil - Date.now()));
+    const expiry = Number(erc20.attestation.typedData.message.expiresAt) * 1000;
+    await act(async () => vi.advanceTimersByTime(expiry - 1000 - Date.now()));
+    expect(title(root)).toBe('Bridge to Arbitrum');
+    await act(async () => vi.advanceTimersByTime(1000));
     expect(title(root)).toBe('Deposit to Across');
     expect(yellow(root)).toEqual([ACROSS_HIDDEN]);
     expect(root.textContent).not.toContain('You get');

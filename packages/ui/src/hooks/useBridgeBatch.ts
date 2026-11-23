@@ -74,10 +74,10 @@ function useAcrossOrder(capability: unknown, transactions: TransactionData[], ow
   const answered = answer?.key === key;
   const order = answered ? answer.order : null;
 
-  // A dialog left open past originValidUntil loses the order, as a fresh check would reject it.
+  // A dialog left open past expiresAt loses the order, as a fresh check would reject it.
   useEffect(() => {
     if (!order) return;
-    const wait = order.originValidUntil * 1000 - Date.now();
+    const wait = order.expiresAt * 1000 - Date.now();
     if (wait > LONGEST_TIMEOUT) return;
     const expiry = setTimeout(() => setAnswer({ key, order: null }), wait);
     return () => clearTimeout(expiry);

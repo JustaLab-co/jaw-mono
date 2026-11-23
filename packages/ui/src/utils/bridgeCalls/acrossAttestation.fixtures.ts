@@ -33,7 +33,7 @@ export type AcrossQuoteFixture = {
 // Live Across POST /v1/quotes responses (2026-11-20) requested with attestation: { verifier: zero }.
 // Each attestation is as Across sent it; the calls are the quote's nextActions as the wallet receives them.
 export const ACROSS_QUOTE_DEPOSITOR = '0x1111111111111111111111111111111111111111' as const;
-// Between the last issuedAt and the first originValidUntil of the quotes below.
+// Between the last issuedAt and the first expiresAt of the quotes below.
 export const ACROSS_QUOTES_LIVE_AT = Date.UTC(2026, 10, 20, 13, 30);
 
 export const ACROSS_ATTESTED_QUOTES: Record<'erc20' | 'native' | 'robinhood', AcrossQuoteFixture> = {

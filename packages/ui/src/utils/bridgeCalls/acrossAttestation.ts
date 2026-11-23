@@ -154,7 +154,7 @@ export type AcrossAttestedOrder = {
   recipient: Address;
   minAmount: bigint;
   refund: { recipient: Address; tokens: TokenRef[] } | null;
-  originValidUntil: number;
+  expiresAt: number;
 };
 
 const unpad = (word: Hex) => `0x${word.slice(26)}` as Address;
@@ -180,8 +180,9 @@ export async function readAcrossAttestation(
     if (!bindsCalls(quote.funding, calls, chainId)) return null;
     if (decodeStore(calls.at(-1)?.data)?.args[0] !== quote.orderId) return null;
     const order = orderOf(quote);
-    // Across stops picking the deposit up at originValidUntil, and store() sets no deadline of its own.
-    if (!order || now >= order.originValidUntil * 1000) return null;
+    // Across leaves the time between expiresAt and originValidUntil for the deposit to land,
+    // and store() sets no deadline of its own.
+    if (!order || now >= order.expiresAt * 1000) return null;
     if (!(await signedByAcross(quote, chainId, signature))) return null;
     return order;
   } catch {
@@ -238,7 +239,7 @@ function orderOf(quote: Quote): AcrossAttestedOrder | undefined {
           })),
         }
       : null,
-    originValidUntil: Number(quote.originValidUntil),
+    expiresAt: Number(quote.expiresAt),
   };
 }
 

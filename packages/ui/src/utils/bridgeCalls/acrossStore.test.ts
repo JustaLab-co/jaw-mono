@@ -118,7 +118,7 @@ describe('given the Across v1 batch and an order Across signed', () => {
     recipient: SIGNER,
     minAmount: 4_990_000n,
     refund: null,
-    originValidUntil: 2_000_000_000,
+    expiresAt: 2_000_000_000,
   });
 
   it('when it is the order the store names, then the screen shows the bridge it signed', () => {
