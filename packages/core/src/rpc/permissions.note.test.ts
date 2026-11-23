@@ -127,6 +127,22 @@ const BAD_NOTES: Array<[string, unknown]> = [
     ['an interlinear annotation', 'Daily\uFFF9DCA'],
     // Invisible to a person, read by an agent: the usual way to hide an instruction.
     ['a tag character', 'Daily DCA\u{E0041}\u{E0042}'],
+    // Half of a character, as `.slice(0, 200)` leaves when it cuts an emoji: the relay cannot
+    // store it, and the grant has landed by then.
+    ['an unpaired high surrogate', 'Daily DCA \uD83D'],
+    ['an unpaired low surrogate', '\uDE80 Daily DCA'],
+    // Variation selectors carry bytes behind a visible character without changing how it looks.
+    ['a variation selector', 'Daily DCA\uFE00'],
+    ['a run of emoji selectors', 'Daily DCA \u{1F680}\uFE0F\uFE0F'],
+    ['a supplementary variation selector', 'Daily DCA\u{E0100}'],
+    // Characters that render as blank space.
+    ['a combining grapheme joiner', 'Daily\u034FDCA'],
+    ['a Hangul filler', 'Daily\u3164DCA'],
+    ['a halfwidth Hangul filler', 'Daily\uFFA0DCA'],
+    ['a Hangul choseong filler', 'Daily\u115FDCA'],
+    ['a Hangul jungseong filler', 'Daily\u1160DCA'],
+    ['a Khmer inherent vowel', 'Daily\u17B4DCA'],
+    ['a blank Braille pattern', 'Daily\u2800DCA'],
     ['a number', 42],
     ['an object', { text: 'Daily DCA' }],
 ];
@@ -142,6 +158,9 @@ describe('a note on wallet_grantPermissions, before any popup or dialog opens', 
         ['200 characters', 'a'.repeat(200)],
         ['200 characters once its spaces are trimmed', `  ${'a'.repeat(200)}  `],
         ['100 emoji (200 code units)', '\u{1F680}'.repeat(100)],
+        // One emoji selector, a keycap: how these characters are normally written.
+        ['a red heart, with its emoji selector', 'Love it \u2764\uFE0F'],
+        ['a keycap', 'Step \u0031\uFE0F\u20E3'],
         ['no note', undefined],
         ['an empty note', ''],
         ['a null note', null],
@@ -157,6 +176,17 @@ describe('the note a host shows and stores', () => {
 
     it.each([[''], ['   '], [undefined], [null]])('is no note at all for %j', (note) => {
         expect(normalizePermissionNote(note)).toBeUndefined();
+    });
+
+    // A dapp chooses the note, so a long run of spaces must not stall the screen before it is
+    // refused for its length.
+    it('refuses a note padded with 200,000 spaces at once', () => {
+        const started = performance.now();
+
+        expect(() => normalizePermissionNote(`a${' '.repeat(200_000)}a`)).toThrow(
+            expect.objectContaining({ code: -32602 })
+        );
+        expect(performance.now() - started).toBeLessThan(500);
     });
 });
 
