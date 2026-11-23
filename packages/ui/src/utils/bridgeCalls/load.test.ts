@@ -242,6 +242,11 @@ describe('given a live table that differs from the one compiled into the build',
     expect(contracts.chain(8453)?.across?.swapRouter).toBe(BRIDGE_CHAINS[8453].across!.swapRouter);
   });
 
+  it('when it carries another prefunded store, then that one is in use', async () => {
+    const contracts = await loaded((t) => (t.chains['8453'].across.prefundedStore = OTHER));
+    expect(contracts.chain(8453)?.across?.prefundedStore).toBe(OTHER);
+  });
+
   it('when it carries other Relay approval proxies, then the ones of the build stay', async () => {
     const contracts = await loaded((t) => (t.chains['8453'].relay.approvalProxies = [OTHER]));
     expect(contracts.chain(8453)?.relay?.approvalProxies).toEqual(BRIDGE_CHAINS[8453].relay!.approvalProxies);
