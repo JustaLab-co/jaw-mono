@@ -135,6 +135,8 @@ describe('ReactUIHandler and the note of a grant', () => {
 
     // The handler answers a refusal rather than throwing; the signer throws its error to the dapp.
     await expect(response).resolves.toMatchObject({ approved: false, error: { code: -32602 } });
+    // Nothing was shown: no screen, so no Confirm that could still grant.
+    expect(dialogProps.onConfirm).toBeUndefined();
     expect(dialogProps.note).toBeUndefined();
     expect(grantPermissions).not.toHaveBeenCalled();
   });
