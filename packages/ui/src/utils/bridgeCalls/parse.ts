@@ -21,6 +21,7 @@ const across = z.object({
   wrappedNative: address.optional(),
   swapRouter: address.optional(),
   lifiDiamond: address.optional(),
+  prefundedStore: address.optional(),
 });
 
 const relay = z.object({

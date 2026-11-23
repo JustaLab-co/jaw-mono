@@ -7,7 +7,9 @@ import type { ReactNode } from 'react';
 vi.mock('../../hooks', () => ({ useChainIconURI: () => undefined, useFeeTokenPrice: () => undefined }));
 vi.mock('../ShellDialog', () => ({ ShellDialog: ({ children }: { children: ReactNode }) => <div>{children}</div> }));
 vi.mock('../../hooks/useBridgeContracts', () => ({ useBridgeContracts: () => ({ contracts: {}, settled: true }) }));
-vi.mock('../../hooks/useBridgeBatch', () => ({ useBridgeBatch: () => ({ bridge: undefined, settled: true }) }));
+vi.mock('../../hooks/useBridgeBatch', () => ({
+  useBridgeBatch: () => ({ bridge: undefined, tokensAndQuoteChecked: true }),
+}));
 vi.mock('../../hooks/useAddressIdentities', () => ({
   useAddressIdentity: () => ({}),
   useAddressIdentities: () => ({}),

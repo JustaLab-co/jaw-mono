@@ -1,12 +1,21 @@
 import { formatUnits, getAddress, isAddressEqual, type Address } from 'viem';
 import { groupNumber } from '../displayFormat';
 import { formatAddress } from '../formatAddress';
-import type { AcrossDeposit } from './across';
+import type { AcrossDeposit, AcrossOrder } from './across';
+import type { AcrossAttestedOrder } from './acrossAttestation';
 import type { BridgeChain } from './contracts';
 import type { RelayDeposit, RelaySwap } from './relay';
 import type { OrderUnshown, RelayOrder } from './relayOrder';
 import type { BridgeContracts } from './table';
-import type { BridgeProvider, Received, Token, TokenAmount } from './view';
+import {
+  tokenAmount,
+  unreadRefs,
+  type BridgeProvider,
+  type Received,
+  type Token,
+  type TokenAmount,
+  type TokenRef,
+} from './view';
 
 export type Detail = { label: string; value: string; copy?: string };
 
@@ -26,7 +35,8 @@ export type BridgeTransfer = {
   details: Detail[];
 };
 
-export type TransferRead = { transfer: BridgeTransfer; notices: string[] };
+/** `unread` is the token whose symbol and decimals would let the terms show. */
+export type TransferRead = { transfer: BridgeTransfer; notices: string[]; unread?: TokenRef };
 
 export const PROVIDER_NAME: Record<BridgeProvider, string> = { across: 'Across', relay: 'Relay' };
 
@@ -37,18 +47,22 @@ const tokenNotice = (token: Token) =>
     : `This screen does not know the token ${token.address}. Check it before you confirm.`;
 const unknownChain = (id: number) =>
   `This screen does not know chain ${id} and cannot confirm that the recipient there is this account. Check it before you confirm.`;
-const RELAY_HIDDEN =
-  'Relay keeps the destination chain and the recipient in an order outside this transaction. This screen cannot show them. Confirm only if you started this transfer yourself.';
+const hiddenTerms = (provider: BridgeProvider) =>
+  `${PROVIDER_NAME[provider]} keeps the destination chain and the recipient in an order outside this transaction. This screen cannot show them. Confirm only if you started this transfer yourself.`;
+const ACROSS_UNRECOGNIZED_TOKEN = 'This Across order includes an unrecognized token, so its terms are not shown.';
+const orderDetail = (id: string): Detail => ({ label: 'Order', value: `${id.slice(0, 6)}…${id.slice(-4)}`, copy: id });
 
 export function transferOf(
   contracts: BridgeContracts,
-  deposit: AcrossDeposit | RelayDeposit | RelaySwap,
+  deposit: AcrossDeposit | AcrossOrder | RelayDeposit | RelaySwap,
   account: Address,
-  order?: RelayOrder | OrderUnshown
+  relayOrder?: RelayOrder | OrderUnshown,
+  acrossOrder: AcrossAttestedOrder | null = null
 ): TransferRead {
   if (deposit.kind === 'swap') return relaySwapTransfer(contracts, deposit);
+  if (deposit.kind === 'order') return acrossOrderTransfer(contracts, deposit, account, acrossOrder);
   if (deposit.provider === 'across') return acrossTransfer(contracts, deposit, account);
-  return relayTransfer(contracts, deposit, account, order);
+  return relayTransfer(contracts, deposit, account, relayOrder);
 }
 
 function acrossTransfer(contracts: BridgeContracts, deposit: AcrossDeposit, account: Address): TransferRead {
@@ -99,50 +113,109 @@ function relayTransfer(
   account: Address,
   order?: RelayOrder | OrderUnshown
 ): TransferRead {
-  const id = deposit.orderId;
   const notices: string[] = [];
   if (!deposit.send.token.known) notices.push(tokenNotice(deposit.send.token));
   if (!isAddressEqual(deposit.depositor, account))
     notices.push(notThisAccount('The account credited', deposit.depositor));
   const credited = accountDetail('Credited to', deposit.depositor, account);
-  const orderDetail = { label: 'Order', value: `${id.slice(0, 6)}…${id.slice(-4)}`, copy: id };
 
   if (order?.kind !== 'order') {
-    notices.unshift(...(order ? [order.reason, RELAY_HIDDEN] : [RELAY_HIDDEN]));
+    notices.unshift(...(order ? [order.reason] : []), hiddenTerms('relay'));
     return {
       transfer: {
         provider: 'relay',
         title: 'Deposit to Relay',
         send: deposit.send,
         origin: labelOf(contracts, deposit.send.chainId),
-        details: [credited, orderDetail],
+        details: [credited, orderDetail(deposit.orderId)],
       },
       notices,
     };
   }
 
-  const received = order.minimumReceived.token;
+  return verifiedOrderTransfer(contracts, deposit, order, account, notices, [credited]);
+}
+
+type OrderTerms = Omit<RelayOrder, 'kind'>;
+
+function acrossOrderTransfer(
+  contracts: BridgeContracts,
+  deposit: AcrossOrder,
+  account: Address,
+  order: AcrossAttestedOrder | null
+): TransferRead {
+  const notices = deposit.send.token.known ? [] : [tokenNotice(deposit.send.token)];
+  // As with the destination, a refund on a chain the table lacks could not be called this account.
+  const chainsInTable =
+    order !== null &&
+    [order.destinationChainId, ...(order.refund?.tokens ?? []).map((token) => token.chainId)].every(
+      (chainId) => contracts.chain(chainId) !== undefined
+    );
+  const ours = chainsInTable && order.orderId === deposit.orderId;
+  // The terms show only once the token they pay out in can be named.
+  const [unread] = ours
+    ? unreadRefs([tokenAmount(contracts, order.destinationChainId, order.token, order.minAmount)])
+    : [];
+  if (!ours || unread) {
+    return {
+      transfer: {
+        provider: 'across',
+        title: 'Deposit to Across',
+        send: deposit.send,
+        origin: labelOf(contracts, deposit.send.chainId),
+        details: [orderDetail(deposit.orderId)],
+      },
+      notices: [...(unread ? [ACROSS_UNRECOGNIZED_TOKEN] : []), hiddenTerms('across'), ...notices],
+      unread,
+    };
+  }
+
+  const { destinationChainId, refund } = order;
+  const refundChains = new Set(refund?.tokens.map((token) => token.chainId));
+  const terms: OrderTerms = {
+    destinationChainId,
+    recipient: order.recipient,
+    minimumReceived: tokenAmount(contracts, destinationChainId, order.token, order.minAmount),
+    refunds: refund ? [...refundChains].map((chainId) => ({ chainId, to: refund.recipient })) : [],
+  };
+  return verifiedOrderTransfer(contracts, deposit, terms, account, notices, []);
+}
+
+function verifiedOrderTransfer(
+  contracts: BridgeContracts,
+  deposit: AcrossOrder | RelayDeposit,
+  terms: OrderTerms,
+  account: Address,
+  notices: string[],
+  details: Detail[]
+): TransferRead {
+  const received = terms.minimumReceived.token;
   if (!received.known) notices.push(tokenNotice(received));
-  if (!isAddressEqual(order.recipient, account)) notices.push(notThisAccount('The recipient', order.recipient));
+  if (!isAddressEqual(terms.recipient, account)) notices.push(notThisAccount('The recipient', terms.recipient));
   // The recipient is only known to hold its address on the destination chain.
-  for (const { chainId, to } of order.refunds) {
-    const toRecipient = chainId === order.destinationChainId && isAddressEqual(to, order.recipient);
+  for (const { chainId, to } of terms.refunds) {
+    const toRecipient = chainId === terms.destinationChainId && isAddressEqual(to, terms.recipient);
     if (!isAddressEqual(to, account) && !toRecipient) notices.push(notThisAccount('The refund address', to));
   }
-  const refundDetails = order.refunds.map(({ chainId, to }) =>
+  const refundDetails = terms.refunds.map(({ chainId, to }) =>
     accountDetail(`Refund on ${labelOf(contracts, chainId).name}`, to, account)
   );
-  const destination = labelOf(contracts, order.destinationChainId);
+  const destination = labelOf(contracts, terms.destinationChainId);
   return {
     transfer: {
-      provider: 'relay',
+      provider: deposit.provider,
       title: `Bridge to ${destination.name}`,
       send: deposit.send,
       origin: labelOf(contracts, deposit.send.chainId),
-      receive: { kind: 'minimum', amount: order.minimumReceived },
+      receive: { kind: 'minimum', amount: terms.minimumReceived },
       destination,
-      otherRecipient: isAddressEqual(order.recipient, account) ? undefined : getAddress(order.recipient),
-      details: [accountDetail('Recipient', order.recipient, account), ...refundDetails, credited, orderDetail],
+      otherRecipient: isAddressEqual(terms.recipient, account) ? undefined : getAddress(terms.recipient),
+      details: [
+        accountDetail('Recipient', terms.recipient, account),
+        ...(refundDetails.length > 0 ? refundDetails : [{ label: 'Refund', value: 'Not stated' }]),
+        ...details,
+        orderDetail(deposit.orderId),
+      ],
     },
     notices,
   };
