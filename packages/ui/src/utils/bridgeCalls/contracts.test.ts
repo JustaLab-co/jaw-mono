@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { getAddress } from 'viem';
 import { BRIDGE_CHAINS, JAW_FEE_RECIPIENT } from './contracts';
-import { parse } from './parse';
+import { parse, tableProblem } from './parse';
 
 const chains = Object.entries(BRIDGE_CHAINS).map(([id, chain]) => ({ id: Number(id), ...chain }));
 
@@ -20,7 +20,8 @@ describe('given the pinned bridge table of the signing screen', () => {
       nativeSymbol: 'ETH',
       across: {
         spokePool: '0x09aea4b2242abC8bb4BB78D537A67a245A7bEC64',
-        periphery: '0x97CCDBea4632140639aD5eA9b944aa034eb15fD4',
+        periphery: '0x4E9eF0a5fe749079Dd11e68AAd5d75FCcfaAf9Af',
+        previousPeriphery: '0x97CCDBea4632140639aD5eA9b944aa034eb15fD4',
         multicallHandler: '0x0F7Ae28dE1C8532170AD4ee566B5801485c13a0E',
         eventEmitter: '0xBF75133b48b0a42AB9374027902E83C5E2949034',
         wrappedNative: '0x4200000000000000000000000000000000000006',
@@ -47,6 +48,29 @@ describe('given the pinned bridge table of the signing screen', () => {
     expect(BRIDGE_CHAINS[42161]?.across?.spokePool).toBe('0xe35e9842fceaCA96570B734083f4a58e8F7C5f2A');
     expect(BRIDGE_CHAINS[130]?.across?.spokePool).toBe('0x09aea4b2242abC8bb4BB78D537A67a245A7bEC64');
     expect(BRIDGE_CHAINS[84532]?.across?.spokePool).toBe('0x82B564983aE7274c86695917BBf8C99ECb6F0F8F');
+  });
+
+  it('then each Across mainnet reads the periphery Across lists and the previous one its quotes still call', () => {
+    const peripheries = Object.fromEntries(
+      chains.flatMap((c) =>
+        c.across?.previousPeriphery ? [[c.id, [c.across.periphery, c.across.previousPeriphery]]] : []
+      )
+    );
+    const periphery = '0x4E9eF0a5fe749079Dd11e68AAd5d75FCcfaAf9Af';
+    const previous = '0x97CCDBea4632140639aD5eA9b944aa034eb15fD4';
+    expect(peripheries).toEqual({
+      ...Object.fromEntries(
+        [1, 10, 56, 130, 137, 143, 1868, 4663, 8453, 42161, 43114, 57073, 59144].map((id) => [
+          id,
+          [periphery, previous],
+        ])
+      ),
+      5042: [periphery, '0xE791A2669bef779Ff7A4A9CF789F8Ee2CA20a32c'],
+    });
+  });
+
+  it('then no address holds two roles in the build, the previous periphery included', () => {
+    expect(tableProblem(BRIDGE_CHAINS)).toBeUndefined();
   });
 
   it('then the Relay depository is the production one on mainnets and the testnet one on Sepolia', () => {
@@ -187,6 +211,6 @@ describe('given the pinned bridge table of the signing screen', () => {
 
   it('then the table matches the reviewed digest, so any changed literal updates this test', () => {
     const digest = createHash('sha256').update(JSON.stringify({ BRIDGE_CHAINS, JAW_FEE_RECIPIENT })).digest('hex');
-    expect(digest).toBe('187b79b61f88b2268cfc73779bf88d435f5e52283259a167732f905e1537f9f4');
+    expect(digest).toBe('67a0ff8ca7b8a2c9394417cddbc0f23fa604c14a5e8fde6dccd72c478d55c446');
   });
 });

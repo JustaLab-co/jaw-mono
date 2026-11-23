@@ -50,6 +50,14 @@ describe('given the approve the MCP builds for a Relay USDC deposit on Base', ()
     });
   });
 
+  it('when the spender is the periphery Across lists, which replaced the one above, then it reads as Across', () => {
+    const periphery = '0x4E9eF0a5fe749079Dd11e68AAd5d75FCcfaAf9Af';
+    expect(readBridgeApprove(contracts, approve(periphery, '989680'))).toMatchObject({
+      provider: 'across',
+      spender: periphery,
+    });
+  });
+
   it('when the spender is the Relay approval proxy on Base, then it reads as Relay', () => {
     const proxy = '0x5567954cD026CEbFE486062cb75848e0f1c12E58';
     expect(readBridgeApprove(contracts, approve(proxy, '989680'))).toMatchObject({ provider: 'relay', spender: proxy });

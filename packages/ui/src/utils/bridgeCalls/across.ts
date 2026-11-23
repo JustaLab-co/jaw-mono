@@ -75,6 +75,9 @@ const WITHDRAW_ALL = encodeFunctionData({
   functionName: 'withdraw',
   args: [0n],
 });
+// The periphery takes a fillDeadline of up to a year as an offset from the block the deposit lands
+// in, so the date the screen shows would not be the deadline. Across quotes send a timestamp.
+const MAX_RELATIVE_TIME_SECONDS = 31_536_000;
 // Solidity ignores calldata after the arguments, where Across and other front ends append their tags.
 const WHOLE_BYTES = /^(?:[0-9a-f]{2})*$/;
 const EVM_WORD = /^0x0{24}[0-9a-f]{40}$/;
@@ -131,7 +134,10 @@ export function readAcrossCall(
   const across = contracts.chain(call.chainId)?.across;
   if (!across || !isAddress(call.to, { strict: false })) return undefined;
   const toPool = isAddressEqual(call.to, across.spokePool);
-  if (!toPool && !isAddressEqual(call.to, across.periphery)) return undefined;
+  const toPeriphery =
+    isAddressEqual(call.to, across.periphery) ||
+    (across.previousPeriphery !== undefined && isAddressEqual(call.to, across.previousPeriphery));
+  if (!toPool && !toPeriphery) return undefined;
   try {
     if (toPool && revertsOnPool(call, across)) return { kind: 'inert' };
     const fields = fieldsOf(contracts, call, across, toPool);
@@ -228,6 +234,7 @@ function fieldsOf(
     const { 10: fillDeadline, 12: message } = decoded.args;
     if (!isAddressEqual(spokePool, origin.spokePool) || value !== inputAmount) return undefined;
     if (!isAddressEqual(inputToken, required(origin.wrappedNative))) return undefined;
+    if (fillDeadline <= MAX_RELATIVE_TIME_SECONDS) return undefined;
     return {
       depositor: getAddress(depositor),
       recipient: addressOf(recipient),
@@ -244,6 +251,7 @@ function fieldsOf(
   const [{ submissionFees, depositData, swapToken, swapTokenAmount, minExpectedInputTokenAmount, spokePool }] =
     decoded.args;
   if (!isAddressEqual(spokePool, origin.spokePool) || submissionFees.amount !== 0n) return undefined;
+  if (depositData.fillDeadline <= MAX_RELATIVE_TIME_SECONDS) return undefined;
   // The periphery deposits whatever the exchange returns and only checks it against
   // minExpectedInputTokenAmount, so that floor must cover the output the screen shows.
   if (!floorCoversOutput(contracts, call.chainId, depositData, minExpectedInputTokenAmount)) return undefined;
