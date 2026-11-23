@@ -584,10 +584,10 @@ export function calculateTokenEstimatesFromGas(
 /**
  * Builds the paymaster context for paying gas with an estimated ERC-20 token.
  *
- * `gas` is the amount the bundled approval must cover: the worst-case ceiling
- * (`tokenCostMax`), NOT the displayed estimate — the paymaster's postOp can
- * charge up to the ceiling, and an insufficient allowance reverts the whole
- * operation. Every UI that lets a user pay in ERC-20 should build its
+ * `gas` is the worst-case ceiling (`tokenCostMax`) the user is shown, NOT the
+ * displayed estimate. The SDK approves no more than it, and no more than its
+ * own estimate at send time; the spender is always the paymaster the SDK's
+ * own quote names. Every UI that lets a user pay in ERC-20 should build its
  * paymaster context through this helper so the rule lives in one place.
  */
 export function buildErc20PaymasterContext(estimate: TokenEstimate): { token: Address; gas: string } {

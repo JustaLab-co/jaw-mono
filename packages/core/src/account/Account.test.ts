@@ -1473,8 +1473,8 @@ describe('Account — ERC-20 paymaster approval', () => {
 
     // The prefund is quoted before the screen renders, so the wallet estimates
     // the batch with the transfer already in it and passes that ceiling in the
-    // context. Nothing is added after the estimate any more, so nothing has to
-    // be measured again: the approval is the figure the screen showed.
+    // context. The send estimates the same batch again, so a `gas` the caller
+    // wrote is checked against it rather than approved as given.
     it('approves the ceiling the caller sized over the batch the prefund rides in', async () => {
         const { grantPermissions } = await import('../rpc/permissions.js');
         const SPENDER = '0x2222222222222222222222222222222222222222' as `0x${string}`;
@@ -1500,7 +1500,7 @@ describe('Account — ERC-20 paymaster approval', () => {
             { prefund }
         );
 
-        expect(prepareUserOperation).not.toHaveBeenCalled();
+        expect(prepareUserOperation.mock.calls[0][0].calls).toContainEqual(spenderPrefundCall(prefund));
         // Arg 8 carries the approval and the transfer, the transfer exactly as quoted.
         const prepended = vi.mocked(grantPermissions).mock.calls.at(-1)?.[8] as Array<unknown>;
         expect(prepended).toEqual([expectedApproval(), spenderPrefundCall(prefund)]);
@@ -1577,6 +1577,104 @@ describe('Account — ERC-20 paymaster approval', () => {
                 functionName: 'approve',
                 args: [OTHER_PAYMASTER, CEILING],
             }),
+        });
+    });
+
+    describe('when the context already carries gas', () => {
+        const OTHER_PAYMASTER = '0x00000000000000000000000000000000000000aa' as `0x${string}`;
+        const GAS = { token: USDC, gas: String(CEILING) };
+        const approveTo = (spender: `0x${string}`, amount = CEILING) => ({
+            to: USDC,
+            value: 0n,
+            data: encodeFunctionData({ abi: erc20Abi, functionName: 'approve', args: [spender, amount] }),
+        });
+
+        beforeEach(async () => {
+            const { fetchTokenQuotes } = await import('./erc20Paymaster.js');
+            vi.mocked(fetchTokenQuotes).mockResolvedValue([
+                {
+                    tokenAddress: USDC,
+                    paymasterAddress: OTHER_PAYMASTER,
+                    exchangeRate: 1_000_000_000_000_000_000n,
+                    postOpGas: 40_000n,
+                },
+            ] as never);
+        });
+
+        // Every fee the wallet builds through `buildErc20PaymasterContext` has
+        // `gas`, so this is the path real sends take. The constant named some
+        // other paymaster than the one charging, and its postOp then reverted.
+        it('approves the paymaster the quote names, not the constant', async () => {
+            const { sendCalls } = await import('./smartAccount.js');
+            const account = await makeAccount();
+
+            await account.sendCalls([{ to: RECIPIENT }], undefined, PAYMASTER_URL, GAS);
+
+            expect(vi.mocked(sendCalls).mock.calls[0][1][0]).toEqual(approveTo(OTHER_PAYMASTER));
+        });
+
+        it('reads the allowance the quoted paymaster holds', async () => {
+            const readContract = vi.fn().mockResolvedValue(CEILING);
+            vi.mocked(createPublicClient).mockReturnValue({ readContract } as never);
+            const { sendCalls } = await import('./smartAccount.js');
+            const account = await makeAccount();
+
+            await account.sendCalls([{ to: RECIPIENT }], undefined, PAYMASTER_URL, GAS);
+
+            expect(readContract.mock.calls[0][0].args[1]).toBe(OTHER_PAYMASTER);
+            expect(vi.mocked(sendCalls).mock.calls[0][1]).toHaveLength(1);
+        });
+
+        it('approves the quoted paymaster on a grant', async () => {
+            const { grantPermissions } = await import('../rpc/permissions.js');
+            vi.mocked(grantPermissions).mockResolvedValue({ permissionId: '0xperm' } as never);
+            const account = await makeAccount();
+
+            await account.grantPermissions(
+                9999999999,
+                RECIPIENT,
+                { spends: [{ token: USDC, allowance: '10000000', unit: 'day' }] } as never,
+                PAYMASTER_URL,
+                GAS
+            );
+
+            const prepended = vi.mocked(grantPermissions).mock.calls.at(-1)?.[8] as Array<unknown>;
+            expect(prepended).toEqual([approveTo(OTHER_PAYMASTER)]);
+        });
+
+        it('approves the gas the caller was shown when it is under the estimate', async () => {
+            const { sendCalls } = await import('./smartAccount.js');
+            const account = await makeAccount();
+
+            await account.sendCalls([{ to: RECIPIENT }], undefined, PAYMASTER_URL, { token: USDC, gas: '1000' });
+
+            expect(vi.mocked(sendCalls).mock.calls[0][1][0]).toEqual(approveTo(OTHER_PAYMASTER, 1000n));
+        });
+
+        // A caller that writes a huge `gas` would otherwise leave that much
+        // allowance with the paymaster.
+        it('never approves more than the estimate, whatever gas the caller sends', async () => {
+            const { sendCalls } = await import('./smartAccount.js');
+            const account = await makeAccount();
+
+            await account.sendCalls([{ to: RECIPIENT }], undefined, PAYMASTER_URL, {
+                token: USDC,
+                gas: String(CEILING * 1000n),
+            });
+
+            expect(vi.mocked(sendCalls).mock.calls[0][1][0]).toEqual(approveTo(OTHER_PAYMASTER));
+        });
+
+        it('throws rather than guessing the spender when no quote comes back', async () => {
+            const { fetchTokenQuotes } = await import('./erc20Paymaster.js');
+            const { sendCalls } = await import('./smartAccount.js');
+            vi.mocked(fetchTokenQuotes).mockResolvedValue([]);
+            const account = await makeAccount();
+
+            await expect(account.sendCalls([{ to: RECIPIENT }], undefined, PAYMASTER_URL, GAS)).rejects.toThrow(
+                /Could not size the ERC-20 paymaster approval/
+            );
+            expect(sendCalls).not.toHaveBeenCalled();
         });
     });
 
