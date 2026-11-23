@@ -145,6 +145,7 @@ const BAD_NOTES: Array<[string, unknown]> = [
     ['a Hangul choseong filler', 'Daily\u115FDCA'],
     ['a Hangul jungseong filler', 'Daily\u1160DCA'],
     ['a Khmer inherent vowel', 'Daily\u17B4DCA'],
+    ['a second Khmer inherent vowel', 'Daily\u17B5DCA'],
     ['a blank Braille pattern', 'Daily\u2800DCA'],
     // The rest of the default ignorable code points: each can carry bytes nobody sees.
     ['a reserved ignorable plane-14 character', 'Daily DCA\u{E0200}\u{E0241}'],
