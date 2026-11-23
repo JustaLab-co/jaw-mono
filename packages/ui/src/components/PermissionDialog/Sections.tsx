@@ -12,6 +12,9 @@ import { Eyebrow } from '../primitives';
 import { isNativeToken } from '../../utils/tokenBalance';
 import { isWildcard } from '../../utils/permissionExecution';
 import { getDisplayAddress } from '../../utils';
+import { formatAddress } from '../../utils/formatAddress';
+import { currentContracts } from '../../utils/bridgeCalls/load';
+import { pinnedToken } from '../../utils/bridgeCalls/view';
 import type { AddressIdentity } from '../../hooks/useAddressIdentities';
 import { isLongSpendAmount } from '../../utils/displayFormat';
 import type { CallPermission, SpendPermission, SpenderPrefundDisplay } from './types';
@@ -175,6 +178,47 @@ export function SpenderPrefundNotice({
           So the spender can pay fees for its first transactions. It leaves your account immediately, and revoking the
           permission doesn&apos;t return it.
         </span>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The one token a swap under this permission may buy. The request names it and the server that
+ * asked holds every swap to it, so the screen says it is not an onchain limit. A token outside the
+ * pinned table is named by its own `symbol()` and marked unverified.
+ */
+export function SwapDestinationNotice({
+  address,
+  chainId,
+  chainName,
+  tokenMeta,
+}: {
+  address: string;
+  chainId?: number;
+  chainName: string;
+  tokenMeta?: Record<string, { symbol: string }>;
+}) {
+  const pinned = chainId === undefined ? undefined : pinnedToken(currentContracts(), chainId, address);
+  const metaKey = Object.keys(tokenMeta ?? {}).find((key) => key.toLowerCase() === address.toLowerCase());
+  const symbol = pinned?.symbol ?? (metaKey ? tokenMeta![metaKey].symbol : '');
+  const short = formatAddress(address);
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="pl-3">
+        <Eyebrow>Swap token</Eyebrow>
+      </div>
+      <div className="border-border rounded-box flex flex-col gap-1 border px-3 py-2">
+        <span className="text-foreground text-value break-all font-semibold">
+          Swaps only into {symbol ? `${symbol} (${short}, ${chainName})` : `${short} (${chainName})`}
+        </span>
+        {!pinned && (
+          <span className="text-warning text-body-sm flex items-center gap-1.5">
+            <TriangleAlert className="size-3.5 flex-none" strokeWidth={2} />
+            Unverified token: {symbol ? 'its name is what the token contract reports' : 'its name could not be read'}.
+          </span>
+        )}
+        <span className="text-muted-foreground text-body-sm">The app that asked enforces this, not the chain.</span>
       </div>
     </div>
   );

@@ -20,7 +20,15 @@ import { resolveNativeSymbol } from '../../utils/nativeSymbol';
 import { isBlockingRevocationProblem, REVOCATION_PROBLEM_TEXT } from '../../utils/permissionExecution';
 import { PermissionDialogProps } from './types';
 import { InlineWarning, PartyRow } from '../primitives';
-import { AllowedCalls, MetaCard, SpendLimits, SpenderPrefundNotice, hasChecker, isWildcard } from './Sections';
+import {
+  AllowedCalls,
+  MetaCard,
+  SpendLimits,
+  SpenderPrefundNotice,
+  SwapDestinationNotice,
+  hasChecker,
+  isWildcard,
+} from './Sections';
 
 export const PermissionDialog = ({
   open,
@@ -37,6 +45,7 @@ export const PermissionDialog = ({
   calls = [],
   prefund,
   prefundLoading = false,
+  swapDestination,
   tokenMeta,
   expiryDate,
   grantedDate,
@@ -290,6 +299,15 @@ export const PermissionDialog = ({
             )}
 
             {isGrant && <SpenderPrefundNotice prefund={prefund} isLoading={prefundLoading} />}
+
+            {isGrant && swapDestination && (
+              <SwapDestinationNotice
+                address={swapDestination}
+                chainId={chainId}
+                chainName={networkName}
+                tokenMeta={tokenMeta}
+              />
+            )}
 
             {metaRows.length > 0 && <MetaCard rows={metaRows} />}
 

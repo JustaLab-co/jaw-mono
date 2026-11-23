@@ -68,6 +68,8 @@ export interface PermissionDialogProps {
   prefund?: SpenderPrefundDisplay | null;
   /** Grant only: the prefund is still being sized, so Confirm waits for it. */
   prefundLoading?: boolean;
+  /** Grant only: the one token the requester says swaps under this permission may buy. */
+  swapDestination?: string;
 
   // Period and expiry
   expiryDate: string; // Formatted expiry date
