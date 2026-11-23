@@ -463,6 +463,15 @@ describe('AssetPreview bridge views and the simulated receive side', () => {
     sameChain: true,
     details: [],
   };
+  const ethSwap: BridgeTransfer = {
+    ...sameChainSwap,
+    send: {
+      chainId: 8453,
+      amount: 10n ** 16n,
+      token: { address: '0x0000000000000000000000000000000000000000', known: true, symbol: 'ETH', decimals: 18 },
+    },
+  };
+  const ethOut: AssetDelta = { ...ethIn, diff: -(10n ** 16n), direction: 'out' };
   const unorderedDeposit: BridgeTransfer = {
     provider: 'relay',
     title: 'Deposit to Relay',
@@ -534,8 +543,79 @@ describe('AssetPreview bridge views and the simulated receive side', () => {
 
   it('a same-chain swap the simulation sees pay nothing back says nothing arrives', () => {
     const out = html({ assetsOut: [usdcOut], bridge: sameChainSwap, simulated: true });
-    expect(getSide(out)).toContain('The simulation sees nothing arriving.');
+    expect(getSide(out)).toContain('The simulation sees no verified asset arriving.');
     expect(out).not.toContain(NOTE);
+  });
+
+  it('a same-chain swap that pays out only a token at an unpinned address says no verified asset arrives', () => {
+    const fakeUsdcIn = {
+      ...usdcOut,
+      address: '0x2222222222222222222222222222222222222222',
+      diff: 10_000_000n,
+      direction: 'in' as const,
+      amountFormatted: '10',
+    };
+    const out = html({
+      assetsOut: [usdcOut],
+      assetsIn: [fakeUsdcIn],
+      bridge: sameChainSwap,
+      simulated: true,
+      ...onBase,
+    });
+    expect(getSide(out)).toContain('+10');
+    expect(getSide(out)).toContain('The simulation sees no verified asset arriving.');
+    expect(out).not.toContain(NOTE);
+  });
+
+  it('a same-chain swap that pays out only native dust says no verified asset arrives', () => {
+    const dust = { ...ethIn, diff: 1n, amountFormatted: '0.000000000000000001' };
+    const out = html({ assetsOut: [usdcOut], assetsIn: [dust], bridge: sameChainSwap, simulated: true });
+    expect(getSide(out)).toContain('The simulation sees no verified asset arriving.');
+    expect(out).not.toContain(NOTE);
+  });
+
+  it('a same-chain swap that pays out a pinned token shows it priced, marked as not guaranteed', async () => {
+    prices.fetch.mockImplementation(async (s) => (s === 'USDC' ? 1 : 0));
+    const usdcIn = {
+      ...usdcOut,
+      address: BASE_PINNED.USDC,
+      diff: 10_000_000n,
+      direction: 'in' as const,
+      amountFormatted: '10',
+    };
+    await mount({ assetsOut: [ethOut], assetsIn: [usdcIn], bridge: ethSwap, simulated: true, ...onBase });
+    await settle();
+    const side = getSide(host.textContent!);
+    expect(side).toContain(NOTE);
+    expect(side).toContain('$10.00');
+    expect(side).not.toContain('The simulation sees no verified asset arriving.');
+  });
+
+  it('a same-chain swap the simulation sees revert says nothing about what arrives', () => {
+    const out = html({ assetsOut: [usdcOut], bridge: sameChainSwap, simulated: true, willRevert: true });
+    expect(out).not.toContain('The simulation sees no verified asset arriving.');
+  });
+
+  it('a bridge view does not price another token the simulation sees leave by the symbol it reports', async () => {
+    prices.fetch.mockImplementation(async (s) => ({ USDC: 1, SOL: 150 })[s] ?? 0);
+    const fakeSolOut = {
+      ...usdcOut,
+      address: '0x000000000000000000000000000000000000ad01',
+      symbol: 'SOL',
+      diff: -10_000_000_000n,
+      amountFormatted: '10000',
+    };
+    await mount({
+      assetsOut: [usdcOut, fakeSolOut],
+      assetsIn: [ethIn],
+      bridge: sameChainSwap,
+      simulated: true,
+      ...onBase,
+    });
+    await settle();
+    expect(host.textContent).toContain('−10000');
+    expect(host.textContent).toContain('$5.00');
+    expect(host.textContent).not.toContain('$1,500,000.00');
   });
 
   it('a same-chain swap says nothing about what arrives before the simulation answers', () => {

@@ -558,7 +558,7 @@ describe('BridgeDetails', () => {
 });
 
 describe('TransactionDialog with a same-chain Relay swap', () => {
-  const NOTHING_ARRIVES = 'The simulation sees nothing arriving.';
+  const NOTHING_ARRIVES = 'The simulation sees no verified asset arriving.';
   const SIMULATED_ONLY = 'Simulated, not guaranteed.';
   const PROXY = '0x5567954cD026CEbFE486062cb75848e0f1c12E58';
   const proxyAbi = parseAbi([
@@ -653,6 +653,18 @@ describe('TransactionDialog with a same-chain Relay swap', () => {
     });
     expect(root.textContent).toContain('Could not simulate this transaction');
     expect(root.textContent).not.toContain('You get');
+  });
+
+  it('says nothing about what arrives when the simulation sees the batch revert, next to the fail warning', () => {
+    const root = render([approve(PROXY), payOut], {
+      walletAddress: RELAY_SWAP_ACCOUNT,
+      assetsOut: [],
+      assetsIn: [],
+      assetPreviewSimulated: true,
+      assetPreviewWillRevert: true,
+    });
+    expect(root.textContent).toContain('Transaction is likely to fail');
+    expect(root.textContent).not.toContain(NOTHING_ARRIVES);
   });
 });
 
