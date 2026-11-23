@@ -73,6 +73,11 @@ export interface PermissionDialogProps {
   expiryDate: string; // Formatted expiry date
   /** Formatted grant date (revoke only) — the stored permission's `start`. */
   grantedDate?: string;
+  /**
+   * What the app that asked for the permission said it is for: from the request on grant, as
+   * stored on revoke. Already checked and trimmed by `normalizePermissionNote`. Not signed.
+   */
+  note?: string;
 
   // Network info
   networkName: string;
