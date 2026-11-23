@@ -132,4 +132,23 @@ describe('given the Across v1 batch and an order Across signed', () => {
     expect(batch?.transfer?.title).toBe('Deposit to Across');
     expect(batch?.notices).toEqual([ACROSS_HIDDEN]);
   });
+
+  it.each([
+    ['only on a chain the table lacks', [999_999]],
+    ['on a chain the table lacks besides Base', [8453, 999_999]],
+  ])('when its refund pays this account %s, then the screen keeps the hidden terms notice', (_, chains) => {
+    const refund = { recipient: SIGNER, tokens: chains.map((chainId) => ({ chainId, address: zeroAddress })) };
+    const order = { ...signed(ORDER_ID), refund };
+    const batch = readBridgeBatch(contracts, [APPROVE, USDC_STORE], SIGNER, undefined, order);
+    expect(batch?.transfer?.title).toBe('Deposit to Across');
+    expect(batch?.notices).toEqual([ACROSS_HIDDEN]);
+    expect(batch?.transfer?.details.map((detail) => detail.value)).not.toContain('This account');
+  });
+
+  it('when its refund pays this account on Base, then the screen names that refund', () => {
+    const refund = { recipient: SIGNER, tokens: [{ chainId: 8453, address: zeroAddress }] };
+    const batch = readBridgeBatch(contracts, [APPROVE, USDC_STORE], SIGNER, undefined, { ...signed(ORDER_ID), refund });
+    expect(batch?.transfer?.title).toBe('Bridge to Arbitrum');
+    expect(batch?.transfer?.details).toContainEqual({ label: 'Refund on Base', value: 'This account', copy: SIGNER });
+  });
 });

@@ -135,8 +135,13 @@ function acrossOrderTransfer(
   order: AcrossAttestedOrder | null
 ): TransferRead {
   const notices = deposit.send.token.known ? [] : [tokenNotice(deposit.send.token)];
-  const destinationInTable = order !== null && contracts.chain(order.destinationChainId) !== undefined;
-  if (!order || order.orderId !== deposit.orderId || !destinationInTable) {
+  // As with the destination, a refund on a chain the table lacks could not be called this account.
+  const chainsInTable =
+    order !== null &&
+    [order.destinationChainId, ...(order.refund?.tokens ?? []).map((token) => token.chainId)].every(
+      (chainId) => contracts.chain(chainId) !== undefined
+    );
+  if (!order || order.orderId !== deposit.orderId || !chainsInTable) {
     return {
       transfer: {
         provider: 'across',
