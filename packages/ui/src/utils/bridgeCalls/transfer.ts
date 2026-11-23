@@ -196,7 +196,7 @@ function verifiedOrderTransfer(
       otherRecipient: isAddressEqual(terms.recipient, account) ? undefined : getAddress(terms.recipient),
       details: [
         accountDetail('Recipient', terms.recipient, account),
-        ...(refundDetails.length > 0 ? refundDetails : [{ label: 'Refund', value: 'None' }]),
+        ...(refundDetails.length > 0 ? refundDetails : [{ label: 'Refund', value: 'Not stated' }]),
         ...details,
         orderDetail(deposit.orderId),
       ],

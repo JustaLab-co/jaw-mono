@@ -803,7 +803,7 @@ describe('TransactionDialog with an Across deposit and the quote Across signed f
     vi.useRealTimers();
   });
 
-  it('reads like a verified Relay order: the chain, at least the signed minimum, and no refund', async () => {
+  it('reads like a verified Relay order: the chain, at least the signed minimum, and no stated refund', async () => {
     const root = await checked(erc20);
     expect(title(root)).toBe('Bridge to Arbitrum');
     expect(column(root, 'You send')).toMatch(/USDC.*−10/);
@@ -811,7 +811,7 @@ describe('TransactionDialog with an Across deposit and the quote Across signed f
     expect(column(root, 'You get via Across')).toContain('on Arbitrum');
     expect(yellow(root)).toEqual([]);
     expect(red(root)).toEqual([]);
-    expect(await details(root)).toEqual(['Recipient: This account', 'Refund: None', 'Order: 0xc9e9…31f1']);
+    expect(await details(root)).toEqual(['Recipient: This account', 'Refund: Not stated', 'Order: 0xc9e9…31f1']);
   });
 
   it('names the chain a signed refund pays out on', async () => {
