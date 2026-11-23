@@ -4,69 +4,15 @@
 // Across quotes come through the proxy (JAW_PROXY_URL, default production).
 //
 //   bun tools/bridge-table/bridge-probe.mts      Exits 1 if any quote reads as unreadable.
-import { zeroAddress, type Address } from 'viem';
 import { readBridgeCall } from '../../packages/ui/src/utils/bridgeCalls/batch.ts';
 import { BRIDGE_CHAINS } from '../../packages/ui/src/utils/bridgeCalls/contracts.ts';
 import { readRelayOrder } from '../../packages/ui/src/utils/bridgeCalls/relayOrder.ts';
 import { snapshotContracts } from '../../packages/ui/src/utils/bridgeCalls/table.ts';
 import type { BridgeCall } from '../../packages/ui/src/utils/bridgeCalls/view.ts';
+import { probePairs, type Pair, type Provider } from './pairs.mts';
 
-type Provider = 'across' | 'relay';
-type Pair = {
-  name: string;
-  from: number;
-  to: number;
-  send: Address;
-  receive: Address;
-  amount: bigint;
-  only?: Provider;
-};
-
-const BASE = 8453;
-const ARBITRUM = 42161;
-const NATIVE = zeroAddress;
-const USDC = {
-  1: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
-  10: '0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85',
-  [BASE]: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
-  [ARBITRUM]: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831',
-} as const;
-const WETH_ARBITRUM = '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1';
-const TEN_USDC = 10_000_000n;
-const ETH_AMOUNT = 10n ** 16n;
 const ACCOUNT = '0x1111111111111111111111111111111111111111';
 const PROXY = process.env.JAW_PROXY_URL ?? 'https://api.justaname.id/proxy/v2';
-
-const PAIRS: Pair[] = [
-  {
-    name: 'USDC Base -> USDC Arbitrum',
-    from: BASE,
-    to: ARBITRUM,
-    send: USDC[BASE],
-    receive: USDC[ARBITRUM],
-    amount: TEN_USDC,
-  },
-  { name: 'USDC Ethereum -> USDC Optimism', from: 1, to: 10, send: USDC[1], receive: USDC[10], amount: TEN_USDC },
-  {
-    name: 'USDC Base -> WETH Arbitrum',
-    from: BASE,
-    to: ARBITRUM,
-    send: USDC[BASE],
-    receive: WETH_ARBITRUM,
-    amount: TEN_USDC,
-  },
-  // Relay routes a same-chain swap through its approval proxy, not the depository.
-  {
-    name: 'USDC Base -> ETH Base',
-    from: BASE,
-    to: BASE,
-    send: USDC[BASE],
-    receive: NATIVE,
-    amount: TEN_USDC,
-    only: 'relay',
-  },
-  { name: 'ETH Base -> ETH Optimism', from: BASE, to: 10, send: NATIVE, receive: NATIVE, amount: ETH_AMOUNT },
-];
 
 class Skipped extends Error {}
 
@@ -139,43 +85,49 @@ async function relayCalls(pair: Pair) {
 const contracts = snapshotContracts();
 const labelOf = (provider: Provider, pair: Pair) => `${provider.padEnd(6)} ${pair.name}`;
 
-// Returns what is wrong with the quote, or undefined when every call reads. A Relay order the screen
-// does not show is only a warning: it still shows the deposit, and Relay picks the solver per quote.
-async function problemOf(provider: Provider, pair: Pair): Promise<string | undefined> {
+// Returns what the quote's one bridge call reads as, or what is wrong with the quote. A Relay order the
+// screen does not show is only a warning: it still shows the deposit, and Relay picks the solver per quote.
+async function readQuote(provider: Provider, pair: Pair): Promise<{ read: string } | { problem: string }> {
   if (provider === 'across') {
     const calls = await acrossCalls(pair);
-    let orders = 0;
+    const orders: string[] = [];
     for (const call of calls) {
       const read = readBridgeCall(contracts, call, ACCOUNT);
       // A SpokePool deposit is what the proxy returns until it moves to Across API v1.
-      if (read?.kind === 'order' || (read?.kind === 'deposit' && read.provider === 'across')) orders++;
-      else if (read?.kind !== 'approve') return show(read);
+      if (read?.kind === 'order' || (read?.kind === 'deposit' && read.provider === 'across')) orders.push(read.kind);
+      else if (read?.kind !== 'approve') return { problem: show(read) };
     }
-    return orders === 1 ? undefined : `${orders} orders in ${calls.length} calls`;
+    return orders.length === 1 ? { read: orders[0] } : { problem: `${orders.length} orders in ${calls.length} calls` };
   }
   const { calls, orderData } = await relayCalls(pair);
-  let deposits = 0;
+  const deposits: string[] = [];
   for (const call of calls) {
     const read = readBridgeCall(contracts, call, ACCOUNT);
     if (read?.kind === 'swap') {
-      deposits++;
+      deposits.push(read.kind);
     } else if (read?.kind === 'deposit' && read.provider === 'relay') {
-      deposits++;
+      deposits.push(read.kind);
       const order = readRelayOrder(contracts, { orderData }, read);
       if (order?.kind === 'unshown') line('warn', `${labelOf('relay', pair)}: ${order.reason}`);
     } else if (read?.kind !== 'approve') {
-      return show(read);
+      return { problem: show(read) };
     }
   }
-  return deposits === 1 ? undefined : `${deposits} deposits in ${calls.length} calls`;
+  return deposits.length === 1
+    ? { read: deposits[0] }
+    : { problem: `${deposits.length} deposits in ${calls.length} calls` };
 }
 
 async function probe(provider: Provider, pair: Pair) {
   const label = labelOf(provider, pair);
   try {
-    const problem = await problemOf(provider, pair);
-    if (problem) failed++;
-    line(problem ? 'FAIL' : 'ok  ', problem ? `${label}: ${problem}` : label);
+    const quote = await readQuote(provider, pair);
+    if ('problem' in quote) {
+      failed++;
+      line('FAIL', `${label}: ${quote.problem}`);
+    } else {
+      line('ok  ', `${label}: ${quote.read}`);
+    }
   } catch (err) {
     if (!(err instanceof Skipped)) throw err;
     skipped++;
@@ -183,29 +135,11 @@ async function probe(provider: Provider, pair: Pair) {
   }
 }
 
-// One bridge out of every chain the table pins the prefunded store on, so a store that moves shows up.
-function fromChain(id: number): Pair | undefined {
-  const chain = BRIDGE_CHAINS[id];
-  const usdc = Object.entries(chain.tokens).find(([, token]) => token.symbol === 'USDC')?.[0] as Address | undefined;
-  if (!usdc) return undefined;
-  const to = id === ARBITRUM ? BASE : ARBITRUM;
-  return {
-    name: `USDC ${chain.name} -> USDC ${BRIDGE_CHAINS[to].name}`,
-    from: id,
-    to,
-    send: usdc,
-    receive: USDC[to],
-    amount: 10n ** BigInt(chain.tokens[usdc].decimals + 1),
-    only: 'across',
-  };
+const { pairs, unprobed } = probePairs(BRIDGE_CHAINS);
+for (const reason of unprobed) {
+  skipped++;
+  line('skip', `across ${reason}`);
 }
-
-const fromChains = Object.entries(BRIDGE_CHAINS)
-  .filter(([, chain]) => chain.across?.prefundedStore)
-  .map(([id]) => fromChain(Number(id)));
-const pairs = [...PAIRS, ...fromChains.filter((pair) => pair !== undefined)].filter(
-  (pair, i, all) => all.findIndex((other) => other.name === pair.name) === i
-);
 
 for (const pair of pairs) {
   if (pair.only !== 'relay') await probe('across', pair);
