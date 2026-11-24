@@ -20,7 +20,16 @@ import { resolveNativeSymbol } from '../../utils/nativeSymbol';
 import { isBlockingRevocationProblem, REVOCATION_PROBLEM_TEXT } from '../../utils/permissionExecution';
 import { PermissionDialogProps } from './types';
 import { InlineWarning, PartyRow } from '../primitives';
-import { AllowedCalls, MetaCard, SpendLimits, SpenderPrefundNotice, hasChecker, isWildcard } from './Sections';
+import {
+  AllowedCalls,
+  MetaCard,
+  SpendLimits,
+  SpenderPrefundNotice,
+  SwapDestinationNotice,
+  isSwapCall,
+  hasChecker,
+  isWildcard,
+} from './Sections';
 
 export const PermissionDialog = ({
   open,
@@ -37,6 +46,7 @@ export const PermissionDialog = ({
   calls = [],
   prefund,
   prefundLoading = false,
+  swapDestination,
   tokenMeta,
   expiryDate,
   grantedDate,
@@ -217,6 +227,9 @@ export const PermissionDialog = ({
       }
     : null;
 
+  // A swap token only means something on a grant that lets the spender swap.
+  const showSwapDestination = isGrant && !!swapDestination && calls.some(isSwapCall);
+
   const metaRows = [
     ...(fromRow ? [fromRow] : []),
     ...(isGrant ? [] : [spenderRow]),
@@ -291,6 +304,15 @@ export const PermissionDialog = ({
 
             {isGrant && <SpenderPrefundNotice prefund={prefund} isLoading={prefundLoading} />}
 
+            {showSwapDestination && (
+              <SwapDestinationNotice
+                address={swapDestination}
+                chainId={chainId}
+                chainName={networkName}
+                tokenMeta={tokenMeta}
+              />
+            )}
+
             {metaRows.length > 0 && <MetaCard rows={metaRows} />}
 
             {calls.length > 0 && (
@@ -306,7 +328,9 @@ export const PermissionDialog = ({
 
             <p className="text-muted-foreground text-body-sm">
               {isGrant
-                ? 'Limits are enforced onchain. Revoke anytime, one tap.'
+                ? showSwapDestination
+                  ? 'Spend limits and allowed calls are enforced onchain, the swap token is not. Revoke anytime, one tap.'
+                  : 'Limits are enforced onchain. Revoke anytime, one tap.'
                 : 'Revoking is onchain and immediate. This spender loses all access above.'}
             </p>
 

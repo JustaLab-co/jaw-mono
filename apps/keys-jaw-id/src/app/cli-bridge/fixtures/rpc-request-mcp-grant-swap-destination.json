@@ -1,0 +1,105 @@
+{
+  "sentBy": [
+    "@jaw-mono/mcp images built after the jaw-agent follow-up to #219 that sends capabilities.swapDestination on same-chain swap grants"
+  ],
+  "clients": [
+    {
+      "family": "mcp",
+      "versions": "images built after the jaw-agent follow-up to #219",
+      "current": false
+    }
+  ],
+  "frame": {
+    "type": "rpc_request",
+    "id": "0b5d1f0e-6c1a-4a0e-9d52-2f6d8c1a7e11:2",
+    "method": "wallet_grantPermissions",
+    "params": [
+      {
+        "spender": "0x3333333333333333333333333333333333333333",
+        "expiry": 1764460800,
+        "chainId": "0x2105",
+        "permissions": {
+          "calls": [
+            {
+              "target": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+              "functionSignature": "approve(address,uint256)"
+            },
+            {
+              "target": "0x698Cb2b6dd822994581fEa6eA4Fc755d1363A92F",
+              "functionSignature": "exactInputSingle((address,address,int24,address,uint256,uint256,uint256,uint160))"
+            },
+            {
+              "target": "0xcbBb8035cAc7D4B3Ca7aBb74cF7BdF900215Ce0D",
+              "functionSignature": "exactInputSingle((address,address,int24,address,uint256,uint256,uint256,uint160))"
+            },
+            {
+              "target": "0xBE6D8f0d05cC4be24d5167a3eF062215bE6D18a5",
+              "functionSignature": "exactInputSingle((address,address,int24,address,uint256,uint256,uint256,uint160))"
+            },
+            {
+              "target": "0x2626664c2603336E57B271c5C0b26F421741e481",
+              "functionSignature": "multicall(uint256,bytes[])"
+            }
+          ],
+          "spends": [
+            {
+              "token": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+              "allowance": "10500000",
+              "unit": "day",
+              "multiplier": 1
+            }
+          ]
+        },
+        "capabilities": {
+          "prefundSpender": true,
+          "swapDestination": "0x4200000000000000000000000000000000000006"
+        }
+      }
+    ]
+  },
+  "expect": {
+    "params": [
+      {
+        "spender": "0x3333333333333333333333333333333333333333",
+        "expiry": 1764460800,
+        "chainId": "0x2105",
+        "permissions": {
+          "calls": [
+            {
+              "target": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+              "functionSignature": "approve(address,uint256)"
+            },
+            {
+              "target": "0x698Cb2b6dd822994581fEa6eA4Fc755d1363A92F",
+              "functionSignature": "exactInputSingle((address,address,int24,address,uint256,uint256,uint256,uint160))"
+            },
+            {
+              "target": "0xcbBb8035cAc7D4B3Ca7aBb74cF7BdF900215Ce0D",
+              "functionSignature": "exactInputSingle((address,address,int24,address,uint256,uint256,uint256,uint160))"
+            },
+            {
+              "target": "0xBE6D8f0d05cC4be24d5167a3eF062215bE6D18a5",
+              "functionSignature": "exactInputSingle((address,address,int24,address,uint256,uint256,uint256,uint160))"
+            },
+            {
+              "target": "0x2626664c2603336E57B271c5C0b26F421741e481",
+              "functionSignature": "multicall(uint256,bytes[])"
+            }
+          ],
+          "spends": [
+            {
+              "token": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+              "allowance": "10500000",
+              "unit": "day",
+              "multiplier": 1
+            }
+          ]
+        },
+        "capabilities": {
+          "prefundSpender": true,
+          "swapDestination": "0x4200000000000000000000000000000000000006"
+        }
+      }
+    ]
+  }
+}

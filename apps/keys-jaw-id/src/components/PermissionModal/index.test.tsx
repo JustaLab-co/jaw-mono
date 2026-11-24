@@ -10,7 +10,7 @@ import type { Chain } from '@jaw.id/core';
 const revokePermission = vi.fn();
 const grantPermissions = vi.fn();
 
-type DialogProps = { onConfirm?: () => void; calls?: Array<{ checker?: string }> };
+type DialogProps = { onConfirm?: () => void; calls?: Array<{ checker?: string }>; swapDestination?: string };
 let dialogProps: DialogProps = {};
 let storedPermission: unknown = null;
 vi.mock('@jaw.id/ui', async (importActual) => {
@@ -205,5 +205,79 @@ describe('PermissionModal grant', () => {
     expect(dialogProps.calls?.[0].checker).toBe(CHECKER);
     expect(grantPermissions).toHaveBeenCalledTimes(1);
     expect(grantPermissions.mock.calls[0][2].calls[0].checker).toBe(CHECKER);
+  });
+});
+
+/**
+ * A swap permission names the one token its swaps may buy, outside what gets signed. The owner
+ * has to see it, and it must not change the permission the passkey signs.
+ */
+describe('PermissionModal swap destination', () => {
+  const WETH = '0x4200000000000000000000000000000000000006';
+  const permissions = {
+    calls: [{ target: '0x036CbD53842c5426634e7929541eC2318f3dCF7e', functionSignature: 'approve(address,uint256)' }],
+  };
+  const grantWith = (capabilities: Record<string, unknown>) => ({
+    method: 'wallet_grantPermissions' as const,
+    params: [
+      {
+        expiry: Math.floor(Date.now() / 1000) + 86_400,
+        spender: '0x2222222222222222222222222222222222222222',
+        permissions,
+        capabilities,
+      },
+    ],
+  });
+  const render = async (request: unknown, onError = vi.fn()) => {
+    await act(async () => {
+      root.render(
+        <PermissionModal
+          permissionRequest={request as never}
+          chain={CHAIN}
+          apiKey="test-key"
+          onSuccess={vi.fn()}
+          onError={onError}
+        />
+      );
+    });
+    return onError;
+  };
+
+  it('hands the dialog the token and signs the permission unchanged', async () => {
+    await render(grantWith({ swapDestination: WETH.toLowerCase() }));
+    await act(async () => dialogProps.onConfirm?.());
+
+    expect(dialogProps.swapDestination).toBe(WETH);
+    expect(grantPermissions).toHaveBeenCalledTimes(1);
+    expect(grantPermissions.mock.calls[0][2]).toEqual({ spends: [], calls: permissions.calls });
+  });
+
+  it('shows no swap token when the request names none', async () => {
+    await render(grantWith({}));
+
+    expect(dialogProps.swapDestination).toBeUndefined();
+  });
+
+  it('refuses a request whose swap token is not an address, before the screen opens', async () => {
+    const onError = await render(grantWith({ swapDestination: 'WETH' }));
+
+    expect(onError).toHaveBeenCalledWith(expect.any(Error), -32602);
+    expect(dialogProps.onConfirm).toBeUndefined();
+  });
+
+  // RequestModals passes onError inline, so every re-render hands the modal a new function.
+  it('refuses a malformed swap token once, however often the host re-renders', async () => {
+    const refused = vi.fn();
+    const request = grantWith({ swapDestination: 'WETH' });
+    await render(
+      request,
+      vi.fn((...args) => refused(...args))
+    );
+    await render(
+      request,
+      vi.fn((...args) => refused(...args))
+    );
+
+    expect(refused).toHaveBeenCalledTimes(1);
   });
 });
