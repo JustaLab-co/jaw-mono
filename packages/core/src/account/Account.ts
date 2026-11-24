@@ -57,6 +57,7 @@ import {
     type CallPermissionDetail,
     type SpendPermissionDetail,
 } from '../rpc/permissions.js';
+import { checkerDeployCalls } from '../rpc/checkerDeploy.js';
 import { JAW_RPC_URL, JAW_PAYMASTER_URL, jawPaymasterUrl, ERC20_PAYMASTER_ADDRESS } from '../constants.js';
 import { type Chain, chains as chainStore, dropChainClients } from '../store/index.js';
 import { logAccountIssuance } from '../analytics/index.js';
@@ -1205,6 +1206,12 @@ export class Account {
 
         const paymaster = this.resolveEffectivePaymaster(paymasterUrlOverride, paymasterContextOverride);
 
+        // A reusable call checker that isn't deployed yet goes out in this same batch, ahead of
+        // the approval that names it, the way the paymaster approval does: nothing for the user
+        // to do, and one signature. Validated here, before the prefund's reads, so the batch can
+        // only deploy the checker the permission names.
+        const deployCalls = checkerDeployCalls(permissions);
+
         // Ahead of the approval sizing, so the ceiling covers the transfer too.
         // Checked rather than priced: the amount is the one the screen showed,
         // and a grant that cannot send exactly that fails here, before signing.
@@ -1219,11 +1226,11 @@ export class Account {
               })
             : null;
 
-        const calls = prefundCall ? [prefundCall, permissionCall] : [permissionCall];
+        const calls = [...(prefundCall ? [prefundCall] : []), ...deployCalls, permissionCall];
 
         // Check if we need an ERC-20 approval for the paymaster. A `gas` in the
-        // context was sized by the caller over this same batch, transfer
-        // included, since the transfer was known before the screen rendered.
+        // context was sized by the caller over this same batch, transfer and
+        // checker deploys included, since both are known before the screen renders.
         const approvalCall = await this.createErc20ApprovalCall(paymaster.url, paymaster.context, calls, smartAccount);
 
         return await grantSmartAccountPermissions(
@@ -1235,7 +1242,7 @@ export class Account {
             this._apiKey,
             paymaster.url,
             paymaster.context,
-            [approvalCall, prefundCall].filter((call) => call !== null)
+            [...[approvalCall, prefundCall].filter((call) => call !== null), ...deployCalls]
         );
     }
 

@@ -57,6 +57,12 @@ interface CallPermissionDetail {
    * zero address, meaning no checker. Always present in the response.
    */
   checker?: Address;
+  /**
+   * Template and settings `checker` was made from, for a reusable checker that may
+   * not be deployed yet. The grant deploys it in the same transaction. Must produce
+   * `checker`. Not part of the response.
+   */
+  checkerDeploy?: { template: Address; settings: Hex };
 }
 
 interface SpendPermissionDetail {

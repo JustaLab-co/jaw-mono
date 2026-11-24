@@ -81,3 +81,4 @@ export {
     normalizeRevokePermissionsParams,
     type NormalizedRevokePermissionsParams,
 } from './permissions.js';
+export { checkerDeployCalls, predictCheckerAddress, type CheckerDeploy } from './checkerDeploy.js';
