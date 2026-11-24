@@ -450,19 +450,38 @@ export function AllowedCalls({
   );
 }
 
-/** The From / Granted / Until / permissionId block — label left, value right, one row each. */
-export function MetaCard({ rows }: { rows: { label: string; value: React.ReactNode }[] }) {
+/**
+ * The From / Granted / Until / permissionId block — label left, value right, one row each. A
+ * `wrap` row holds prose (the note): it grows to show all of it, with the label at the top.
+ */
+export function MetaCard({ rows }: { rows: { label: string; value: React.ReactNode; wrap?: boolean }[] }) {
   return (
     <div className="border-border rounded-box overflow-hidden border">
-      {rows.map((row) => (
-        <div
-          key={row.label}
-          className="border-border/40 flex h-7 items-center justify-between gap-2 border-t px-3 first:border-t-0"
-        >
-          <Eyebrow>{row.label}</Eyebrow>
-          <span className="text-foreground text-body-xs flex min-w-0 items-center gap-1.5 font-mono">{row.value}</span>
-        </div>
-      ))}
+      {rows.map((row) =>
+        row.wrap ? (
+          <div
+            key={row.label}
+            className="border-border/40 flex min-h-7 items-start justify-between gap-4 border-t px-3 py-1.5 first:border-t-0"
+          >
+            <span className="flex-none pt-px">
+              <Eyebrow>{row.label}</Eyebrow>
+            </span>
+            <span className="text-foreground text-body-xs min-w-0 whitespace-normal break-words text-right">
+              {row.value}
+            </span>
+          </div>
+        ) : (
+          <div
+            key={row.label}
+            className="border-border/40 flex h-7 items-center justify-between gap-2 border-t px-3 first:border-t-0"
+          >
+            <Eyebrow>{row.label}</Eyebrow>
+            <span className="text-foreground text-body-xs flex min-w-0 items-center gap-1.5 font-mono">
+              {row.value}
+            </span>
+          </div>
+        )
+      )}
     </div>
   );
 }

@@ -14,6 +14,9 @@ import {
   useSpenderPrefund,
   describeSpenderPrefund,
   toDialogCalls,
+  storedPermissionNote,
+  useGrantNote,
+  grantOptions,
 } from '@jaw.id/ui';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { erc20Abi, type Address } from 'viem';
@@ -199,6 +202,15 @@ export const PermissionModal = ({
 
   // Check if this is a sponsored transaction (paymaster provided)
   const isSponsored = !!effectivePaymasterUrl;
+
+  // Grant only: the note as the grant will store it; a note that breaks the rule is refused on
+  // open, since an SDK from before notes does not check it first.
+  const requestedNote = (permissionRequest?.params as WalletGrantPermissionsRequest['params'] | undefined)?.[0]?.note;
+  const grantNote = useGrantNote(
+    requestedNote,
+    (reason) => onError?.(new Error(reason), standardErrorCodes.rpc.invalidParams),
+    mode === 'grant' && !!permissionRequest
+  );
 
   // Extract permission details from request (needed before gas estimation for address override)
   const permissionDetails = useMemo(() => {
@@ -701,7 +713,7 @@ export const PermissionModal = ({
           computedPaymasterUrl,
           computedPaymasterContext,
           permissionDetails.address,
-          prefund ? { prefund } : undefined
+          grantOptions(prefund, grantNote.note)
         );
 
         console.log('Permissions granted:', result);
@@ -754,6 +766,7 @@ export const PermissionModal = ({
     computedPaymasterUrl,
     computedPaymasterContext,
     prefund,
+    grantNote,
   ]);
 
   const handleCancel = useCallback(() => {
@@ -771,6 +784,9 @@ export const PermissionModal = ({
     }
   }, [isProcessing, onError, setSelectedFeeToken]);
 
+  // Refused on open above; nothing to show.
+  if (grantNote.refusal !== undefined) return null;
+
   // Don't render if no permission details
   if (!permissionDetails) {
     return null;
@@ -783,6 +799,7 @@ export const PermissionModal = ({
         console.log('onOpenChange');
       }}
       mode={mode}
+      note={mode === 'grant' ? grantNote.note : storedPermissionNote(fetchedPermissionData?.note)}
       permissionId={
         mode === 'revoke' && 'permissionId' in permissionDetails ? permissionDetails.permissionId : undefined
       }
