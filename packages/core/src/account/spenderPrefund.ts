@@ -147,6 +147,11 @@ export interface GrantPermissionsOptions {
      * transaction costs.
      */
     prefund?: SpenderPrefund;
+    /**
+     * What the app that asked says the permission is for, as the grant screen showed it. Checked
+     * and stored next to the permission; never signed. See `normalizePermissionNote`.
+     */
+    note?: string;
 }
 
 /** Reads this needs, injected so the caller owns the client and the caching. */

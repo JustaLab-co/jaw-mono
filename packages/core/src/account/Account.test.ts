@@ -1799,6 +1799,25 @@ describe('Account — prefunding the spender in the grant', () => {
         vi.clearAllMocks();
     });
 
+    // The host shows the note and grants with it; the grant checks and stores it.
+    it('hands the note the host passes to the grant', async () => {
+        const { grantPermissions } = await import('../rpc/permissions.js');
+        const account = await makeAccount();
+
+        await grant(account, { note: 'Daily DCA into ETH' });
+
+        expect(vi.mocked(grantPermissions).mock.calls.at(-1)?.[9]).toEqual({ note: 'Daily DCA into ETH' });
+    });
+
+    it('grants with no note when the host passes none', async () => {
+        const { grantPermissions } = await import('../rpc/permissions.js');
+        const account = await makeAccount();
+
+        await grant(account);
+
+        expect(vi.mocked(grantPermissions).mock.calls.at(-1)?.[9]?.note).toBeUndefined();
+    });
+
     it('quotes the transfer the grant screen shows', async () => {
         const account = await makeAccount();
 

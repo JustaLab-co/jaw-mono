@@ -37,6 +37,8 @@ const BSC_USDC = getAddress('0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d');
 const BSC_POOL = getAddress('0x4e8e101924ede233c13e2d8622dc8aed2872d505');
 const HANDLER = getAddress('0x0f7ae28de1c8532170ad4ee566b5801485c13a0e');
 const FEE_RECIPIENT = getAddress('0xc529edd6d47c60923902514c7c0b3993ae42c2ec');
+// The periphery Across lists now. The captured quotes call the previous one, which Across still quotes.
+const PERIPHERY = getAddress('0x4e9ef0a5fe749079dd11e68aad5d75fccfaaf9af');
 const ARC_HANDLER = getAddress('0xa07480456c4ebad7626e4fdf4a180709e238547b');
 const ARC_EMITTER = getAddress('0x446fe2be6a8d90fa89f30f3d0a686aaffe621237');
 
@@ -603,6 +605,36 @@ describe('given a periphery depositNative or deposit value that does not fit', (
   });
 });
 
+describe('given a periphery call sent to the periphery Across lists instead of the one its quotes call', () => {
+  const toPeriphery = (call: BridgeCall): BridgeCall => ({ ...call, to: PERIPHERY });
+
+  it.each([
+    ['a depositNative', ACROSS_CALLS.nativeEth],
+    ['a native deposit with a fee', ACROSS_CALLS.nativeFee],
+    ['a swapAndBridge from USDC', ACROSS_CALLS.usdcToWeth],
+    ['a swapAndBridge from ETH', ACROSS_CALLS.ethToUsdc],
+  ])('then %s reads as it does on the previous periphery', (_name, call) => {
+    const read = readAcrossCall(contracts, toPeriphery(call));
+    expect(read).toMatchObject({ kind: 'deposit' });
+    expect(read).toEqual(readAcrossCall(contracts, call));
+  });
+
+  it('then a fillDeadline of up to a year, which the periphery adds to the block time, is unreadable on either one', () => {
+    const at = (fillDeadline: number) => withArgs(ACROSS_CALLS.nativeEth, (a) => (a[10] = fillDeadline));
+    expect(readAcrossCall(contracts, at(21_600))).toEqual(unreadable);
+    expect(readAcrossCall(contracts, toPeriphery(at(21_600)))).toEqual(unreadable);
+    expect(readAcrossCall(contracts, toPeriphery(at(31_536_000)))).toEqual(unreadable);
+    expect(readAcrossCall(contracts, toPeriphery(at(31_536_001)))).toMatchObject({
+      kind: 'deposit',
+      fillDeadline: 31_536_001,
+    });
+  });
+
+  it('then the same call on a chain whose periphery is elsewhere is not recognized', () => {
+    expect(readAcrossCall(contracts, { ...toPeriphery(ACROSS_CALLS.nativeEth), chainId: 84532 })).toBeUndefined();
+  });
+});
+
 describe('given one field of a recognized deposit changed', () => {
   // These fields cannot move funds, so they stay in the raw details.
   const NOT_SHOWN = new Set(['exclusiveRelayer', 'quoteTimestamp', 'exclusivityParameter', 'emitData payload']);
@@ -780,6 +812,16 @@ describe('given a periphery swapAndBridge, which swaps on the origin before it d
   ];
   it.each(fields)('then %s is shown or unreadable only if it can move funds', (_, edit, shown) => {
     expect(changes(ACROSS_CALLS.usdcToWeth, withSwap(ACROSS_CALLS.usdcToWeth, edit))).toBe(shown);
+  });
+
+  it('then a fillDeadline of up to a year, which the periphery adds to the block time, is unreadable', () => {
+    const at = (fillDeadline: number) => ({
+      ...withSwap(ACROSS_CALLS.usdcToWeth, setDeposit('fillDeadline', fillDeadline)),
+      to: PERIPHERY,
+    });
+    expect(readAcrossCall(contracts, at(21_600))).toEqual(unreadable);
+    expect(readAcrossCall(contracts, at(31_536_000))).toEqual(unreadable);
+    expect(readAcrossCall(contracts, at(31_536_001))).toMatchObject({ kind: 'deposit', fillDeadline: 31_536_001 });
   });
 
   // The exchange can keep the swap and return dust; the periphery then deposits that dust.

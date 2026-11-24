@@ -49,6 +49,8 @@ import { TransactionDialog } from '../components/TransactionDialog';
 import { PermissionDialog } from '../components/PermissionDialog';
 import { isWildcard } from '../components/PermissionDialog/Sections';
 import { toDialogCalls } from '../components/PermissionDialog/calls';
+import { storedPermissionNote, grantOptions } from '../utils/permissionNote';
+import { useGrantNote } from '../hooks/useGrantNote';
 import { ConnectDialog } from '../components/ConnectDialog';
 import { AddFundsDialog } from '../components/AddFundsDialog';
 import { ResponsiveDialogAnchor } from '../components/DialogPresentation';
@@ -2478,6 +2480,11 @@ function PermissionDialogWrapper({
   // re-render, which is too soft a gate for a grant that delegates authority on-chain.
   const submittingRef = useRef(false);
 
+  // The note as the grant will store it; a note that breaks the rule is refused on open.
+  const grantNote = useGrantNote(request.data.note, (reason) =>
+    onReject(new UIError(standardErrorCodes.rpc.invalidParams as UIErrorCode, reason))
+  );
+
   // chainId can be number or hex string (like '0x1')
   const requestChainId = request.data.chainId;
   const chainId =
@@ -2842,7 +2849,7 @@ function PermissionDialogWrapper({
         computedPaymasterUrl,
         computedPaymasterContext,
         request.data.address,
-        prefund ? { prefund } : undefined
+        grantOptions(prefund, grantNote.note)
       );
 
       setStatus('Permissions granted successfully!');
@@ -2875,6 +2882,9 @@ function PermissionDialogWrapper({
     onReject(UIError.userRejected());
   };
 
+  // Refused on open above; nothing to show.
+  if (grantNote.refusal !== undefined) return null;
+
   if (needsPasskey) {
     return (
       <PasskeySwitchDialog
@@ -2897,6 +2907,7 @@ function PermissionDialogWrapper({
         else setOpen(newOpen);
       }}
       mode="grant"
+      note={grantNote.note}
       spenderAddress={request.data.spender}
       accountAddress={request.data.address}
       origin={typeof window !== 'undefined' ? window.location.origin : 'unknown'}
@@ -3559,6 +3570,7 @@ function RevokePermissionDialogWrapper({
       }}
       mode="revoke"
       permissionId={request.data.permissionId}
+      note={storedPermissionNote(fetchedPermissionData?.note)}
       revocationProblem={revocationProblem}
       spenderAddress={spenderAddress}
       accountAddress={request.data.address}

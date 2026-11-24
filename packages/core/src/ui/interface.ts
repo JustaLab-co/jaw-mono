@@ -151,6 +151,12 @@ export interface PermissionUIRequest extends BaseUIRequest {
         };
         /** Optional capabilities including paymaster service for sponsored transactions */
         capabilities?: RequestCapabilities;
+        /**
+         * What the app says the permission is for, as it sent it. Not signed. Show it through
+         * `normalizePermissionNote`, which trims it and refuses one that breaks the rule, and
+         * grant with that same value.
+         */
+        note?: string;
     };
 }
 

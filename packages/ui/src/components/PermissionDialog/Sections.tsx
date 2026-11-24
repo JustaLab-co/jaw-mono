@@ -12,6 +12,10 @@ import { Eyebrow } from '../primitives';
 import { isNativeToken } from '../../utils/tokenBalance';
 import { isWildcard } from '../../utils/permissionExecution';
 import { getDisplayAddress } from '../../utils';
+import { formatAddress } from '../../utils/formatAddress';
+import { currentContracts } from '../../utils/bridgeCalls/load';
+import { pinnedToken } from '../../utils/bridgeCalls/view';
+import { cleanSymbol } from '../../utils/tokenSymbol';
 import type { AddressIdentity } from '../../hooks/useAddressIdentities';
 import { isLongSpendAmount } from '../../utils/displayFormat';
 import type { CallPermission, SpendPermission, SpenderPrefundDisplay } from './types';
@@ -175,6 +179,56 @@ export function SpenderPrefundNotice({
           So the spender can pay fees for its first transactions. It leaves your account immediately, and revoking the
           permission doesn&apos;t return it.
         </span>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The one token a swap under this permission may buy. The request names it and the server that
+ * asked holds every swap to it, so the screen says it is not an onchain limit. A token outside the
+ * pinned table is named by its own `symbol()` and marked unverified.
+ */
+// The router entries a swap grant names: Slipstream's `exactInputSingle` and its kin, and Uniswap's
+// SwapRouter02 `multicall(deadline, data)`, which wraps the swap so the router checks the deadline.
+const SWAP_FUNCTION = /^(exactInput|exactOutput|swap)/i;
+const DEADLINE_MULTICALL = 'multicall(uint256,bytes[])';
+
+export function isSwapCall(call: CallPermission): boolean {
+  return SWAP_FUNCTION.test(call.functionSignature) || call.functionSignature === DEADLINE_MULTICALL;
+}
+
+export function SwapDestinationNotice({
+  address,
+  chainId,
+  chainName,
+  tokenMeta,
+}: {
+  address: string;
+  chainId?: number;
+  chainName: string;
+  tokenMeta?: Record<string, { symbol: string }>;
+}) {
+  const pinned = chainId === undefined ? undefined : pinnedToken(currentContracts(), chainId, address);
+  const metaKey = Object.keys(tokenMeta ?? {}).find((key) => key.toLowerCase() === address.toLowerCase());
+  const symbol = pinned?.symbol ?? (metaKey ? cleanSymbol(tokenMeta![metaKey].symbol) : undefined);
+  const short = formatAddress(address);
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="pl-3">
+        <Eyebrow>Swap token</Eyebrow>
+      </div>
+      <div className="border-border rounded-box flex flex-col gap-1 border px-3 py-2">
+        <span className="text-foreground text-value break-all font-semibold">
+          Swaps only into {symbol ? `${symbol} (${short}, ${chainName})` : `${short} (${chainName})`}
+        </span>
+        {!pinned && (
+          <span className="text-warning text-body-sm flex items-center gap-1.5">
+            <TriangleAlert className="size-3.5 flex-none" strokeWidth={2} />
+            Unverified token: {symbol ? 'its name is what the token contract reports' : 'its name could not be read'}.
+          </span>
+        )}
+        <span className="text-muted-foreground text-body-sm">The app that asked enforces this, not the chain.</span>
       </div>
     </div>
   );
@@ -450,19 +504,38 @@ export function AllowedCalls({
   );
 }
 
-/** The From / Granted / Until / permissionId block — label left, value right, one row each. */
-export function MetaCard({ rows }: { rows: { label: string; value: React.ReactNode }[] }) {
+/**
+ * The From / Granted / Until / permissionId block — label left, value right, one row each. A
+ * `wrap` row holds prose (the note): it grows to show all of it, with the label at the top.
+ */
+export function MetaCard({ rows }: { rows: { label: string; value: React.ReactNode; wrap?: boolean }[] }) {
   return (
     <div className="border-border rounded-box overflow-hidden border">
-      {rows.map((row) => (
-        <div
-          key={row.label}
-          className="border-border/40 flex h-7 items-center justify-between gap-2 border-t px-3 first:border-t-0"
-        >
-          <Eyebrow>{row.label}</Eyebrow>
-          <span className="text-foreground text-body-xs flex min-w-0 items-center gap-1.5 font-mono">{row.value}</span>
-        </div>
-      ))}
+      {rows.map((row) =>
+        row.wrap ? (
+          <div
+            key={row.label}
+            className="border-border/40 flex min-h-7 items-start justify-between gap-4 border-t px-3 py-1.5 first:border-t-0"
+          >
+            <span className="flex-none pt-px">
+              <Eyebrow>{row.label}</Eyebrow>
+            </span>
+            <span className="text-foreground text-body-xs min-w-0 whitespace-normal break-words text-right">
+              {row.value}
+            </span>
+          </div>
+        ) : (
+          <div
+            key={row.label}
+            className="border-border/40 flex h-7 items-center justify-between gap-2 border-t px-3 first:border-t-0"
+          >
+            <Eyebrow>{row.label}</Eyebrow>
+            <span className="text-foreground text-body-xs flex min-w-0 items-center gap-1.5 font-mono">
+              {row.value}
+            </span>
+          </div>
+        )
+      )}
     </div>
   );
 }

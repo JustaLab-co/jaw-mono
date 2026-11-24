@@ -1810,6 +1810,88 @@ describe('CrossPlatformSigner', () => {
             expect(mockCommunicator.postRequestAndWaitForResponse).not.toHaveBeenCalled();
         });
 
+        it('should hand keys the note of a grant as the dapp sent it', async () => {
+            // keys shows the note and stores it, so it has to arrive with the grant.
+            const unauthenticatedSigner = new CrossPlatformSigner({
+                metadata: mockMetadata,
+                communicator: mockCommunicator,
+                callback: mockCallback,
+            });
+            mockCommunicator.postRequestAndWaitForResponse.mockResolvedValue({
+                id: mockMessageId,
+                requestId: mockMessageId,
+                correlationId: mockCorrelationId,
+                sender: 'peer-public-key-hex',
+                content: { encrypted: mockEncryptedData },
+                timestamp: new Date(),
+            } as RPCResponseMessage);
+            (decryptContent as Mock).mockResolvedValue({
+                result: { value: { permissionId: '0xperm' } },
+            } as RPCResponse);
+            vi.spyOn(store, 'getState').mockReturnValue({
+                account: { accounts: [], chain: undefined, capabilities: undefined },
+                chains: [{ id: 1, rpcUrl: 'https://eth-mainnet.rpc.com' }],
+                config: { metadata: mockMetadata, version: '1.0.0' },
+                keys: {},
+                callStatuses: {},
+            });
+
+            await unauthenticatedSigner.request({
+                method: 'wallet_grantPermissions',
+                params: [
+                    {
+                        expiry: 2_000_000_000,
+                        spender: '0x2222222222222222222222222222222222222222',
+                        permissions: {
+                            calls: [
+                                {
+                                    target: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+                                    functionSignature: 'transfer(address,uint256)',
+                                },
+                            ],
+                        },
+                        note: 'Daily DCA into ETH',
+                    },
+                ],
+            });
+
+            const sent = (encryptContent as Mock).mock.calls.at(-1)?.[0] as {
+                action: { method: string; params: Array<{ note?: string }> };
+            };
+            expect(sent.action.method).toBe('wallet_grantPermissions');
+            expect(sent.action.params[0].note).toBe('Daily DCA into ETH');
+        });
+
+        it('should reject a grant whose note holds a bidi override with -32602 before opening a popup', async () => {
+            const unauthenticatedSigner = new CrossPlatformSigner({
+                metadata: mockMetadata,
+                communicator: mockCommunicator,
+                callback: mockCallback,
+            });
+
+            await expect(
+                unauthenticatedSigner.request({
+                    method: 'wallet_grantPermissions',
+                    params: [
+                        {
+                            expiry: 2_000_000_000,
+                            spender: '0x2222222222222222222222222222222222222222',
+                            permissions: {
+                                calls: [
+                                    {
+                                        target: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+                                        functionSignature: 'transfer(address,uint256)',
+                                    },
+                                ],
+                            },
+                            note: 'Daily \u202EDCA',
+                        },
+                    ],
+                })
+            ).rejects.toMatchObject({ code: -32602, message: expect.stringContaining('note') });
+            expect(mockCommunicator.postRequestAndWaitForResponse).not.toHaveBeenCalled();
+        });
+
         it("should send keys the normalized envelope, not the dapp's raw one", async () => {
             // Arrange - a configured chain given as a number, plus a decimal wei
             // value: keys must receive both hex-encoded, matching what validation

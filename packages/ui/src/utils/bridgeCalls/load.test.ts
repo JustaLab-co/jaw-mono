@@ -252,6 +252,29 @@ describe('given a live table that differs from the one compiled into the build',
     expect(contracts.chain(8453)?.across?.prefundedStore).toBe(BRIDGE_CHAINS[8453].across!.prefundedStore);
   });
 
+  it('when it names the periphery of the build, then the previous periphery of the build is read too', async () => {
+    const contracts = await loaded(() => undefined);
+    expect(contracts).toMatchObject({ version: 4, source: 'live' });
+    expect(contracts.chain(8453)?.across).toMatchObject({
+      periphery: BRIDGE_CHAINS[8453].across!.periphery,
+      previousPeriphery: BRIDGE_CHAINS[8453].across!.previousPeriphery,
+    });
+  });
+
+  it('when it still names the previous periphery as the periphery, then that one is in use alone', async () => {
+    const contracts = await loaded((t) => {
+      for (const [id, chain] of Object.entries(BRIDGE_CHAINS)) {
+        if (!chain.across?.previousPeriphery) continue;
+        t.chains[id].across.periphery = chain.across.previousPeriphery;
+        delete t.chains[id].across.previousPeriphery;
+      }
+    });
+    expect(contracts).toMatchObject({ version: 4, source: 'live' });
+    expect(contracts.chain(8453)?.across?.periphery).toBe(BRIDGE_CHAINS[8453].across!.previousPeriphery);
+    expect(contracts.chain(8453)?.across).not.toHaveProperty('previousPeriphery');
+    expect(contracts.chain(5042)?.across?.periphery).toBe(BRIDGE_CHAINS[5042].across!.previousPeriphery);
+  });
+
   it('when it carries other Relay approval proxies, then the ones of the build stay', async () => {
     const contracts = await loaded((t) => (t.chains['8453'].relay.approvalProxies = [OTHER]));
     expect(contracts.chain(8453)?.relay?.approvalProxies).toEqual(BRIDGE_CHAINS[8453].relay!.approvalProxies);

@@ -142,6 +142,12 @@ export namespace grantPermissions {
     spender: Address;
     /** Permissions details */
     permissions: PermissionsDetail;
+    /**
+     * What the permission is for, so the user and an agent can tell later why it exists. Plain
+     * text on one line, at most 200 characters. Not signed: stored next to the permission and
+     * returned by getPermissions.
+     */
+    note?: string;
   };
 
   export type ReturnType = WalletGrantPermissionsResponse;
@@ -156,7 +162,7 @@ export async function grantPermissions<config extends Config>(
   config: config,
   parameters: grantPermissions.Parameters<config>
 ): Promise<grantPermissions.ReturnType> {
-  const { address, chainId, connector, expiry, spender, permissions } = parameters;
+  const { address, chainId, connector, expiry, spender, permissions, note } = parameters;
 
   // The wallet resolves the target chain from the hex chainId in params —
   // the connector does not need to be switched to that chain.
@@ -175,6 +181,7 @@ export async function grantPermissions<config extends Config>(
         spender,
         permissions,
         chainId: chainId ? `0x${chainId.toString(16)}` : undefined,
+        ...(note === undefined ? {} : { note }),
       },
     ] as never,
   });

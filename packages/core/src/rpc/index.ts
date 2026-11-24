@@ -80,4 +80,5 @@ export {
     EMPTY_CALLDATA_FN_SEL,
     normalizeRevokePermissionsParams,
     type NormalizedRevokePermissionsParams,
+    normalizePermissionNote,
 } from './permissions.js';
