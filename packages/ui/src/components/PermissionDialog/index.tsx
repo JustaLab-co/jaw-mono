@@ -26,6 +26,7 @@ import {
   SpendLimits,
   SpenderPrefundNotice,
   SwapDestinationNotice,
+  isSwapCall,
   hasChecker,
   isWildcard,
 } from './Sections';
@@ -226,6 +227,9 @@ export const PermissionDialog = ({
       }
     : null;
 
+  // A swap token only means something on a grant that lets the spender swap.
+  const showSwapDestination = isGrant && !!swapDestination && calls.some(isSwapCall);
+
   const metaRows = [
     ...(fromRow ? [fromRow] : []),
     ...(isGrant ? [] : [spenderRow]),
@@ -300,7 +304,7 @@ export const PermissionDialog = ({
 
             {isGrant && <SpenderPrefundNotice prefund={prefund} isLoading={prefundLoading} />}
 
-            {isGrant && swapDestination && (
+            {showSwapDestination && (
               <SwapDestinationNotice
                 address={swapDestination}
                 chainId={chainId}
@@ -324,7 +328,9 @@ export const PermissionDialog = ({
 
             <p className="text-muted-foreground text-body-sm">
               {isGrant
-                ? 'Limits are enforced onchain. Revoke anytime, one tap.'
+                ? showSwapDestination
+                  ? 'Spend limits and allowed calls are enforced onchain, the swap token is not. Revoke anytime, one tap.'
+                  : 'Limits are enforced onchain. Revoke anytime, one tap.'
                 : 'Revoking is onchain and immediate. This spender loses all access above.'}
             </p>
 

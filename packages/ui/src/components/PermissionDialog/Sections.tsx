@@ -15,6 +15,7 @@ import { getDisplayAddress } from '../../utils';
 import { formatAddress } from '../../utils/formatAddress';
 import { currentContracts } from '../../utils/bridgeCalls/load';
 import { pinnedToken } from '../../utils/bridgeCalls/view';
+import { cleanSymbol } from '../../utils/tokenSymbol';
 import type { AddressIdentity } from '../../hooks/useAddressIdentities';
 import { isLongSpendAmount } from '../../utils/displayFormat';
 import type { CallPermission, SpendPermission, SpenderPrefundDisplay } from './types';
@@ -188,6 +189,13 @@ export function SpenderPrefundNotice({
  * asked holds every swap to it, so the screen says it is not an onchain limit. A token outside the
  * pinned table is named by its own `symbol()` and marked unverified.
  */
+// The router entries a swap grant names: Uniswap v3 and Slipstream `exactInputSingle`, and their kin.
+const SWAP_FUNCTION = /^(exactInput|exactOutput|swap)/i;
+
+export function isSwapCall(call: CallPermission): boolean {
+  return SWAP_FUNCTION.test(call.functionSignature);
+}
+
 export function SwapDestinationNotice({
   address,
   chainId,
@@ -201,7 +209,7 @@ export function SwapDestinationNotice({
 }) {
   const pinned = chainId === undefined ? undefined : pinnedToken(currentContracts(), chainId, address);
   const metaKey = Object.keys(tokenMeta ?? {}).find((key) => key.toLowerCase() === address.toLowerCase());
-  const symbol = pinned?.symbol ?? (metaKey ? tokenMeta![metaKey].symbol : '');
+  const symbol = pinned?.symbol ?? (metaKey ? cleanSymbol(tokenMeta![metaKey].symbol) : undefined);
   const short = formatAddress(address);
   return (
     <div className="flex flex-col gap-2">

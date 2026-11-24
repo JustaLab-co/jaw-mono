@@ -38,6 +38,21 @@ describe('the grant screen names the token swaps may buy', () => {
     expect(html).toContain('Unverified token');
   });
 
+  // The symbol is the token's own claim, so anything that could pass for other text, another
+  // token or a hidden direction change is dropped and the address shows instead.
+  it.each([
+    ['text that imitates the row', 'WETH (0x4200...0006, Base) or'],
+    ['a right-to-left override', 'HTEW\u202E'],
+    ['a Cyrillic look-alike', '\u0421\u0415\u0422H'],
+    ['a 300-character name', 'W'.repeat(300)],
+  ])('does not show %s as the token name', (_, symbol) => {
+    const html = markup({ address: UNPINNED, chainId: 8453, chainName: 'Base', tokenMeta: { [UNPINNED]: { symbol } } });
+
+    expect(html).toContain('Swaps only into 0x9999...9999 (Base)');
+    expect(html).not.toContain(symbol);
+    expect(html).toContain('Unverified token');
+  });
+
   it('falls back to the address when the token has no readable name', () => {
     const html = markup({ address: UNPINNED, chainId: 8453, chainName: 'Base', tokenMeta: {} });
 
