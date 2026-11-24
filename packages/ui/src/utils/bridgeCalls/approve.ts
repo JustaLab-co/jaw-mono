@@ -45,7 +45,9 @@ export function readBridgeApprove(
 function spenderProvider(chain: BridgeChain, spender: string): BridgeProvider | undefined {
   const { across, relay } = chain;
   if (!isAddress(spender, { strict: false })) return undefined;
-  const acrossSpenders = across ? [across.spokePool, across.periphery, across.prefundedStore] : [];
+  const acrossSpenders = across
+    ? [across.spokePool, across.periphery, across.previousPeriphery, across.prefundedStore]
+    : [];
   if (acrossSpenders.some((address) => address && isAddressEqual(address, spender))) return 'across';
   const relaySpenders = relay ? [relay.depository, ...(relay.approvalProxies ?? [])] : [];
   if (relaySpenders.some((address) => isAddressEqual(address, spender))) return 'relay';

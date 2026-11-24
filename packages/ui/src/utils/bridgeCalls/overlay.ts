@@ -1,3 +1,4 @@
+import { isAddressEqual } from 'viem';
 import type { AcrossContracts, BridgeChain, RelayContracts } from './contracts';
 
 // What the client accepts from the network. The proxy's sync may touch more; a field it starts
@@ -18,6 +19,16 @@ function take<T>(base: T, live: T | undefined, keys: readonly (keyof T)[]): T {
   return merged;
 }
 
+// A live table that still names the previous periphery as `periphery` leaves one periphery, where
+// keeping both would put one address in two roles and reject the whole table.
+function takeAcross(base: AcrossContracts, live: AcrossContracts | undefined): AcrossContracts {
+  const merged = take(base, live, ACROSS_SYNCED);
+  if (merged.previousPeriphery && isAddressEqual(merged.previousPeriphery, merged.periphery)) {
+    delete merged.previousPeriphery;
+  }
+  return merged;
+}
+
 export function overlay(
   snapshot: Readonly<Record<number, BridgeChain>>,
   live: Readonly<Record<number, BridgeChain>>
@@ -29,7 +40,7 @@ export function overlay(
         id,
         {
           ...chain,
-          across: chain.across && take(chain.across, fresh?.across, ACROSS_SYNCED),
+          across: chain.across && takeAcross(chain.across, fresh?.across),
           relay: chain.relay && take(chain.relay, fresh?.relay, RELAY_SYNCED),
         },
       ];

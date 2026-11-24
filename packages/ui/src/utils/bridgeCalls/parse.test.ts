@@ -17,13 +17,23 @@ const reason = (raw: unknown) => {
 const BASE_USDC = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 const PROXY = '0x5567954cD026CEbFE486062cb75848e0f1c12E58';
 const STORE = '0x794dBdbDBFd3f8A3b887F4513bf5FF29edD04a94';
+const PERIPHERY = '0x97CCDBea4632140639aD5eA9b944aa034eb15fD4';
 
-// Approval proxies come only from the build, so a parsed chain is the compiled one without them.
+// Approval proxies and the previous Across periphery come only from the build, so a parsed chain is
+// the compiled one without them.
 const parsedOf = (chain: BridgeChain): BridgeChain => {
-  if (!chain.relay) return chain;
-  const relay = { ...chain.relay };
-  delete relay.approvalProxies;
-  return { ...chain, relay };
+  const parsed = { ...chain };
+  if (chain.across) {
+    const across = { ...chain.across };
+    delete across.previousPeriphery;
+    parsed.across = across;
+  }
+  if (chain.relay) {
+    const relay = { ...chain.relay };
+    delete relay.approvalProxies;
+    parsed.relay = relay;
+  }
+  return parsed;
 };
 
 describe('given the body the proxy serves for the bridge table', () => {
@@ -68,6 +78,19 @@ describe('given the body the proxy serves for the bridge table', () => {
   ])('when it carries %s as a Relay approval proxy, then it is accepted without the proxies', (_name, change) => {
     const result = parse(body((b) => change(b.chains['8453'])));
     expect(result.ok && result.contracts.chain(8453)?.relay).not.toHaveProperty('approvalProxies');
+  });
+
+  it.each([
+    ['the one of the build', () => undefined],
+    [
+      'a lowercase one',
+      (c: BridgeChain) => (c.across!.previousPeriphery = PERIPHERY.toLowerCase() as typeof PERIPHERY),
+    ],
+    ['the SpokePool', (c: BridgeChain) => (c.across!.previousPeriphery = c.across!.spokePool)],
+  ])('when it carries %s as the previous Across periphery, then it is accepted without it', (_name, change) => {
+    const result = parse(body((b) => change(b.chains['8453'])));
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.contracts.chain(8453)?.across).not.toHaveProperty('previousPeriphery');
   });
 
   it('when keys arrive in another order, then the table is the same', () => {
