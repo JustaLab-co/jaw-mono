@@ -50,6 +50,7 @@ export const PermissionDialog = ({
   tokenMeta,
   expiryDate,
   grantedDate,
+  note,
   networkName,
   chainId,
   chainIcon,
@@ -235,6 +236,8 @@ export const PermissionDialog = ({
     ...(isGrant ? [] : [spenderRow]),
     ...(grantedDate ? [{ label: 'Granted', value: grantedDate }] : []),
     ...(expiryDate ? [{ label: 'Until', value: expiryDate }] : []),
+    // The app's own words, last and in quotes, so it reads as theirs and never as a permission fact.
+    ...(note ? [{ label: 'Note', value: `\u201C${note}\u201D`, wrap: true }] : []),
   ];
 
   return (

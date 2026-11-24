@@ -30,6 +30,7 @@ await jaw.provider.request({
           },
         ],
       },
+      note: 'Pays your 0.1 ETH daily subscription', // Optional - shown to the user, not signed
       // chainId: '0x1', // Optional - defaults to connected chain
     },
   ],
@@ -45,7 +46,16 @@ await jaw.provider.request({
 | `permissions`  | `object`      | Yes      | Permission details                            |
 | `address`      | `0x${string}` | No       | Account address to grant permissions on       |
 | `chainId`      | `0x${string}` | No       | Target chain ID (defaults to connected chain) |
+| `note`         | `string`      | No       | What the permission is for (see below)        |
 | `capabilities` | `object`      | No       | Additional capabilities (see below)           |
+
+### Note
+
+`note` says what the permission is for, in your app's words, so the user and an agent can tell later why it exists. The grant and revoke screens show it, and `wallet_getPermissions` returns it.
+
+- Plain text on one line, at most 200 characters. Spaces around it are trimmed, and an empty note counts as none.
+- A note with a newline, a tab, a control character, or a character that doesn't show on screen (zero-width, bidi, variation and other default-ignorable characters) is refused with `-32602`. A single emoji selector is fine, so notes with emoji work.
+- It is not signed and not part of the permission hash. It is stored next to the permission, set once when it is granted, and never changed.
 
 ### Capabilities
 
@@ -131,9 +141,12 @@ Returns permission grant result with generated permission ID.
     }
   ],
   "permissionId": "0xabc123...",
-  "chainId": "0x1"
+  "chainId": "0x1",
+  "note": "Pays your 0.1 ETH daily subscription"
 }
 ```
+
+`note` is the note as stored, and is left out when the request had none.
 
 ## Behavior
 

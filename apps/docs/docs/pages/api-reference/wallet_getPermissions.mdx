@@ -66,24 +66,26 @@ Returns an array of permission objects.
         "multiplier": 1
       }
     ],
-    "chainId": "0x1"
+    "chainId": "0x1",
+    "note": "Pays your 0.1 ETH daily subscription"
   }
 ]
 ```
 
 ### Permission Object Fields
 
-| Field          | Type     | Description                                  |
-| -------------- | -------- | -------------------------------------------- |
-| `permissionId` | `string` | Unique permission identifier (hash)          |
-| `account`      | `string` | Account that granted the permission          |
-| `spender`      | `string` | Address that received permissions            |
-| `start`        | `number` | Unix timestamp when permission becomes valid |
-| `end`          | `number` | Unix timestamp when permission expires       |
-| `salt`         | `string` | Salt for permission uniqueness (hex)         |
-| `calls`        | `array`  | Granted call permissions                     |
-| `spends`       | `array`  | Granted spend limits                         |
-| `chainId`      | `string` | Chain ID (hex)                               |
+| Field          | Type     | Description                                                                    |
+| -------------- | -------- | ------------------------------------------------------------------------------ |
+| `permissionId` | `string` | Unique permission identifier (hash)                                            |
+| `account`      | `string` | Account that granted the permission                                            |
+| `spender`      | `string` | Address that received permissions                                              |
+| `start`        | `number` | Unix timestamp when permission becomes valid                                   |
+| `end`          | `number` | Unix timestamp when permission expires                                         |
+| `salt`         | `string` | Salt for permission uniqueness (hex)                                           |
+| `calls`        | `array`  | Granted call permissions                                                       |
+| `spends`       | `array`  | Granted spend limits                                                           |
+| `chainId`      | `string` | Chain ID (hex)                                                                 |
+| `note`         | `string` | What the app said the permission is for. Not signed. Left out when it has none |
 
 ## Behavior
 

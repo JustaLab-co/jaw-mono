@@ -938,6 +938,14 @@ console.log('Capabilities:', capabilities);`,
           2
         ),
       },
+      {
+        name: 'note',
+        type: 'string',
+        label: 'Note',
+        description: 'What the permission is for, shown to the user. Optional, at most 200 characters',
+        required: false,
+        defaultValue: 'Up to 0.1 ETH a day for this demo',
+      },
     ],
     getCodeSnippet: (params) => `import { useGrantPermissions } from '@jaw.id/wagmi';
 
@@ -949,7 +957,7 @@ const expiry = Math.floor(Date.now() / 1000) + (expiryDays * 24 * 60 * 60);
 grantPermissions({
   spender: '${params.spender || '0x...'}',
   expiry,
-  permissions: ${params.permissions || '{}'},
+  permissions: ${params.permissions || '{}'},${params.note ? `\n  note: ${JSON.stringify(params.note)},` : ''}
 });`,
     buildParams: (params) => {
       const expiryDays = parseInt(params.expiryDays || '7');
@@ -959,9 +967,10 @@ grantPermissions({
           spender: params.spender,
           expiry,
           permissions: JSON.parse(params.permissions || '{}'),
+          ...(params.note ? { note: params.note } : {}),
         };
       } catch {
-        return { spender: params.spender, expiry, permissions: {} };
+        return { spender: params.spender, expiry, permissions: {}, ...(params.note ? { note: params.note } : {}) };
       }
     },
   },
