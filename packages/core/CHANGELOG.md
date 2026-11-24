@@ -1,3 +1,13 @@
+## 1.13.0 (2026-11-24)
+
+### 🚀 Features
+
+- **core:** carry an optional note on permission grants ([#669](https://github.com/JustaLab-co/jaw-mono/pull/669))
+
+### ❤️ Thank You
+
+- Leo Franklin @LeoFranklin015
+
 ## 1.12.1 (2026-11-20)
 
 ### 🩹 Fixes
