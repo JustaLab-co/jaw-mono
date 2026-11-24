@@ -20,6 +20,12 @@ const SWAP: CallPermission = {
   functionSignature: 'exactInputSingle((address,address,uint24,address,uint256,uint256,uint160))',
 };
 
+// Uniswap's SwapRouter02 on every chain but Base: the swap runs inside multicall(deadline, data).
+const UNISWAP_SWAP: CallPermission = {
+  target: '0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45',
+  functionSignature: 'multicall(uint256,bytes[])',
+};
+
 const render = (calls: CallPermission[]) =>
   renderToStaticMarkup(
     <PermissionDialog
@@ -45,6 +51,13 @@ const render = (calls: CallPermission[]) =>
 describe('the grant screen and a swap destination', () => {
   it('names the swap token on a grant that lets the spender swap', () => {
     expect(render([APPROVE, SWAP])).toContain('Swaps only into WETH');
+  });
+
+  it('names the swap token on a grant whose only router entry is a Uniswap multicall', () => {
+    const html = render([APPROVE, UNISWAP_SWAP]);
+
+    expect(html).toContain('Swaps only into WETH');
+    expect(html).not.toContain('Limits are enforced onchain.');
   });
 
   // Without a swap call the token restricts nothing, so naming it would describe a limit that is not there.

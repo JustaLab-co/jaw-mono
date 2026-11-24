@@ -189,11 +189,13 @@ export function SpenderPrefundNotice({
  * asked holds every swap to it, so the screen says it is not an onchain limit. A token outside the
  * pinned table is named by its own `symbol()` and marked unverified.
  */
-// The router entries a swap grant names: Uniswap v3 and Slipstream `exactInputSingle`, and their kin.
+// The router entries a swap grant names: Slipstream's `exactInputSingle` and its kin, and Uniswap's
+// SwapRouter02 `multicall(deadline, data)`, which wraps the swap so the router checks the deadline.
 const SWAP_FUNCTION = /^(exactInput|exactOutput|swap)/i;
+const DEADLINE_MULTICALL = 'multicall(uint256,bytes[])';
 
 export function isSwapCall(call: CallPermission): boolean {
-  return SWAP_FUNCTION.test(call.functionSignature);
+  return SWAP_FUNCTION.test(call.functionSignature) || call.functionSignature === DEADLINE_MULTICALL;
 }
 
 export function SwapDestinationNotice({
