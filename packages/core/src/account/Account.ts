@@ -1686,8 +1686,9 @@ export class Account {
             };
             const ceiling = calculateTokenCostFromGas(gas, quotes[0]);
 
-            // A context `gas` is the "Up to" the user was shown. The approve
-            // never goes past it, nor past what this estimate says is needed.
+            // A context `gas` is the ceiling the caller quoted. The approve is
+            // capped at it and at this estimate; with no `gas`, only the
+            // estimate caps it. Any approval margin is added after this cap.
             const shown = callerGas === undefined ? ceiling : BigInt(callerGas);
             requiredAmount = shown < ceiling ? shown : ceiling;
         } catch (error) {
