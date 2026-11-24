@@ -10,7 +10,7 @@ import type { Chain } from '@jaw.id/core';
 const revokePermission = vi.fn();
 const grantPermissions = vi.fn();
 
-type DialogProps = { onConfirm?: () => void; calls?: Array<{ checker?: string }> };
+type DialogProps = { onConfirm?: () => void; calls?: Array<{ checker?: string }>; note?: string };
 let dialogProps: DialogProps = {};
 let storedPermission: unknown = null;
 vi.mock('@jaw.id/ui', async (importActual) => {
@@ -205,5 +205,87 @@ describe('PermissionModal grant', () => {
     expect(dialogProps.calls?.[0].checker).toBe(CHECKER);
     expect(grantPermissions).toHaveBeenCalledTimes(1);
     expect(grantPermissions.mock.calls[0][2].calls[0].checker).toBe(CHECKER);
+  });
+});
+
+describe('PermissionModal and the note of a permission', () => {
+  const grantRequest = (note?: unknown) => ({
+    method: 'wallet_grantPermissions' as const,
+    params: [
+      {
+        expiry: Math.floor(Date.now() / 1000) + 86_400,
+        spender: '0x2222222222222222222222222222222222222222',
+        permissions: {
+          calls: [
+            { target: '0x036CbD53842c5426634e7929541eC2318f3dCF7e', functionSignature: 'transfer(address,uint256)' },
+          ],
+        },
+        ...(note === undefined ? {} : { note }),
+      },
+    ],
+  });
+
+  async function open(request: unknown) {
+    const onError = vi.fn();
+    await act(async () => {
+      root.render(
+        <PermissionModal
+          permissionRequest={request as never}
+          chain={CHAIN}
+          apiKey="test-key"
+          onSuccess={vi.fn()}
+          onError={onError}
+        />
+      );
+    });
+    return onError;
+  }
+
+  it('shows the note of a grant trimmed, and grants with that same note', async () => {
+    await open(grantRequest('  Daily DCA into ETH  '));
+    await act(async () => dialogProps.onConfirm?.());
+
+    expect(dialogProps.note).toBe('Daily DCA into ETH');
+    expect(grantPermissions).toHaveBeenCalledTimes(1);
+    expect(grantPermissions.mock.calls[0][6]?.note).toBe('Daily DCA into ETH');
+  });
+
+  it('shows no note and grants with none when the request has none', async () => {
+    await open(grantRequest());
+    await act(async () => dialogProps.onConfirm?.());
+
+    expect(dialogProps.note).toBeUndefined();
+    expect(grantPermissions.mock.calls[0][6]?.note).toBeUndefined();
+  });
+
+  // An SDK from before notes skips the check, so keys refuses the request itself.
+  it('refuses a grant whose note breaks the rule with -32602, before it shows anything', async () => {
+    const onError = await open(grantRequest('Daily \u202EDCA'));
+
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError.mock.calls[0][1]).toBe(-32602);
+    // Nothing was shown: no screen, so no Confirm that could still grant.
+    expect(dialogProps.onConfirm).toBeUndefined();
+    expect(dialogProps.note).toBeUndefined();
+    expect(grantPermissions).not.toHaveBeenCalled();
+  });
+
+  it('shows the note a revoked permission was stored with', async () => {
+    storedPermission = {
+      permissionId: REQUEST.params[0].id,
+      account: '0x1111111111111111111111111111111111111111',
+      spender: '0x2222222222222222222222222222222222222222',
+      start: 1_700_000_000,
+      end: 2_000_000_000,
+      salt: '0x2a',
+      calls: [],
+      spends: [],
+      chainId: '0x2105',
+      note: 'Daily DCA into ETH',
+    };
+
+    await open(REQUEST);
+
+    expect(dialogProps.note).toBe('Daily DCA into ETH');
   });
 });
