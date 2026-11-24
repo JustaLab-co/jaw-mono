@@ -392,6 +392,17 @@ describe('AssetPreview bridge send side when the simulation could not read the t
     expect(host.textContent).not.toContain('$');
   });
 
+  it('does not price a sent token the bridge could not read by the symbol the simulation read', async () => {
+    prices.fetch.mockResolvedValue(150_000);
+    const send = { ...bridge.send, token: { address: MKR, known: false } };
+    const assetsOut = simulatedRows(simulated.address, -(10n ** 19n), simulated.decimals, 'SOL');
+    await mount({ assetsOut, bridge: { ...bridge, send } });
+    await settle();
+    expect(host.textContent).toContain('SOL');
+    expect(prices.fetch).not.toHaveBeenCalledWith('SOL');
+    expect(host.textContent).not.toContain('$');
+  });
+
   it('scales a row the simulation left in base units by the decimals the bridge read', () => {
     const raw = {
       ...simulated,
@@ -572,6 +583,18 @@ describe('AssetPreview bridge views and the simulated receive side', () => {
     const out = html({ assetsOut: [usdcOut], assetsIn: [dust], bridge: sameChainSwap, simulated: true });
     expect(getSide(out)).toContain('The simulation sees no verified asset arriving.');
     expect(out).not.toContain(NOTE);
+  });
+
+  it.each([
+    ['1 base unit', 1n, false],
+    ['99 base units, just under a ten-thousandth', 99n, false],
+    ['100 base units, a ten-thousandth', 100n, true],
+    ['101 base units, just over a ten-thousandth', 101n, true],
+  ])('a same-chain swap that pays out %s of pinned USDC', (_, diff, paysOut) => {
+    const usdcIn = { ...usdcOut, address: BASE_PINNED.USDC, diff, direction: 'in' as const };
+    const out = html({ assetsOut: [ethOut], assetsIn: [usdcIn], bridge: ethSwap, simulated: true, ...onBase });
+    expect(getSide(out).includes('The simulation sees no verified asset arriving.')).toBe(!paysOut);
+    expect(out.includes(NOTE)).toBe(paysOut);
   });
 
   it('a same-chain swap that pays out a pinned token shows it priced, marked as not guaranteed', async () => {

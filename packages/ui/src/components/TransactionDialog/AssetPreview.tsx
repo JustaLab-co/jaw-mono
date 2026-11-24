@@ -259,8 +259,10 @@ const SIMULATED_ONLY = 'Simulated, not guaranteed.';
 
 const NOTHING_ARRIVES = 'The simulation sees no verified asset arriving.';
 
-// A millionth of the native coin, in wei. Less than that arriving is not a swap paying out.
+// Less than this arriving is not a swap paying out: a millionth of the native coin, in wei, and a
+// ten-thousandth of a pinned token, in its base units.
 const NATIVE_DUST = 10n ** 12n;
+const tokenDust = (decimals: number) => 10n ** BigInt(Math.max(decimals - 4, 0));
 
 const UNPRICED = 'Unverified token, so no USD value.';
 
@@ -287,9 +289,7 @@ const sentDeltas = ({ amount, token }: TokenAmount): AssetDelta[] =>
 // The bridge's read decides whether the sent token is verified: a symbol the token reports about
 // itself is unverified whichever read got it. It also names and scales a row the simulation could
 // not read.
-function withBridgeRead(delta: AssetDelta, { token }: TokenAmount): AssetDelta {
-  if (!token.known && !token.unverified) return delta;
-  if (delta.address.toLowerCase() !== token.address.toLowerCase()) return delta;
+function withBridgeRead(delta: AssetDelta, token: Extract<Token, { symbol: string }>): AssetDelta {
   const unverified = token.known ? undefined : true;
   if (delta.symbol && !delta.baseUnits) return { ...delta, unverified };
   const magnitude = delta.diff < 0n ? -delta.diff : delta.diff;
@@ -443,13 +443,17 @@ export const AssetPreview = ({
 
   // The simulation cannot see the other chain, so a bridge view takes its receive side from the
   // decoded deposit alone. A same-chain transfer that names no receive side still shows what the
-  // simulation saw arrive, marked as not guaranteed. The bridge's read decides only the sent token.
-  const sent = bridge?.send.token.address.toLowerCase();
+  // simulation saw arrive, marked as not guaranteed. The bridge's read decides only the sent token,
+  // and only when the bridge could read it; otherwise the table does, as for any other row.
+  const sentToken = bridge?.send.token;
+  const read = sentToken && (sentToken.known || sentToken.unverified) ? sentToken : undefined;
   const bridgeOut =
     bridge &&
     (!error && assetsOut.length > 0
       ? assetsOut.map((d) =>
-          d.address.toLowerCase() === sent ? withBridgeRead(d, bridge.send) : pinnedOrUnverified(d)
+          read && d.address.toLowerCase() === read.address.toLowerCase()
+            ? withBridgeRead(d, read)
+            : pinnedOrUnverified(d)
         )
       : sentDeltas(bridge.send));
   let bridgeIn: AssetDelta[] = [];
@@ -457,9 +461,11 @@ export const AssetPreview = ({
   // The native row is named here so it is priced like the bridge rows.
   else if (bridge?.sameChain && !error)
     bridgeIn = assetsIn.map((d) => (d.isNative ? { ...d, symbol: nativeSymbol } : pinnedOrUnverified(d)));
-  // Only the native coin past dust or a pinned token counts as the swap paying out. A token at any
+  // Only the native coin or a pinned token past dust counts as the swap paying out. A token at any
   // other address can report itself as anything, and a reverted batch pays nothing either way.
-  const paysOut = bridgeIn.some((d) => (d.isNative ? d.diff >= NATIVE_DUST : !d.unverified));
+  const paysOut = bridgeIn.some((d) =>
+    d.isNative ? d.diff >= NATIVE_DUST : !d.unverified && d.diff >= tokenDust(d.decimals)
+  );
   const nothingArrives = !!bridge?.sameChain && !!simulated && !willRevert && !error && !paysOut;
 
   const genericOut = assetsOut.map(pinnedOrUnverified);
