@@ -590,8 +590,11 @@ export const PermissionModal = ({
   const swapDestination =
     permissionDetails && 'swapDestination' in permissionDetails ? permissionDetails.swapDestination : undefined;
 
+  // RequestModals passes onError inline, so without the latch every re-render refuses again.
+  const refusedRef = useRef(false);
   useEffect(() => {
-    if (swapDestination !== null) return;
+    if (swapDestination !== null || refusedRef.current) return;
+    refusedRef.current = true;
     onError?.(new Error('capabilities.swapDestination must be a token address'), standardErrorCodes.rpc.invalidParams);
   }, [swapDestination, onError]);
 

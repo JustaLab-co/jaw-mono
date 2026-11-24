@@ -264,4 +264,20 @@ describe('PermissionModal swap destination', () => {
     expect(onError).toHaveBeenCalledWith(expect.any(Error), -32602);
     expect(dialogProps.onConfirm).toBeUndefined();
   });
+
+  // RequestModals passes onError inline, so every re-render hands the modal a new function.
+  it('refuses a malformed swap token once, however often the host re-renders', async () => {
+    const refused = vi.fn();
+    const request = grantWith({ swapDestination: 'WETH' });
+    await render(
+      request,
+      vi.fn((...args) => refused(...args))
+    );
+    await render(
+      request,
+      vi.fn((...args) => refused(...args))
+    );
+
+    expect(refused).toHaveBeenCalledTimes(1);
+  });
 });
