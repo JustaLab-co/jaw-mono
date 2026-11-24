@@ -25,8 +25,20 @@
               "functionSignature": "approve(address,uint256)"
             },
             {
+              "target": "0x698Cb2b6dd822994581fEa6eA4Fc755d1363A92F",
+              "functionSignature": "exactInputSingle((address,address,int24,address,uint256,uint256,uint256,uint160))"
+            },
+            {
+              "target": "0xcbBb8035cAc7D4B3Ca7aBb74cF7BdF900215Ce0D",
+              "functionSignature": "exactInputSingle((address,address,int24,address,uint256,uint256,uint256,uint160))"
+            },
+            {
+              "target": "0xBE6D8f0d05cC4be24d5167a3eF062215bE6D18a5",
+              "functionSignature": "exactInputSingle((address,address,int24,address,uint256,uint256,uint256,uint160))"
+            },
+            {
               "target": "0x2626664c2603336E57B271c5C0b26F421741e481",
-              "functionSignature": "exactInputSingle((address,address,uint24,address,uint256,uint256,uint160))"
+              "functionSignature": "multicall(uint256,bytes[])"
             }
           ],
           "spends": [
@@ -58,8 +70,20 @@
               "functionSignature": "approve(address,uint256)"
             },
             {
+              "target": "0x698Cb2b6dd822994581fEa6eA4Fc755d1363A92F",
+              "functionSignature": "exactInputSingle((address,address,int24,address,uint256,uint256,uint256,uint160))"
+            },
+            {
+              "target": "0xcbBb8035cAc7D4B3Ca7aBb74cF7BdF900215Ce0D",
+              "functionSignature": "exactInputSingle((address,address,int24,address,uint256,uint256,uint256,uint160))"
+            },
+            {
+              "target": "0xBE6D8f0d05cC4be24d5167a3eF062215bE6D18a5",
+              "functionSignature": "exactInputSingle((address,address,int24,address,uint256,uint256,uint256,uint160))"
+            },
+            {
               "target": "0x2626664c2603336E57B271c5C0b26F421741e481",
-              "functionSignature": "exactInputSingle((address,address,uint24,address,uint256,uint256,uint160))"
+              "functionSignature": "multicall(uint256,bytes[])"
             }
           ],
           "spends": [

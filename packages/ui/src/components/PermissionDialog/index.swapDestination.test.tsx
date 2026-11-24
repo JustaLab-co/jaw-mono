@@ -15,9 +15,10 @@ const APPROVE: CallPermission = {
   target: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
   functionSignature: 'approve(address,uint256)',
 };
+// A Slipstream router on Base, whose swap takes its deadline in the params.
 const SWAP: CallPermission = {
-  target: '0x2626664c2603336E57B271c5C0b26F421741e481',
-  functionSignature: 'exactInputSingle((address,address,uint24,address,uint256,uint256,uint160))',
+  target: '0x698Cb2b6dd822994581fEa6eA4Fc755d1363A92F',
+  functionSignature: 'exactInputSingle((address,address,int24,address,uint256,uint256,uint256,uint160))',
 };
 
 // Uniswap's SwapRouter02 on every chain but Base: the swap runs inside multicall(deadline, data).
