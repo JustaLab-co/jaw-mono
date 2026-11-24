@@ -1726,8 +1726,8 @@ export class Account {
             return null;
         }
 
-        // Parse the gas amount from context
-        const requiredAmount = typeof gasAmount === 'string' ? BigInt(gasAmount) : gasAmount;
+        const { withApprovalMargin } = await import('./erc20Paymaster.js');
+        const requiredAmount = withApprovalMargin(BigInt(gasAmount));
 
         // Check current allowance
         const publicClient = createPublicClient({

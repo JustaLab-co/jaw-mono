@@ -53,19 +53,25 @@ export interface TokenEstimate {
     tokenCostFormatted: string;
     /**
      * Worst-case ceiling: the maximum the paymaster can charge for this userOp
-     * (full gas limits at maxFeePerGas). This is the amount to approve and the
-     * amount the balance must cover.
+     * (full gas limits at maxFeePerGas). The approve and the balance check add
+     * the approval margin on top: see tokenCostApproved.
      */
     tokenCostMax: bigint;
     tokenCostMaxFormatted: string;
+    /**
+     * What the wallet approves: `tokenCostMax` with the approval margin on top.
+     * Shown as "Up to" and checked against the balance.
+     */
+    tokenCostApproved: bigint;
+    tokenCostApprovedFormatted: string;
     paymasterAddress: Address;
     exchangeRate: bigint;
     /** From the quote: see {@link TokenQuote.exchangeRateNativeToUsd}. */
     exchangeRateNativeToUsd?: bigint;
     /**
      * Whether the user has sufficient balance to pay with this token.
-     * Checked against tokenCostMax so a transaction is never started that could
-     * fail at the paymaster's postOp transfer in the worst case.
+     * Checked against tokenCostApproved so the account can always cover the
+     * allowance it is about to grant.
      */
     hasSufficientBalance: boolean;
 }
@@ -172,6 +178,18 @@ async function inPhase<T>(phase: Erc20EstimationPhase, run: () => Promise<T>): P
  */
 const DISPLAY_BASE_FEE_BUFFER_BPS = 12500n;
 const BPS_DENOMINATOR = 10000n;
+
+/**
+ * Margin on the ERC-20 approve. The paymaster refuses an op whose allowance is
+ * under the max fee it computes when it signs, and that fee moves after the
+ * estimate the ceiling came from.
+ */
+const APPROVAL_MARGIN_BPS = 12500n;
+
+/** The amount with the approval margin on top, rounded up. */
+export function withApprovalMargin(amount: bigint): bigint {
+    return (amount * APPROVAL_MARGIN_BPS + BPS_DENOMINATOR - 1n) / BPS_DENOMINATOR;
+}
 
 /** Buffer on simulated verification gas: state drift between simulation and inclusion. */
 const VERIFICATION_GAS_BUFFER_BPS = 10500n;
@@ -479,8 +497,8 @@ export function getRequiredPrefund(gas: UserOpGasFields): bigint {
  * appears here in addition to the postOp limit — that is not a double count for
  * the ceiling, it's the contract's exact worst case.
  *
- * Use this for the approval amount and the balance check. For the fee shown to
- * the user, use calculateDisplayTokenCost.
+ * The approval amount and the balance check are this plus withApprovalMargin.
+ * For the fee shown to the user, use calculateDisplayTokenCost.
  *
  * @param gas - Gas fields from a prepared userOp
  * @param quote - Token quote from fetchTokenQuotes
@@ -559,9 +577,11 @@ export function calculateTokenEstimatesFromGas(
         // The shown estimate can never exceed the ceiling being reserved.
         if (tokenCost > tokenCostMax) tokenCost = tokenCostMax;
 
-        const hasSufficientBalance = balance >= tokenCostMax;
+        const tokenCostApproved = withApprovalMargin(tokenCostMax);
+        const hasSufficientBalance = balance >= tokenCostApproved;
         const tokenCostFormatted = formatTokenAmount(tokenCost, decimals);
         const tokenCostMaxFormatted = formatTokenAmount(tokenCostMax, decimals);
+        const tokenCostApprovedFormatted = formatTokenAmount(tokenCostApproved, decimals);
 
         return {
             tokenAddress: quote.tokenAddress,
@@ -571,6 +591,8 @@ export function calculateTokenEstimatesFromGas(
             tokenCostFormatted,
             tokenCostMax,
             tokenCostMaxFormatted,
+            tokenCostApproved,
+            tokenCostApprovedFormatted,
             paymasterAddress: quote.paymasterAddress,
             exchangeRate: quote.exchangeRate,
             ...(quote.exchangeRateNativeToUsd !== undefined
@@ -584,11 +606,12 @@ export function calculateTokenEstimatesFromGas(
 /**
  * Builds the paymaster context for paying gas with an estimated ERC-20 token.
  *
- * `gas` is the amount the bundled approval must cover: the worst-case ceiling
- * (`tokenCostMax`), NOT the displayed estimate — the paymaster's postOp can
- * charge up to the ceiling, and an insufficient allowance reverts the whole
- * operation. Every UI that lets a user pay in ERC-20 should build its
- * paymaster context through this helper so the rule lives in one place.
+ * `gas` is the worst-case ceiling (`tokenCostMax`), not the displayed
+ * estimate: the paymaster's postOp can charge up to the ceiling, and an
+ * insufficient allowance reverts the whole operation. The SDK adds the approval
+ * margin when it builds the approve, so `gas` carries none. Every UI that lets
+ * a user pay in ERC-20 should build its paymaster context through this helper
+ * so the rule lives in one place.
  */
 export function buildErc20PaymasterContext(estimate: TokenEstimate): { token: Address; gas: string } {
     return {

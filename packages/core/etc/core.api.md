@@ -1475,6 +1475,9 @@ export interface TokenEstimate {
     // (undocumented)
     tokenAddress: Address_2;
     tokenCost: bigint;
+    tokenCostApproved: bigint;
+    // (undocumented)
+    tokenCostApprovedFormatted: string;
     // (undocumented)
     tokenCostFormatted: string;
     tokenCostMax: bigint;
