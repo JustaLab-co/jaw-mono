@@ -1,3 +1,13 @@
+## 1.17.3 (2026-11-25)
+
+### 🩹 Fixes
+
+- **ui:** flag unpaid relay swaps and symbol-only token prices ([#674](https://github.com/JustaLab-co/jaw-mono/pull/674))
+
+### ❤️ Thank You
+
+- Mariano Aguero @mariano-aguero
+
 ## 1.17.2 (2026-11-25)
 
 ### 🧱 Updated Dependencies
