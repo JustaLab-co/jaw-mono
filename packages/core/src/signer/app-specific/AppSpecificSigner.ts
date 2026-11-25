@@ -373,6 +373,7 @@ export class AppSpecificSigner extends JAWSigner {
                         spender: permissionData.spender,
                         permissions: permissionData.permissions,
                         capabilities: permissionData.capabilities,
+                        ...(permissionData.note === undefined ? {} : { note: permissionData.note }),
                     },
                 };
 

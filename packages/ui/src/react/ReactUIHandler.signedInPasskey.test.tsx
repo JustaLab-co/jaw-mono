@@ -137,6 +137,8 @@ vi.mock('@jaw.id/core', async (importActual) => {
         tokenCostFormatted: '0.02',
         tokenCostMax: 60_000n,
         tokenCostMaxFormatted: '0.06',
+        tokenCostApproved: 75_000n,
+        tokenCostApprovedFormatted: '0.075',
         paymasterAddress: '0x4444444444444444444444444444444444444444',
         exchangeRate: 1n,
         hasSufficientBalance: true,

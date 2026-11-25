@@ -78,10 +78,14 @@ const nativeEth = (balance: bigint) =>
     isSelectable: balance > 0n,
   });
 
+// "Up to" is the approved amount, a quarter over the ceiling.
 const usdcEstimate = {
   tokenAddress: USDC,
   tokenCostFormatted: '0.02',
-  tokenCostMaxFormatted: '0.05',
+  tokenCostMax: 40_000n,
+  tokenCostMaxFormatted: '0.04',
+  tokenCostApproved: 50_000n,
+  tokenCostApprovedFormatted: '0.05',
   hasSufficientBalance: true,
 };
 const usdtEstimate = { ...usdcEstimate, tokenAddress: USDT };
@@ -191,6 +195,7 @@ describe('useGasEstimation fee-token selection', () => {
     expect(hook.selectedFeeToken?.symbol).toBe('USDC');
     expect(hook.isPayingWithErc20).toBe(true);
     expect(hook.selectedFeeToken?.gasCostMaxFormatted).toBe('0.05');
+    expect(hook.selectedFeeToken?.gasCostMax).toBe(50_000n);
   });
 
   it('USDC-only account, unrecognized bundler wording: still auto-switches to the proven USDC', async () => {

@@ -627,6 +627,7 @@ export function getSupportedChains(showTestnets?: boolean): readonly Chain_2[];
 
 // @public
 export interface GrantPermissionsOptions {
+    note?: string;
     prefund?: SpenderPrefund;
 }
 
@@ -934,6 +935,9 @@ export interface NormalizedAddFundsParams {
     chains?: `0x${string}`[];
 }
 
+// @public
+export function normalizePermissionNote(note: unknown): string | undefined;
+
 // @public (undocumented)
 export interface PasskeyAccount {
     account?: AccountRecord;
@@ -1070,6 +1074,7 @@ export interface PermissionUIRequest extends BaseUIRequest {
             }>;
         };
         capabilities?: RequestCapabilities;
+        note?: string;
     };
     // (undocumented)
     type: 'wallet_grantPermissions';
@@ -1475,6 +1480,9 @@ export interface TokenEstimate {
     // (undocumented)
     tokenAddress: Address_2;
     tokenCost: bigint;
+    tokenCostApproved: bigint;
+    // (undocumented)
+    tokenCostApprovedFormatted: string;
     // (undocumented)
     tokenCostFormatted: string;
     tokenCostMax: bigint;
@@ -1722,6 +1730,7 @@ export type WalletGrantPermissionsRequest = {
         permissions: PermissionsDetail;
         address?: Address_2;
         chainId?: string;
+        note?: string;
         capabilities?: RequestCapabilities;
     }
     ];
@@ -1738,6 +1747,7 @@ export type WalletGrantPermissionsResponse = {
     spends: SpendPermissionDetail[];
     permissionId: Hex;
     chainId: Hex;
+    note?: string;
 };
 
 // @public

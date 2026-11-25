@@ -1235,7 +1235,8 @@ export class Account {
             this._apiKey,
             paymaster.url,
             paymaster.context,
-            [approvalCall, prefundCall].filter((call) => call !== null)
+            [approvalCall, prefundCall].filter((call) => call !== null),
+            { note: options?.note }
         );
     }
 
@@ -1632,7 +1633,9 @@ export class Account {
         let spender: Address;
         let requiredAmount: bigint;
         try {
-            const { fetchTokenQuotes, calculateTokenCostFromGas } = await import('./erc20Paymaster.js');
+            const { fetchTokenQuotes, calculateTokenCostFromGas, withApprovalMargin } = await import(
+                './erc20Paymaster.js'
+            );
             const quotes = await fetchTokenQuotes(paymasterUrl, this._chain.id, [tokenAddress]);
             if (quotes.length === 0) {
                 throw new Error('the paymaster returned no quote for it');
@@ -1688,9 +1691,9 @@ export class Account {
 
             // A context `gas` is the ceiling the caller quoted. The approve is
             // capped at it and at this estimate; with no `gas`, only the
-            // estimate caps it. Any approval margin is added after this cap.
+            // estimate caps it. The approval margin is added after this cap.
             const shown = callerGas === undefined ? ceiling : BigInt(callerGas);
-            requiredAmount = shown < ceiling ? shown : ceiling;
+            requiredAmount = withApprovalMargin(shown < ceiling ? shown : ceiling);
         } catch (error) {
             // Only the JAW ERC-20 paymaster reaches here, and it cannot settle
             // without an allowance, so there is no send worth attempting.

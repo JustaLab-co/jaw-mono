@@ -1,6 +1,7 @@
 import { encodeFunctionData, erc20Abi, type Address, type Hex } from 'viem';
 import { NATIVE_TOKEN } from '../rpc/permissions.js';
 import type { PermissionsDetail } from '../rpc/permissions.js';
+import { withApprovalMargin } from './erc20Paymaster.js';
 
 /**
  * The spender of a permission sends every userOp that permission authorises, and
@@ -147,6 +148,11 @@ export interface GrantPermissionsOptions {
      * transaction costs.
      */
     prefund?: SpenderPrefund;
+    /**
+     * What the app that asked says the permission is for, as the grant screen showed it. Checked
+     * and stored next to the permission; never signed. See `normalizePermissionNote`.
+     */
+    note?: string;
 }
 
 /** Reads this needs, injected so the caller owns the client and the caching. */
@@ -313,7 +319,9 @@ function paymasterFeeIn(token: Address, context?: Record<string, unknown>): bigi
     // this side. Null, like an unreadable one.
     if (gas === undefined) return null;
     try {
-        return BigInt(gas);
+        // The approve grants the fee with its margin, and signing checks the
+        // balance against that, so the prefund has to leave the same behind.
+        return withApprovalMargin(BigInt(gas));
     } catch {
         // The context reaches here from the grant request, so this is a number
         // the requester wrote. Null rather than zero: a fee we cannot read is

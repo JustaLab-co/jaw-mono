@@ -954,9 +954,18 @@ console.log('Capabilities:', capabilities);`,
           2
         ),
       },
+      {
+        name: 'note',
+        type: 'string',
+        label: 'Note',
+        description: 'What the permission is for, shown to the user. Optional, at most 200 characters',
+        required: false,
+        defaultValue: 'Up to 0.1 ETH a day for this demo',
+      },
     ],
     getCodeSnippet: (params) => {
       const chainIdLine = params.chainId && params.chainId !== 'default' ? `\n    chainId: '${params.chainId}',` : '';
+      const noteLine = params.note ? `\n    note: ${JSON.stringify(params.note)},` : '';
       return `const expiryDays = ${params.expiryDays || 30};
 const expiry = Math.floor(Date.now() / 1000) + (expiryDays * 24 * 60 * 60);
 
@@ -965,7 +974,7 @@ const result = await jaw.provider.request({
   params: [{${chainIdLine}
     expiry,
     spender: '${params.spender || '0x...'}',
-    permissions: ${params.permissions || '{}'},
+    permissions: ${params.permissions || '{}'},${noteLine}
   }],
 });
 
@@ -975,13 +984,16 @@ console.log('Permission ID:', result.permissionId);`;
       const expiryDays = parseInt(params.expiryDays || '30');
       const expiry = Math.floor(Date.now() / 1000) + expiryDays * 24 * 60 * 60;
       const permissions = JSON.parse(params.permissions || '{}');
-      const result: { expiry: number; spender: string; permissions: unknown; chainId?: string } = {
+      const result: { expiry: number; spender: string; permissions: unknown; chainId?: string; note?: string } = {
         expiry,
         spender: params.spender,
         permissions,
       };
       if (params.chainId && params.chainId !== 'default') {
         result.chainId = params.chainId;
+      }
+      if (params.note) {
+        result.note = params.note;
       }
       return [result];
     },

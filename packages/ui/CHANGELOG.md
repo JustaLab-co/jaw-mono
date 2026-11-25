@@ -1,3 +1,31 @@
+## 1.17.0 (2026-11-24)
+
+### 🚀 Features
+
+- **core:** carry an optional note on permission grants ([#669](https://github.com/JustaLab-co/jaw-mono/pull/669))
+
+### 🧱 Updated Dependencies
+
+- Updated @jaw.id/core to 1.13.0
+
+### ❤️ Thank You
+
+- Leo Franklin @LeoFranklin015
+
+## 1.16.0 (2026-11-24)
+
+### 🚀 Features
+
+- **ui:** show the swap destination token on the grant screen ([#675](https://github.com/JustaLab-co/jaw-mono/pull/675))
+
+### 🩹 Fixes
+
+- **ui:** pin the redeployed across periphery and keep the old ([#672](https://github.com/JustaLab-co/jaw-mono/pull/672))
+
+### ❤️ Thank You
+
+- Mariano Aguero @mariano-aguero
+
 ## 1.15.0 (2026-11-23)
 
 ### 🚀 Features

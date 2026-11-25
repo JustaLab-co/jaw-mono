@@ -27,10 +27,10 @@ vi.mock('../passkey-manager/index.js', async (importOriginal) => {
     };
 });
 
-vi.mock('./erc20Paymaster.js', () => ({
-    fetchTokenQuotes: vi.fn(),
-    calculateTokenCostFromGas: vi.fn(),
-}));
+vi.mock('./erc20Paymaster.js', async (importOriginal) => {
+    const { withApprovalMargin } = await importOriginal<typeof import('./erc20Paymaster.js')>();
+    return { fetchTokenQuotes: vi.fn(), calculateTokenCostFromGas: vi.fn(), withApprovalMargin };
+});
 
 vi.mock('./smartAccount.js', () => ({
     createSmartAccount: vi.fn(),
@@ -1368,6 +1368,8 @@ describe('Account — ERC-20 paymaster approval', () => {
     };
     // `calculateTokenCostFromGas` is mocked to this, so the approve is assertable.
     const CEILING = 1_500_000n;
+    // The approve carries a quarter on top of the ceiling.
+    const APPROVED = 1_875_000n;
 
     const expectedApproval = () => ({
         to: USDC,
@@ -1375,7 +1377,7 @@ describe('Account — ERC-20 paymaster approval', () => {
         data: encodeFunctionData({
             abi: erc20Abi,
             functionName: 'approve',
-            args: [ERC20_PAYMASTER_ADDRESS as `0x${string}`, CEILING],
+            args: [ERC20_PAYMASTER_ADDRESS as `0x${string}`, APPROVED],
         }),
     });
 
@@ -1575,7 +1577,7 @@ describe('Account — ERC-20 paymaster approval', () => {
             data: encodeFunctionData({
                 abi: erc20Abi,
                 functionName: 'approve',
-                args: [OTHER_PAYMASTER, CEILING],
+                args: [OTHER_PAYMASTER, APPROVED],
             }),
         });
     });
@@ -1583,7 +1585,7 @@ describe('Account — ERC-20 paymaster approval', () => {
     describe('when the context already carries gas', () => {
         const OTHER_PAYMASTER = '0x00000000000000000000000000000000000000aa' as `0x${string}`;
         const GAS = { token: USDC, gas: String(CEILING) };
-        const approveTo = (spender: `0x${string}`, amount = CEILING) => ({
+        const approveTo = (spender: `0x${string}`, amount = APPROVED) => ({
             to: USDC,
             value: 0n,
             data: encodeFunctionData({ abi: erc20Abi, functionName: 'approve', args: [spender, amount] }),
@@ -1614,7 +1616,7 @@ describe('Account — ERC-20 paymaster approval', () => {
         });
 
         it('reads the allowance the quoted paymaster holds', async () => {
-            const readContract = vi.fn().mockResolvedValue(CEILING);
+            const readContract = vi.fn().mockResolvedValue(APPROVED);
             vi.mocked(createPublicClient).mockReturnValue({ readContract } as never);
             const { sendCalls } = await import('./smartAccount.js');
             const account = await makeAccount();
@@ -1648,7 +1650,8 @@ describe('Account — ERC-20 paymaster approval', () => {
 
             await account.sendCalls([{ to: RECIPIENT }], undefined, PAYMASTER_URL, { token: USDC, gas: '1000' });
 
-            expect(vi.mocked(sendCalls).mock.calls[0][1][0]).toEqual(approveTo(OTHER_PAYMASTER, 1000n));
+            // 1000 with the approval margin on top.
+            expect(vi.mocked(sendCalls).mock.calls[0][1][0]).toEqual(approveTo(OTHER_PAYMASTER, 1250n));
         });
 
         // A caller that writes a huge `gas` would otherwise leave that much
@@ -1676,6 +1679,37 @@ describe('Account — ERC-20 paymaster approval', () => {
             );
             expect(sendCalls).not.toHaveBeenCalled();
         });
+    });
+
+    // The paymaster refuses an op whose allowance is under the max fee it
+    // computes at signing, and that fee moves after the estimate.
+    it('approves again when the allowance covers the ceiling but not the margin', async () => {
+        vi.mocked(createPublicClient).mockReturnValue({ readContract: vi.fn().mockResolvedValue(CEILING) } as never);
+        const { sendCalls } = await import('./smartAccount.js');
+        const account = await makeAccount();
+
+        await account.sendCalls([{ to: RECIPIENT }]);
+
+        expect(vi.mocked(sendCalls).mock.calls[0][1][0]).toEqual(expectedApproval());
+    });
+
+    it('skips the approve when the allowance already covers the margin', async () => {
+        vi.mocked(createPublicClient).mockReturnValue({ readContract: vi.fn().mockResolvedValue(APPROVED) } as never);
+        const { sendCalls } = await import('./smartAccount.js');
+        const account = await makeAccount();
+
+        await account.sendCalls([{ to: RECIPIENT }]);
+
+        expect(vi.mocked(sendCalls).mock.calls[0][1]).toEqual([{ to: RECIPIENT, value: undefined, data: undefined }]);
+    });
+
+    it('puts the margin on a gas the caller passes, once', async () => {
+        const { sendCalls } = await import('./smartAccount.js');
+        const account = await makeAccount();
+
+        await account.sendCalls([{ to: RECIPIENT }], undefined, PAYMASTER_URL, { token: USDC, gas: String(CEILING) });
+
+        expect(vi.mocked(sendCalls).mock.calls[0][1][0]).toEqual(expectedApproval());
     });
 
     it('sizes over what the send prepares, owner setup included', async () => {
@@ -1895,6 +1929,25 @@ describe('Account — prefunding the spender in the grant', () => {
 
     beforeEach(() => {
         vi.clearAllMocks();
+    });
+
+    // The host shows the note and grants with it; the grant checks and stores it.
+    it('hands the note the host passes to the grant', async () => {
+        const { grantPermissions } = await import('../rpc/permissions.js');
+        const account = await makeAccount();
+
+        await grant(account, { note: 'Daily DCA into ETH' });
+
+        expect(vi.mocked(grantPermissions).mock.calls.at(-1)?.[9]).toEqual({ note: 'Daily DCA into ETH' });
+    });
+
+    it('grants with no note when the host passes none', async () => {
+        const { grantPermissions } = await import('../rpc/permissions.js');
+        const account = await makeAccount();
+
+        await grant(account);
+
+        expect(vi.mocked(grantPermissions).mock.calls.at(-1)?.[9]?.note).toBeUndefined();
     });
 
     it('quotes the transfer the grant screen shows', async () => {

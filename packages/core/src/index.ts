@@ -50,6 +50,8 @@ export {
     // Permission utilities for UI (fetching permission details without Account instance)
     type StorePermissionApiResponse,
     getPermissionFromRelay,
+    // The note a grant carries, as a host shows and stores it
+    normalizePermissionNote,
     // Permission call builders (for gas estimation)
     buildGrantPermissionCall,
     buildRevokePermissionCall,

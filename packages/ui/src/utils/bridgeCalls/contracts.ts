@@ -3,6 +3,11 @@ import type { Address } from 'viem';
 export type AcrossContracts = {
   spokePool: Address;
   periphery: Address;
+  /**
+   * The periphery that `periphery` replaced, which Across quotes still call. It reads the same way
+   * and comes only from the build. A live table that still names it as `periphery` leaves one.
+   */
+  previousPeriphery?: Address;
   multicallHandler: Address;
   eventEmitter?: Address;
   /** SpokePool.wrappedNativeToken(); Arc has none, its gas token is USDC. */
@@ -45,7 +50,8 @@ export type BridgeChain = {
   tokens: Readonly<Record<Address, BridgeToken>>;
 };
 
-const ACROSS_PERIPHERY = '0x97CCDBea4632140639aD5eA9b944aa034eb15fD4';
+const ACROSS_PERIPHERY = '0x4E9eF0a5fe749079Dd11e68AAd5d75FCcfaAf9Af';
+const ACROSS_PREVIOUS_PERIPHERY = '0x97CCDBea4632140639aD5eA9b944aa034eb15fD4';
 const ACROSS_TESTNET_PERIPHERY = '0x10D8b8DaA26d307489803e10477De69C0492B610';
 const ACROSS_HANDLER = '0x0F7Ae28dE1C8532170AD4ee566B5801485c13a0E';
 const ACROSS_EMITTER = '0xBF75133b48b0a42AB9374027902E83C5E2949034';
@@ -234,6 +240,7 @@ export const BRIDGE_CHAINS: Readonly<Record<number, BridgeChain>> = {
     across: {
       spokePool: '0x5c7BCd6E7De5423a257D81B442095A1a6ced35C5',
       periphery: ACROSS_PERIPHERY,
+      previousPeriphery: ACROSS_PREVIOUS_PERIPHERY,
       multicallHandler: ACROSS_HANDLER,
       eventEmitter: ACROSS_EMITTER,
       wrappedNative: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2',
@@ -261,6 +268,7 @@ export const BRIDGE_CHAINS: Readonly<Record<number, BridgeChain>> = {
     across: {
       spokePool: '0x09aea4b2242abC8bb4BB78D537A67a245A7bEC64',
       periphery: ACROSS_PERIPHERY,
+      previousPeriphery: ACROSS_PREVIOUS_PERIPHERY,
       multicallHandler: ACROSS_HANDLER,
       eventEmitter: ACROSS_EMITTER,
       wrappedNative: OP_WETH,
@@ -282,6 +290,7 @@ export const BRIDGE_CHAINS: Readonly<Record<number, BridgeChain>> = {
     across: {
       spokePool: '0x6f26Bf09B1C792e3228e5467807a900A503c0281',
       periphery: ACROSS_PERIPHERY,
+      previousPeriphery: ACROSS_PREVIOUS_PERIPHERY,
       multicallHandler: ACROSS_HANDLER,
       eventEmitter: ACROSS_EMITTER,
       wrappedNative: OP_WETH,
@@ -308,6 +317,7 @@ export const BRIDGE_CHAINS: Readonly<Record<number, BridgeChain>> = {
     across: {
       spokePool: '0xe35e9842fceaCA96570B734083f4a58e8F7C5f2A',
       periphery: ACROSS_PERIPHERY,
+      previousPeriphery: ACROSS_PREVIOUS_PERIPHERY,
       multicallHandler: ACROSS_HANDLER,
       eventEmitter: ACROSS_EMITTER,
       wrappedNative: '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1',
@@ -332,6 +342,7 @@ export const BRIDGE_CHAINS: Readonly<Record<number, BridgeChain>> = {
     across: {
       spokePool: '0x7E63A5f1a8F0B4d0934B2f2327DAED3F6bb2ee75',
       periphery: ACROSS_PERIPHERY,
+      previousPeriphery: ACROSS_PREVIOUS_PERIPHERY,
       multicallHandler: '0xdF1C940487574EEfa79989a79a4936A0F979cDa2',
       eventEmitter: ACROSS_EMITTER,
       wrappedNative: '0xe5D7C2a44FfDDf6b295A15c148167daaAf5Cf34f',
@@ -355,6 +366,7 @@ export const BRIDGE_CHAINS: Readonly<Record<number, BridgeChain>> = {
     across: {
       spokePool: '0xFE9D541c92E4e90437C7152A00244886dE37a658',
       periphery: ACROSS_PERIPHERY,
+      previousPeriphery: ACROSS_PREVIOUS_PERIPHERY,
       multicallHandler: '0x9610954AcDCA5FF7905f051A040ce33fe613c60e',
       eventEmitter: '0x25b15Fc38d6A2C13FEDdD9cb51f184F7Cf0D4C11',
       wrappedNative: '0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7',
@@ -376,6 +388,7 @@ export const BRIDGE_CHAINS: Readonly<Record<number, BridgeChain>> = {
     across: {
       spokePool: '0x4e8E101924eDE233C13e2D8622DC8aED2872d505',
       periphery: ACROSS_PERIPHERY,
+      previousPeriphery: ACROSS_PREVIOUS_PERIPHERY,
       multicallHandler: ACROSS_HANDLER,
       eventEmitter: ACROSS_EMITTER,
       wrappedNative: '0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c',
@@ -410,6 +423,7 @@ export const BRIDGE_CHAINS: Readonly<Record<number, BridgeChain>> = {
     across: {
       spokePool: '0x9295ee1d8C5b022Be115A2AD3c30C72E34e7F096',
       periphery: ACROSS_PERIPHERY,
+      previousPeriphery: ACROSS_PREVIOUS_PERIPHERY,
       multicallHandler: ACROSS_HANDLER,
       eventEmitter: ACROSS_EMITTER,
       wrappedNative: '0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270',
@@ -431,6 +445,7 @@ export const BRIDGE_CHAINS: Readonly<Record<number, BridgeChain>> = {
     across: {
       spokePool: '0xeF684C38F94F48775959ECf2012D7E864ffb9dd4',
       periphery: ACROSS_PERIPHERY,
+      previousPeriphery: ACROSS_PREVIOUS_PERIPHERY,
       multicallHandler: ACROSS_HANDLER,
       eventEmitter: ACROSS_EMITTER,
       wrappedNative: OP_WETH,
@@ -465,6 +480,7 @@ export const BRIDGE_CHAINS: Readonly<Record<number, BridgeChain>> = {
     across: {
       spokePool: '0xD29C85F15DF544bA632C9E25829fd29d767d7978',
       periphery: ACROSS_PERIPHERY,
+      previousPeriphery: ACROSS_PREVIOUS_PERIPHERY,
       multicallHandler: '0xa8aD2e87E2043711d8BeC77e8BC3E2683C0ab6BD',
       eventEmitter: ACROSS_EMITTER,
       wrappedNative: '0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73',
@@ -491,6 +507,7 @@ export const BRIDGE_CHAINS: Readonly<Record<number, BridgeChain>> = {
     across: {
       spokePool: '0x3baD7AD0728f9917d1Bf08af5782dCbD516cDd96',
       periphery: ACROSS_PERIPHERY,
+      previousPeriphery: ACROSS_PREVIOUS_PERIPHERY,
       multicallHandler: ACROSS_HANDLER,
       eventEmitter: ACROSS_EMITTER,
       wrappedNative: OP_WETH,
@@ -509,7 +526,8 @@ export const BRIDGE_CHAINS: Readonly<Record<number, BridgeChain>> = {
     nativeSymbol: 'USDC',
     across: {
       spokePool: '0x9b4A302A548c7e313c2b74C461db7b84d3074A84',
-      periphery: '0xE791A2669bef779Ff7A4A9CF789F8Ee2CA20a32c',
+      periphery: ACROSS_PERIPHERY,
+      previousPeriphery: '0xE791A2669bef779Ff7A4A9CF789F8Ee2CA20a32c',
       multicallHandler: '0xA07480456C4EbaD7626e4FdF4a180709E238547b',
       eventEmitter: '0x446Fe2Be6a8D90fA89F30f3d0A686aAFfe621237',
       prefundedStore: ACROSS_PREFUNDED_STORE,
@@ -529,6 +547,7 @@ export const BRIDGE_CHAINS: Readonly<Record<number, BridgeChain>> = {
     across: {
       spokePool: '0x09aea4b2242abC8bb4BB78D537A67a245A7bEC64',
       periphery: ACROSS_PERIPHERY,
+      previousPeriphery: ACROSS_PREVIOUS_PERIPHERY,
       multicallHandler: ACROSS_HANDLER,
       eventEmitter: ACROSS_EMITTER,
       wrappedNative: OP_WETH,
@@ -550,6 +569,7 @@ export const BRIDGE_CHAINS: Readonly<Record<number, BridgeChain>> = {
     across: {
       spokePool: '0xd2ecb3afe598b746F8123CaE365a598DA831A449',
       periphery: ACROSS_PERIPHERY,
+      previousPeriphery: ACROSS_PREVIOUS_PERIPHERY,
       multicallHandler: '0xeC41F75c686e376Ab2a4F18bde263ab5822c4511',
       eventEmitter: ACROSS_EMITTER,
       wrappedNative: '0x3bd359C1119dA7Da1D913D1C4D2B7c461115433A',

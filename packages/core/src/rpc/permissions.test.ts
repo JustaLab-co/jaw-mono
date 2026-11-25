@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, test, vi } from 'vitest';
-import { handleGetPermissionsRequest, normalizeRevokePermissionsParams } from './permissions.js';
+import {
+    handleGetPermissionsRequest,
+    normalizeRevokePermissionsParams,
+    type WalletGetPermissionsResponse,
+} from './permissions.js';
 import { fetchRPCRequest } from '../utils/index.js';
 
 vi.mock('../utils/index.js', async (importOriginal) => {
@@ -22,6 +26,29 @@ function sentRequest() {
 describe('handleGetPermissionsRequest', () => {
     beforeEach(() => {
         vi.mocked(fetchRPCRequest).mockClear();
+    });
+
+    test('Given the relay stored a permission with a note, When handled, Then the note comes back with it', async () => {
+        const stored = {
+            permissionId: '0xab',
+            account: ADDRESS,
+            spender: CONNECTED,
+            start: 1700000000,
+            end: 2000000000,
+            salt: '0x1',
+            calls: [],
+            spends: [],
+            chainId: '0x2105',
+        };
+        vi.mocked(fetchRPCRequest).mockResolvedValueOnce([{ ...stored, note: 'Daily DCA into ETH' }, stored]);
+
+        const [withNote, withoutNote] = (await handleGetPermissionsRequest(
+            { method: 'wallet_getPermissions', params: [{ address: ADDRESS }] },
+            'api-key'
+        )) as WalletGetPermissionsResponse;
+
+        expect(withNote.note).toBe('Daily DCA into ETH');
+        expect(withoutNote).not.toHaveProperty('note');
     });
 
     test('Given address and chainId in params, When handled, Then both travel to the relay untouched', async () => {

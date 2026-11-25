@@ -203,6 +203,12 @@ export type WalletGrantPermissionsRequest = {
             address?: Address;
             /** Target chain ID. Defaults to the connected chain. */
             chainId?: string;
+            /**
+             * What the permission is for, in the app's own words, so the user and an agent can
+             * tell later why it exists. Plain text on one line, at most 200 characters once
+             * trimmed. Not signed and not part of the permission hash: it is stored next to it.
+             */
+            note?: string;
             /** Optional capabilities including paymaster service */
             capabilities?: RequestCapabilities;
         },
@@ -240,6 +246,8 @@ export type StorePermissionApiRequest = {
     }>;
     /** Chain ID (hex format) */
     chainId: string;
+    /** What the app that asked for the permission said it is for. Left out when there is none. */
+    note?: string;
 };
 
 /**
@@ -278,6 +286,8 @@ export type WalletGrantPermissionsResponse = {
     permissionId: Hex;
     /** Chain ID in hex format */
     chainId: Hex;
+    /** The note as the relay stored it. Left out when there is none, or the relay did not keep it. */
+    note?: string;
 };
 
 /**
@@ -448,6 +458,74 @@ function resolveCallSelector(call: unknown, index: number): Hex {
     return hasSelector ? (selector as Hex) : computed;
 }
 
+/** The longest note a permission can carry, in UTF-16 code units, once trimmed. */
+const PERMISSION_NOTE_MAX_LENGTH = 200;
+
+/**
+ * Characters a note may not hold. Each hides, reorders or breaks text on a screen, or carries data a
+ * person cannot see while an agent reading the note still gets it. A note is refused rather than
+ * stripped, so what is stored is what the app sent. The relay applies the same rule, and the two
+ * change together. Built on a Unicode property rather than a list, so a new ignorable character is
+ * covered without naming it. The `u` flag reads a surrogate pair as one character, which leaves
+ * `[\uD800-\uDFFF]` matching only half of one. No lookbehind, which older Safari cannot parse.
+ */
+const NOTE_HIDDEN_CHARACTERS = new RegExp(
+    [
+        // Controls (newlines and tabs included) and the line and paragraph separators: one line only.
+        '\\p{Cc}|[\\u2028\\u2029]',
+        // Every default ignorable code point (zero-width and bidi marks, fillers, variation and tag
+        // characters, the byte order mark, ...) except the text and emoji selectors, which are how
+        // an emoji like a red heart is written.
+        '(?![\\uFE0E\\uFE0F])\\p{Default_Ignorable_Code_Point}',
+        // Those two selectors twice in a row carry data; once is the emoji.
+        '[\\uFE0E\\uFE0F]{2,}',
+        // Blank or invisible on screen, but not default ignorable: the blank Braille pattern and the
+        // interlinear annotation marks.
+        '[\\u2800\\uFFF9-\\uFFFB]',
+        // Half of a character, as `.slice(0, 200)` leaves when it cuts an emoji. The relay cannot store
+        // it, and the grant has landed on chain by then.
+        '[\\uD800-\\uDFFF]',
+    ].join('|'),
+    'u'
+);
+
+/** Ordinary spaces (U+0020) around a note dropped, in one pass: a regex retries a long run. */
+function trimSpaces(value: string): string {
+    let start = 0;
+    let end = value.length;
+    while (start < end && value.charCodeAt(start) === 0x20) start++;
+    while (end > start && value.charCodeAt(end - 1) === 0x20) end--;
+    return value.slice(start, end);
+}
+
+/**
+ * The note a grant carries, as hosts show it and the relay stores it: ordinary spaces around it
+ * dropped, and undefined when nothing is left or none was sent. Only U+0020 is trimmed, since
+ * `trim()` would also drop a byte order mark, which the rule refuses.
+ *
+ * Throws -32602 for a note that is not a string, is longer than 200 characters once trimmed, or
+ * holds a character in NOTE_HIDDEN_CHARACTERS.
+ */
+export function normalizePermissionNote(note: unknown): string | undefined {
+    if (note === undefined || note === null) return undefined;
+    if (typeof note !== 'string') {
+        throw standardErrors.rpc.invalidParams(`${GRANT_METHOD}: note must be a string, got ${describeValue(note)}`);
+    }
+    const trimmed = trimSpaces(note);
+    if (trimmed === '') return undefined;
+    if (trimmed.length > PERMISSION_NOTE_MAX_LENGTH) {
+        throw standardErrors.rpc.invalidParams(
+            `${GRANT_METHOD}: note must be at most ${PERMISSION_NOTE_MAX_LENGTH} characters, got ${trimmed.length}`
+        );
+    }
+    if (NOTE_HIDDEN_CHARACTERS.test(trimmed)) {
+        throw standardErrors.rpc.invalidParams(
+            `${GRANT_METHOD}: note must be one line of text with no control, zero-width or bidi characters`
+        );
+    }
+    return trimmed;
+}
+
 /**
  * Refuses a grant whose call checker is not a 20-byte address, or whose call the grant screen
  * could misname (see resolveCallSelector), before any popup or dialog opens. A checker is part of
@@ -455,7 +533,9 @@ function resolveCallSelector(call: unknown, index: number): Hex {
  * it, estimated a fee without it and failed only on Confirm.
  */
 export function checkGrantPermissionsParams(params: unknown): void {
-    const calls = (params as Array<{ permissions?: { calls?: unknown } }> | undefined)?.[0]?.permissions?.calls;
+    const request = (params as Array<{ note?: unknown; permissions?: { calls?: unknown } }> | undefined)?.[0];
+    normalizePermissionNote(request?.note);
+    const calls = request?.permissions?.calls;
     if (!Array.isArray(calls)) return;
     calls.forEach((call, index) => {
         optionalHexAddress(
@@ -507,6 +587,8 @@ export function normalizeRevokePermissionsParams(params: unknown): NormalizedRev
  * transaction. The caller decides what belongs there and in what order; this
  * function only puts the approval last. A single call is still accepted, which
  * is the shape this parameter had when it only ever carried the ERC-20 approval.
+ * @param options.note - What the app says the permission is for. Checked before anything is sent,
+ * stored next to the permission in the relay and returned, but never signed.
  */
 export async function grantPermissions(
     smartAccount: SmartAccount,
@@ -517,8 +599,12 @@ export async function grantPermissions(
     apiKey: string | undefined,
     paymasterUrlOverride?: string,
     paymasterContextOverride?: Record<string, unknown>,
-    prependCalls?: { to: Address; value?: bigint; data?: Hex } | Array<{ to: Address; value?: bigint; data?: Hex }>
+    prependCalls?: { to: Address; value?: bigint; data?: Hex } | Array<{ to: Address; value?: bigint; data?: Hex }>,
+    options: { note?: string } = {}
 ): Promise<WalletGrantPermissionsResponse> {
+    // Checked again here, so keys.jaw.id refuses a note from an SDK without the signer's check.
+    const storedNote = normalizePermissionNote(options.note);
+
     // Derive address and chainId from smart account and chain
     const account = smartAccount.address;
     const chainId = `0x${chain.id.toString(16)}` as Hex;
@@ -543,7 +629,10 @@ export async function grantPermissions(
     // Extract the permission hash from the PermissionApproved event
     const permissionHash = await extractPermissionHashFromTransaction(txHash, chain);
 
-    await storePermissionInRelay(permissionHash, permission, chainId, apiKey);
+    // The note comes back as the relay kept it: a proxy from before notes drops the field, and the
+    // dapp must not be told of a note wallet_getPermissions will never return.
+    const stored = await storePermissionInRelay(permissionHash, permission, chainId, apiKey, storedNote);
+    const keptNote = typeof stored?.note === 'string' && stored.note !== '' ? stored.note : undefined;
 
     // Convert internal Permission to JSON-serializable response format
     const responseCalls: CallPermissionDetail[] = permission.calls.map((call) => ({
@@ -569,6 +658,7 @@ export async function grantPermissions(
         spends: responseSpends,
         permissionId: permissionHash,
         chainId: chainId as Hex,
+        ...(keptNote ? { note: keptNote } : {}),
     };
 }
 
@@ -781,7 +871,8 @@ async function storePermissionInRelay(
     permissionHash: Hex,
     permission: Permission,
     chainId: string,
-    apiKey?: string
+    apiKey?: string,
+    note?: string
 ): Promise<StorePermissionApiResponse> {
     const requestData: StorePermissionApiRequest = {
         permissionId: permissionHash,
@@ -802,6 +893,7 @@ async function storePermissionInRelay(
             multiplier: spend.multiplier,
         })),
         chainId,
+        ...(note ? { note } : {}),
     };
 
     const permissionsBaseUrl = JAW_PROXY_URL;

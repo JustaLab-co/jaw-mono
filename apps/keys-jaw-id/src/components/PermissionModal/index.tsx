@@ -14,9 +14,12 @@ import {
   useSpenderPrefund,
   describeSpenderPrefund,
   toDialogCalls,
+  storedPermissionNote,
+  useGrantNote,
+  grantOptions,
 } from '@jaw.id/ui';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { erc20Abi, type Address } from 'viem';
+import { erc20Abi, getAddress, isAddress, type Address } from 'viem';
 import { getChainNameFromId } from '../../lib/chain-handlers';
 import { useSessionAccount } from '../../hooks';
 import {
@@ -118,6 +121,15 @@ const formatExpiryDate = (timestamp: number): string => {
   });
 };
 
+/**
+ * The one token swaps under the grant may buy, as the requester names it. Shown only, never signed.
+ * `null` is a value that is not an address, which refuses the request rather than hiding the row.
+ */
+const swapDestinationOf = (value: unknown): Address | null | undefined => {
+  if (value === undefined) return undefined;
+  return typeof value === 'string' && isAddress(value) ? getAddress(value) : null;
+};
+
 // Token info cache type
 // `decimals: null` means the token's `decimals()` read failed — kept distinct from a number so a
 // failed read can never be mistaken for 18. See formatSpendAmount.
@@ -200,6 +212,15 @@ export const PermissionModal = ({
   // Check if this is a sponsored transaction (paymaster provided)
   const isSponsored = !!effectivePaymasterUrl;
 
+  // Grant only: the note as the grant will store it; a note that breaks the rule is refused on
+  // open, since an SDK from before notes does not check it first.
+  const requestedNote = (permissionRequest?.params as WalletGrantPermissionsRequest['params'] | undefined)?.[0]?.note;
+  const grantNote = useGrantNote(
+    requestedNote,
+    (reason) => onError?.(new Error(reason), standardErrorCodes.rpc.invalidParams),
+    mode === 'grant' && !!permissionRequest
+  );
+
   // Extract permission details from request (needed before gas estimation for address override)
   const permissionDetails = useMemo(() => {
     if (!permissionRequest) return null;
@@ -222,6 +243,7 @@ export const PermissionModal = ({
         // the account to an address the requester chose, and revoking the
         // permission does not bring it back.
         prefundSpender: grantParams.capabilities?.prefundSpender === true,
+        swapDestination: swapDestinationOf(grantParams.capabilities?.swapDestination),
       };
     } else {
       const params = permissionRequest.params as WalletRevokePermissionsRequest['params'];
@@ -577,13 +599,24 @@ export const PermissionModal = ({
     };
   }, [chain, extractedApiKey, viemChain, walletAddress, permissionDetails?.address, effectivePaymasterUrl]);
 
-  // Token info for spend tokens and for any call target that turns out to be a token.
+  const swapDestination =
+    permissionDetails && 'swapDestination' in permissionDetails ? permissionDetails.swapDestination : undefined;
+
+  // RequestModals passes onError inline, so without the latch every re-render refuses again.
+  const refusedRef = useRef(false);
+  useEffect(() => {
+    if (swapDestination !== null || refusedRef.current) return;
+    refusedRef.current = true;
+    onError?.(new Error('capabilities.swapDestination must be a token address'), standardErrorCodes.rpc.invalidParams);
+  }, [swapDestination, onError]);
+
+  // Token info for spend tokens, the swap destination, and any call target that turns out to be a token.
   useEffect(() => {
     // Bail rather than passing an empty URL down: getPublicClient attaches the chain
     // definition, so an empty URL would resolve to the chain's public RPC instead of the
     // proxy — and it throws, which this fire-and-forget async fn would not catch.
     const rpcUrl = chain?.rpcUrl;
-    if (!chain || !rpcUrl || (spendsData.length === 0 && callsData.length === 0)) {
+    if (!chain || !rpcUrl || (spendsData.length === 0 && callsData.length === 0 && !swapDestination)) {
       setIsLoadingTokenInfo(false);
       return;
     }
@@ -601,6 +634,7 @@ export const PermissionModal = ({
         new Set([
           ...spendsData.map((spend: any) => spend.token as string),
           ...callsData.map((call: any) => call.target as string).filter((t: string) => t && !isWildcard(t)),
+          ...(swapDestination ? [swapDestination] : []),
         ])
       ) as string[];
 
@@ -652,7 +686,7 @@ export const PermissionModal = ({
     };
     // tokenInfoMap is read for its cache but deliberately not a dep — the effect writes it,
     // so listing it would loop. Everything else the body reads is here.
-  }, [chain, spendsData, callsData, viemChain]);
+  }, [chain, spendsData, callsData, swapDestination, viemChain]);
 
   const handleConfirm = useCallback(async () => {
     if (submittingRef.current) return;
@@ -701,7 +735,7 @@ export const PermissionModal = ({
           computedPaymasterUrl,
           computedPaymasterContext,
           permissionDetails.address,
-          prefund ? { prefund } : undefined
+          grantOptions(prefund, grantNote.note)
         );
 
         console.log('Permissions granted:', result);
@@ -754,6 +788,7 @@ export const PermissionModal = ({
     computedPaymasterUrl,
     computedPaymasterContext,
     prefund,
+    grantNote,
   ]);
 
   const handleCancel = useCallback(() => {
@@ -771,8 +806,11 @@ export const PermissionModal = ({
     }
   }, [isProcessing, onError, setSelectedFeeToken]);
 
+  // Refused on open above; nothing to show.
+  if (grantNote.refusal !== undefined) return null;
+
   // Don't render if no permission details
-  if (!permissionDetails) {
+  if (!permissionDetails || swapDestination === null) {
     return null;
   }
 
@@ -783,6 +821,7 @@ export const PermissionModal = ({
         console.log('onOpenChange');
       }}
       mode={mode}
+      note={mode === 'grant' ? grantNote.note : storedPermissionNote(fetchedPermissionData?.note)}
       permissionId={
         mode === 'revoke' && 'permissionId' in permissionDetails ? permissionDetails.permissionId : undefined
       }
@@ -796,6 +835,7 @@ export const PermissionModal = ({
       spends={formattedSpends}
       prefund={mode === 'grant' ? prefundDisplay : undefined}
       prefundLoading={mode === 'grant' && prefundLoading}
+      swapDestination={swapDestination ?? undefined}
       tokenMeta={tokenInfoMap}
       calls={formattedCalls}
       expiryDate={expiryDate}

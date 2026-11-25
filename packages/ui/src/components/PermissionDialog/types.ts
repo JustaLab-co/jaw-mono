@@ -68,11 +68,18 @@ export interface PermissionDialogProps {
   prefund?: SpenderPrefundDisplay | null;
   /** Grant only: the prefund is still being sized, so Confirm waits for it. */
   prefundLoading?: boolean;
+  /** Grant only: the one token the requester says swaps under this permission may buy. */
+  swapDestination?: string;
 
   // Period and expiry
   expiryDate: string; // Formatted expiry date
   /** Formatted grant date (revoke only) — the stored permission's `start`. */
   grantedDate?: string;
+  /**
+   * What the app that asked for the permission said it is for: from the request on grant, as
+   * stored on revoke. Already checked and trimmed by `normalizePermissionNote`. Not signed.
+   */
+  note?: string;
 
   // Network info
   networkName: string;

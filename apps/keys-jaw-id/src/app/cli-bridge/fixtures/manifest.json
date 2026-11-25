@@ -23,6 +23,7 @@
   "rpc-request-array-params.json",
   "rpc-request-lone-object-params.json",
   "rpc-request-lone-string-params.json",
+  "rpc-request-mcp-grant-swap-destination.json",
   "rpc-request-mcp-id.json",
   "rpc-request-mcp-send-calls.json",
   "rpc-request-no-params.json",
