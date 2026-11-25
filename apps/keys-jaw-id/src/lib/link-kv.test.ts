@@ -29,15 +29,15 @@ describe('upstashKv', () => {
     expect(fetcher.mock.calls[0][1]).toMatchObject({ method: 'POST', cache: 'no-store' });
   });
 
-  it('reads and deletes', async () => {
+  it('reads, and replaces keeping the expiry', async () => {
     const fetcher = answering({ result: 'v' }, { result: null }, { result: 1 });
     const kv = upstashKv(URL_, 'tok', fetcher);
 
     expect(await kv.get('link:a')).toBe('v');
     expect(await kv.get('link:b')).toBeNull();
-    await kv.del('link:a');
+    await kv.replace('link:a', 'w');
     expect(sent(fetcher, 0).body).toEqual(['GET', 'link:a']);
-    expect(sent(fetcher, 2).body).toEqual(['DEL', 'link:a']);
+    expect(sent(fetcher, 2).body).toEqual(['SET', 'link:a', 'w', 'XX', 'KEEPTTL']);
   });
 
   it('counts with INCR and EXPIRE in one pipeline', async () => {

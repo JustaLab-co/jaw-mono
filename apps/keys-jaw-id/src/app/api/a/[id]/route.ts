@@ -12,12 +12,13 @@ const MAX_BODY_BYTES = 2048;
 const MAX_BLOB_CHARS = 1024;
 const MAX_TTL_MS = 60 * 60_000;
 const BLOB = /^[A-Za-z0-9_-]+$/;
-const ISO_8601 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
 const WRITES_PER_MINUTE = 300;
 const WRITES_PER_HOUR = 5000;
 const READS_PER_MINUTE = 60;
 
 type Context = { params: Promise<{ id: string }> };
+/** What the store holds under `link:<id>`. A deleted link keeps its key, retired, so its id is never written again. */
+type Entry = { blob: string; expiresAt: number; writer: string } | { retired: true };
 
 const HEADERS = { 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' };
 const answer = (status: number) => new Response(null, { status, headers: HEADERS });
@@ -35,7 +36,10 @@ export async function DELETE(request: Request, { params }: Context) {
   const { id } = await params;
   const status = await withStore(async (kv) => {
     if (await overWriteBudget(kv, writer)) return 429;
-    await kv.del(`link:${id}`);
+    const entry = entryOf(await kv.get(`link:${id}`));
+    if (!entry || 'retired' in entry) return 204;
+    if (entry.writer !== writer) return 403;
+    await kv.replace(`link:${id}`, JSON.stringify({ retired: true } satisfies Entry));
     return 204;
   });
   return logged('DELETE', status, writer);
@@ -47,10 +51,9 @@ export async function GET(request: Request, { params }: Context) {
   const status = await withStore(async (kv) => {
     const minute = Math.floor(Date.now() / 60_000);
     if ((await kv.count(`rl:read:${clientIp(request)}:${minute}`, 120)) > READS_PER_MINUTE) return 429;
-    const stored = await kv.get(`link:${id}`);
-    const entry = stored ? (JSON.parse(stored) as { blob: string; expiresAt: number }) : undefined;
+    const entry = entryOf(await kv.get(`link:${id}`));
     // The store's own expiry may lag, so the deadline is checked again here.
-    if (!entry || entry.expiresAt <= Date.now()) return 404;
+    if (!entry || 'retired' in entry || entry.expiresAt <= Date.now()) return 404;
     blob = entry.blob;
     return 200;
   });
@@ -63,8 +66,7 @@ async function put(request: Request, id: string, writer: string): Promise<number
   if (text === null) return 413;
   const body = parseJson(text);
   const blob = body?.blob;
-  const expiresAt =
-    typeof body?.expiresAt === 'string' && ISO_8601.test(body.expiresAt) ? Date.parse(body.expiresAt) : NaN;
+  const expiresAt = instantOf(body?.expiresAt);
   if (typeof blob === 'string' && blob.length > MAX_BLOB_CHARS) return 413;
   if (!SHORT_LINK_ID.test(id) || typeof blob !== 'string' || !BLOB.test(blob)) return 422;
   const now = Date.now();
@@ -73,7 +75,7 @@ async function put(request: Request, id: string, writer: string): Promise<number
   return withStore(async (kv) => {
     if (await overWriteBudget(kv, writer)) return 429;
     // Create only: a retry with the same body is the same write, anything else would replace a live link.
-    const value = JSON.stringify({ blob, expiresAt });
+    const value = JSON.stringify({ blob, expiresAt, writer } satisfies Entry);
     if (await kv.setIfAbsent(`link:${id}`, value, expiresAt)) return 200;
     return (await kv.get(`link:${id}`)) === value ? 200 : 409;
   });
@@ -88,6 +90,15 @@ async function overWriteBudget(kv: Kv, writer: string): Promise<boolean> {
     kv.count(`rl:${writer}:h:${hour}`, 7200),
   ]);
   return perMinute > WRITES_PER_MINUTE || perHour > WRITES_PER_HOUR;
+}
+
+const entryOf = (stored: string | null) => (stored ? (JSON.parse(stored) as Entry) : undefined);
+
+/** Milliseconds for a UTC timestamp in the exact form `toISOString` writes, so no date rolls over into another. */
+function instantOf(value: unknown): number {
+  if (typeof value !== 'string') return NaN;
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) && new Date(ms).toISOString() === value ? ms : NaN;
 }
 
 async function withStore(work: (kv: Kv) => Promise<number>): Promise<number> {

@@ -28,8 +28,9 @@ function memoryKv() {
     async get(key) {
       return live(key)?.value ?? null;
     },
-    async del(key) {
-      values.delete(key);
+    async replace(key, value) {
+      const entry = live(key);
+      if (entry) entry.value = value;
     },
     async count(key, ttlSeconds) {
       const next = Number(live(key)?.value ?? 0) + 1;
@@ -145,6 +146,8 @@ describe('PUT /api/a/[id]', () => {
     ['an expiresAt more than 60 minutes ahead', ID, body(BLOB, new Date(NOW + 60 * 60_000 + 1).toISOString())],
     ['an expiresAt that is not a date', ID, body(BLOB, 'soon')],
     ['an expiresAt that is not ISO 8601', ID, body(BLOB, String(NOW + 60_000))],
+    ['an expiresAt with an offset instead of Z', ID, body(BLOB, '2026-11-25T12:30:00.000+00:00')],
+    ['an expiresAt on a day the month does not have', ID, body(BLOB, '2026-11-31T00:10:00.000Z')],
     ['a blob that is not base64url', ID, body('not base64url!')],
     ['an empty blob', ID, body('')],
     ['a body without a blob', ID, { expiresAt: IN_30_MIN }],
@@ -262,6 +265,15 @@ describe('GET /api/a/[id]', () => {
     expect((await get(ID)).status).toBe(404);
   });
 
+  it('never writes a deleted id again, with any body', async () => {
+    await put(ID, body());
+    await del(ID);
+    expect((await put(ID, body('B'.repeat(471)))).status).toBe(409);
+    expect((await put(ID, body())).status).toBe(409);
+    expect((await put(ID, body('B'.repeat(471)), { token: STAGING_TOKEN })).status).toBe(409);
+    expect((await get(ID)).status).toBe(404);
+  });
+
   it('answers 429 on the 61st read in a minute from one address, and leaves another address alone', async () => {
     await put(ID, body());
     // The clock moves within the minute, so the window is the minute and not the instant.
@@ -296,6 +308,18 @@ describe('GET /api/a/[id]', () => {
 });
 
 describe('DELETE /api/a/[id]', () => {
+  it("answers 403 for another writer's link and keeps it", async () => {
+    await put(ID, body());
+    expect((await del(ID, STAGING_TOKEN)).status).toBe(403);
+    expect((await get(ID)).status).toBe(200);
+  });
+
+  it('answers 204 again for a link already deleted', async () => {
+    await put(ID, body());
+    await del(ID);
+    expect((await del(ID)).status).toBe(204);
+  });
+
   it('answers 429 once the writer is over its budget, and keeps the blob', async () => {
     await put(ID, body());
     for (let i = 0; i < 299; i++) await del(OTHER_ID);

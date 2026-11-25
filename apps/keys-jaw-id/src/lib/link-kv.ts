@@ -3,7 +3,8 @@ export interface Kv {
   /** Stores `value` only if `key` is absent, until `expiresAtMs`. True when it stored. */
   setIfAbsent(key: string, value: string, expiresAtMs: number): Promise<boolean>;
   get(key: string): Promise<string | null>;
-  del(key: string): Promise<void>;
+  /** Overwrites a value that exists and keeps its expiry. */
+  replace(key: string, value: string): Promise<void>;
   /** Adds one to a counter that disappears `ttlSeconds` after its last use, and returns the new count. */
   count(key: string, ttlSeconds: number): Promise<number>;
 }
@@ -32,7 +33,7 @@ export function upstashKv(url: string, token: string, fetcher: Fetcher = fetch):
     setIfAbsent: async (key, value, expiresAtMs) =>
       (await run(['SET', key, value, 'NX', 'PXAT', String(expiresAtMs)])) === 'OK',
     get: async (key) => ((await run(['GET', key])) as string | null) ?? null,
-    del: async (key) => void (await run(['DEL', key])),
+    replace: async (key, value) => void (await run(['SET', key, value, 'XX', 'KEEPTTL'])),
     async count(key, ttlSeconds) {
       const replies = (await call('/pipeline', [
         ['INCR', key],
