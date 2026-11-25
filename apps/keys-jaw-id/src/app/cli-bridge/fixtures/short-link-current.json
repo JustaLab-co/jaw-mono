@@ -1,0 +1,25 @@
+{
+  "sentBy": ["@jaw-mono/mcp images built after jaw-agent adds short owner links"],
+  "clients": [
+    {
+      "family": "mcp",
+      "versions": "images built after jaw-agent adds short owner links",
+      "current": true
+    }
+  ],
+  "shortLink": {
+    "id": "AQEBAQEBAQEBAQEBAQEBAQ",
+    "key": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+    "blob": "AwMDAwMDAwMDAwMDvt-NCy3OVVOuwDdD6-gnlzrpIzoLlX5ZyDEyrAPeh0D-MmQYkKR1U1wZu-HFYJOMbauQ0fSjnIs29cB1yJJRoOMYDG0ljn3CIIu8HFL87B8KyxY2PJ4bryRj6W1-FZy3WKLif4JWcUtB4T-vAV2eJHy5jGNb4qO1wwFyMeGmFrlz5TFVDZUpwF8Slw5gxG_R6LOlz7e3k_7EZVeEkWtnnx2SRV35yE8goVoR_w3dMu9IhmGog8xNRkkEfFbU3EQzmF11avIKn9m6nsM_0tAyLFxfdKW8hIqAFL761A62YV8VtBcpYAKxlArPNKTKgCPewS7xD0_xSmCRMAozW2ckSFpPPHOIl78U9ew9IS6N3Ie5f_rqyMfSfREbYljB81Sr-3RlP642LsnG2S3rfyf9ksByjl2xzJHkUwlq8BBqn6rH1WoeTMUMrJ0icKoqiF88RQjpQMVWjKxkglo"
+  },
+  "expect": {
+    "opened": {
+      "v": 1,
+      "session": "0b5d1f0e-6c1a-4a0e-9d52-2f6d8c1a7e11",
+      "relay": "wss://relay.example.test",
+      "pk": "3059301306072a8648ce3d020106082a8648ce3d03010703420004ea3b7f166d88227c604e915437649c9e0fe893fd09570322342c6e73fce83b9b1ba974e6bf10c70c5141fb47913e47e89ec177056f8f8291dc69decfa25c719a",
+      "s": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc"
+    },
+    "proof": true
+  }
+}

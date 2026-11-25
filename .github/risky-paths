@@ -5,3 +5,6 @@ packages/ui/src/utils/bridgeCalls/load.ts
 packages/ui/src/hooks/useBridgeContracts.ts
 apps/keys-jaw-id/src/app/cli-bridge/fixtures/**
 apps/keys-jaw-id/src/lib/bridge-frames.ts
+apps/keys-jaw-id/src/app/a/**
+apps/keys-jaw-id/src/app/api/a/**
+apps/keys-jaw-id/src/lib/short-link.ts

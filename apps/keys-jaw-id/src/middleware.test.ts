@@ -90,3 +90,41 @@ describe('all other headers stay identical across routes (regression bar)', () =
     }
   });
 });
+
+describe('/a/[id], the short owner link', () => {
+  const PATH = '/a/AQEBAQEBAQEBAQEBAQEBAQ';
+  const directive = (path: string, name: string) =>
+    cspFor(path)
+      .split(';')
+      .map((d) => d.trim())
+      .find((d) => d.startsWith(name));
+
+  it('has the same connect-src as /cli-bridge, so the relay socket is allowed', () => {
+    expect(directive(PATH, 'connect-src')).toBe(directive('/cli-bridge', 'connect-src'));
+    expect(directive(PATH, 'connect-src')).toContain('wss://relay.jaw.id');
+    expect(directive('/about', 'connect-src')).not.toContain('wss://relay.jaw.id');
+  });
+
+  it('is never embeddable', () => {
+    expect(cspFor(PATH)).toContain("frame-ancestors 'none'");
+    expect(headersFor(PATH).get('X-Frame-Options')).toBe('DENY');
+  });
+
+  it('sends no referrer, is not indexed and is not cached', () => {
+    const headers = headersFor(PATH);
+    expect(headers.get('Referrer-Policy')).toBe('no-referrer');
+    expect(headers.get('X-Robots-Tag')).toBe('noindex');
+    expect(headers.get('Cache-Control')).toBe('no-store');
+  });
+
+  it('sends no referrer from the blob endpoint either', () => {
+    expect(headersFor('/api/a/AQEBAQEBAQEBAQEBAQEBAQ').get('Referrer-Policy')).toBe('no-referrer');
+  });
+
+  it('leaves other routes on the default referrer policy', () => {
+    expect(headersFor('/about').get('Referrer-Policy')).toBe('strict-origin-when-cross-origin');
+    expect(headersFor('/a').get('Referrer-Policy')).toBe('strict-origin-when-cross-origin');
+    expect(headersFor('/cli-bridge').get('X-Robots-Tag')).toBeNull();
+    expect(headersFor('/cli-bridge').get('Cache-Control')).toBeNull();
+  });
+});
