@@ -213,11 +213,11 @@ export function useGasEstimation({
   const [estimatingTokenCosts, setEstimatingTokenCosts] = useState<boolean>(false);
   const [selectedFeeToken, setSelectedFeeToken] = useState<FeeTokenOption | null>(null);
 
-  // A token chosen from outside is the owner's, and the preselection never replaces it.
-  // Resetting to null hands the choice back.
-  const pickedByOwnerRef = useRef(false);
+  // A token chosen from outside is the owner's, and the preselection never replaces it while it
+  // is still the one selected. Resetting to null, or a fallback switching away, hands it back.
+  const ownerPickRef = useRef<string | null>(null);
   const pickFeeToken = useCallback((token: FeeTokenOption | null) => {
-    pickedByOwnerRef.current = token !== null;
+    ownerPickRef.current = token?.address.toLowerCase() ?? null;
     setSelectedFeeToken(token);
   }, []);
 
@@ -253,12 +253,11 @@ export function useGasEstimation({
   );
   const ethEstimatedForRef = useRef<string>('');
 
-  // Track ERC-20 token addresses to re-run estimation when new tokens are added
-  // This is stable when only gasCostFormatted/isSelectable change (preventing infinite loops)
-  const erc20TokenAddresses = useMemo(
+  // Re-run estimation when a token joins the list, the coin included, since the preselection
+  // reads its balance. Stable when only estimates change (preventing infinite loops).
+  const feeTokenAddresses = useMemo(
     () =>
       feeTokens
-        .filter((t) => !t.isNative)
         .map((t) => t.address.toLowerCase())
         .sort()
         .join(','),
@@ -493,18 +492,8 @@ export function useGasEstimation({
       }
     }
     // Note: feeTokens and onFeeTokensUpdate accessed via refs to prevent infinite loops
-    // erc20TokenAddresses triggers re-estimation when new ERC-20 tokens are added (but not when estimates update)
-  }, [
-    account,
-    transactionCalls,
-    chainId,
-    apiKey,
-    isSponsored,
-    permissionId,
-    address,
-    erc20TokenAddresses,
-    ethInputsKey,
-  ]);
+    // feeTokenAddresses triggers re-estimation when tokens are added (but not when estimates update)
+  }, [account, transactionCalls, chainId, apiKey, isSponsored, permissionId, address, feeTokenAddresses, ethInputsKey]);
 
   /** Explicit refetch discards the reuse key so the ETH leg is genuinely re-measured. */
   const forceRefetch = useCallback(() => {
@@ -531,7 +520,7 @@ export function useGasEstimation({
 
     const pick = preselectFeeToken(updatedFeeTokens, parseEther(gasPrice) + sent);
     setGasEstimationError(pick?.isNative ? '' : INSUFFICIENT_FUNDS_ERROR);
-    if (!pickedByOwnerRef.current) setSelectedFeeToken(pick);
+    setSelectedFeeToken((prev) => (prev?.address.toLowerCase() === ownerPickRef.current ? prev : pick));
   }, []);
 
   /**

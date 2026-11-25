@@ -11,7 +11,13 @@ Assumptions:
   its smallest unit, `isSelectable`, and whether its ceiling (`gasCostMaxFormatted`) is set.
 - `need` is the coin fee in wei plus the value the calls send, as `handleEthSuccess` gets it.
   `parseEther` of the fee string is taken as exact, since the string comes from `formatUnits`.
-- React state updates are applied in order; the owner-pick flag is a ref read synchronously.
+- React state updates are applied in order; the owner's pick is a ref read inside the updater.
+- A token is identified by its whole record; production compares lowercased addresses, which
+  name one option each within a list.
+- The AA21 and error handlers are modelled only as `fallback`, a step that may select any
+  token. Which tokens they choose is not modelled here.
+- Which list changes start a new round (`feeTokenAddresses`) is not modelled; the hook test
+  covers a coin-only list arriving after the first estimate.
 - `gasFee` is set on every successful step and is not modelled. The error is a Boolean: true
   for `INSUFFICIENT_FUNDS_ERROR`, false for the empty string.
 -/
@@ -41,21 +47,29 @@ def coinCovers (ts : List Tok) (need : Nat) : Bool :=
 
 structure State where
   sel : Option Tok
-  owner : Bool
+  ownerPick : Option Tok
   err : Bool
 deriving DecidableEq, Repr
 
 /-- useGasEstimation.ts `pickFeeToken`: a token is the owner's pick, null hands it back. -/
 def pickFeeToken (s : State) (t : Option Tok) : State :=
-  { s with sel := t, owner := t.isSome }
+  { s with sel := t, ownerPick := t }
+
+/-- The AA21 and error handlers switching the selection with the raw setter. -/
+def fallback (s : State) (t : Option Tok) : State :=
+  { s with sel := t }
+
+/-- The owner's pick is still the one selected. -/
+def ownerHolds (s : State) : Bool :=
+  s.sel.isSome && s.sel == s.ownerPick
 
 /-- useGasEstimation.ts `handleEthSuccess`. -/
 def handleEthSuccess (s : State) (ts : List Tok) (need : Nat) : State :=
   if ts.isEmpty then { s with err := false }
   else
     let pick := preselectFeeToken ts need
-    { sel := if s.owner then s.sel else pick
-      owner := s.owner
+    { sel := if ownerHolds s then s.sel else pick
+      ownerPick := s.ownerPick
       err := match pick with
         | some p => !p.isNative
         | none => true }
@@ -93,7 +107,7 @@ def coinPreferred (ts : List Tok) (need : Nat) : Bool :=
   !coinCovers ts need || (preselectFeeToken ts need).any (·.isNative)
 
 def errIffCoinShort (ts : List Tok) (need : Nat) : Bool :=
-  ts.isEmpty || ((handleEthSuccess ⟨none, false, false⟩ ts need).err == !coinCovers ts need)
+  ts.isEmpty || ((handleEthSuccess ⟨none, none, false⟩ ts need).err == !coinCovers ts need)
 
 #guard cases.all fun (ts, n) => solvent ts n && member ts n && noneIffNothingPays ts n
 #guard cases.all fun (ts, n) => coinPreferred ts n && errIffCoinShort ts n
@@ -180,25 +194,31 @@ theorem step_err_iff (s : State) (ts : List Tok) (need : Nat) (hne : ts ≠ []) 
     | none => simp
     | some p => simp [proven_not_coin (find_holds hp)]
 
-/-- The owner's pick is never replaced by the preselection. -/
-theorem step_keeps_owner_pick (s : State) (ts : List Tok) (need : Nat) (h : s.owner = true) :
+/-- The owner's pick, while still selected, is never replaced by the preselection. -/
+theorem step_keeps_owner_pick (s : State) (ts : List Tok) (need : Nat) (h : ownerHolds s = true) :
     (handleEthSuccess s ts need).sel = s.sel := by
   unfold handleEthSuccess
   split <;> simp_all
 
-/-- Without an owner pick, a non-empty list leaves the preselection selected. -/
+/-- Without an owner pick still selected, a non-empty list leaves the preselection selected. -/
 theorem step_takes_preselect (s : State) (ts : List Tok) (need : Nat)
-    (h : s.owner = false) (hne : ts ≠ []) :
+    (h : ownerHolds s = false) (hne : ts ≠ []) :
     (handleEthSuccess s ts need).sel = preselectFeeToken ts need := by
   have hempty : ts.isEmpty = false := by cases ts <;> simp_all
   unfold handleEthSuccess
   simp [hempty, h]
 
 /-- A reset to nothing hands the choice back to the preselection. -/
-theorem reset_hands_back (s : State) : (pickFeeToken s none).owner = false := rfl
+theorem reset_hands_back (s : State) : ownerHolds (pickFeeToken s none) = false := rfl
 
-/-- Picking a token marks it as the owner's. -/
-theorem pick_is_owner (s : State) (t : Tok) : (pickFeeToken s (some t)).owner = true := rfl
+/-- Picking a token makes it the owner's pick. -/
+theorem pick_is_owner (s : State) (t : Tok) : ownerHolds (pickFeeToken s (some t)) = true := by
+  simp [pickFeeToken, ownerHolds]
+
+/-- A fallback that switches away from the owner's pick hands the choice back. -/
+theorem fallback_hands_back (s : State) (t : Option Tok) (h : t ≠ s.ownerPick) :
+    ownerHolds (fallback s t) = false := by
+  simp [fallback, ownerHolds, h]
 
 /-! Differential vectors, compared with the production function in feePreselect.test.ts. -/
 

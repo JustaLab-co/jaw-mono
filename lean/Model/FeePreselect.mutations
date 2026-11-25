@@ -15,13 +15,17 @@ mutation fall back to any ERC-20 the balance heuristic marks selectable
 + def provenErc20 (t : Tok) : Bool := !t.isNative && t.selectable
 
 mutation let the preselection replace the owner's pick
--     { sel := if s.owner then s.sel else pick
+-     { sel := if ownerHolds s then s.sel else pick
 +     { sel := pick
 
 mutation report no error while the coin falls short
 -         | some p => !p.isNative
 +         | some _ => false
 
-mutation keep the owner flag after a reset to nothing
--   { s with sel := t, owner := t.isSome }
-+   { s with sel := t, owner := true }
+mutation keep a pick the owner no longer holds after a fallback switched away
+-   s.sel.isSome && s.sel == s.ownerPick
++   s.ownerPick.isSome
+
+mutation treat a reset to nothing as an owner pick
+-   s.sel.isSome && s.sel == s.ownerPick
++   s.sel == s.ownerPick

@@ -112,11 +112,13 @@ function Probe({
   initialTokens,
   initialCalls = CALLS,
   isSponsored = false,
+  permissionId,
 }: {
   account: Account;
   initialTokens: FeeTokenOption[];
   initialCalls?: TransactionCall[];
   isSponsored?: boolean;
+  permissionId?: `0x${string}`;
 }) {
   const [tokens, setTokens] = useState(initialTokens);
   const [calls, setCalls] = useState(initialCalls);
@@ -132,6 +134,7 @@ function Probe({
     apiKey,
     feeTokens: tokens,
     isSponsored,
+    permissionId,
     onFeeTokensUpdate: setTokens,
   });
   return null;
@@ -1232,6 +1235,66 @@ describe('useGasEstimation preselects a fee token the account can pay with', () 
     });
     await settle();
 
+    expect(hook.selectedFeeToken?.isNative).toBe(true);
+  });
+  it('a coin-only list that lands after the first estimate is still checked', async () => {
+    erc20Mock.mockResolvedValue([]);
+    const calc = vi.fn(async () => FEE);
+    await mount(makeAccount(calc), []);
+    expect(hook.gasEstimationError).toBe('');
+
+    await act(async () => setTokensExternally([nativeEth(1n)]));
+    await settle();
+
+    expect(calc).toHaveBeenCalledTimes(1);
+    expect(hook.selectedFeeToken).toBeNull();
+    expect(hook.gasEstimationError).toBe(INSUFFICIENT_FUNDS_ERROR);
+    expect(blockNow()).toBe('funds');
+  });
+
+  it("under a permission the value is the granter's, so the coin only covers the fee", async () => {
+    erc20Mock.mockResolvedValue([usdcEstimate]);
+    root = createRoot(document.createElement('div'));
+    await act(async () => {
+      root!.render(
+        createElement(Probe, {
+          account: passingEth(),
+          initialTokens: [nativeEth(FEE_WEI), token({})],
+          initialCalls: [{ to: RECIPIENT, value: 10n ** 18n }],
+          permissionId: '0x01',
+        })
+      );
+    });
+    await settle();
+
+    expect(hook.selectedFeeToken?.isNative).toBe(true);
+  });
+
+  it("a fallback that replaces the owner's pick hands the choice back", async () => {
+    erc20Mock.mockResolvedValue([usdcEstimate]);
+    const outcomes: Array<() => Promise<string>> = [
+      async () => FEE,
+      async () => {
+        throw new Error("UserOperation reverted during simulation: AA21 didn't pay prefund");
+      },
+      async () => FEE,
+    ];
+    await mount(
+      makeAccount(() => outcomes.shift()!()),
+      [nativeEth(10n ** 18n), token({})]
+    );
+    act(() => hook.setSelectedFeeToken(tokensNow.find((t) => t.isNative)!));
+
+    await act(async () => {
+      hook.refetch();
+    });
+    await settle();
+    expect(hook.selectedFeeToken?.symbol).toBe('USDC');
+
+    await act(async () => {
+      hook.refetch();
+    });
+    await settle();
     expect(hook.selectedFeeToken?.isNative).toBe(true);
   });
 });
