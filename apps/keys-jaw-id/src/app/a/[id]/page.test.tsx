@@ -48,9 +48,10 @@ function serve(answer: () => Response) {
   );
 }
 
-async function open(hash: string) {
+/** Renders the page at the current address; a new `mount` remounts it, as a reload does. */
+async function open(hash: string, mount = 'first') {
   window.location.hash = hash;
-  await act(async () => root.render(<ShortLinkPage />));
+  await act(async () => root.render(<ShortLinkPage key={mount} />));
 }
 
 describe('/a/[id]', () => {
@@ -84,6 +85,30 @@ describe('/a/[id]', () => {
     await vi.waitFor(() => expect(host.textContent).toContain('This link is damaged or has expired'));
 
     expect(FakeSocket.all).toHaveLength(0);
+  });
+
+  it('given the tab opened the link before, when it reloads without the key after the request ended, then it shows the request as done', async () => {
+    serve(() => new Response(JSON.stringify({ blob })));
+    await open(key);
+    await vi.waitFor(() => expect(FakeSocket.all).toHaveLength(1));
+    sessionStorage.setItem(`cli-bridge-ended:${session}`, '1');
+
+    await open('', 'reloaded');
+
+    await vi.waitFor(() => expect(host.textContent).toContain('Done'));
+    expect(host.textContent).not.toContain('damaged');
+    expect(FakeSocket.all).toHaveLength(1);
+  });
+
+  it('given the tab opened the link before, when it reloads without the key mid-request, then it says the tab lost its link', async () => {
+    serve(() => new Response(JSON.stringify({ blob })));
+    await open(key);
+    await vi.waitFor(() => expect(FakeSocket.all).toHaveLength(1));
+
+    await open('', 'reloaded');
+
+    await vi.waitFor(() => expect(host.textContent).toContain('This tab lost its link'));
+    expect(FakeSocket.all).toHaveLength(1);
   });
 
   it('shows the damaged state without a request when the fragment is gone, as after a reload', async () => {

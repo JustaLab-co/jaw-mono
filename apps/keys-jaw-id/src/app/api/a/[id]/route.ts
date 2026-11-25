@@ -34,6 +34,8 @@ export async function DELETE(request: Request, { params }: Context) {
   const writer = writerOf(request);
   if (!writer) return logged('DELETE', 401, null);
   const { id } = await params;
+  // An id no writer could have stored costs no store call.
+  if (!SHORT_LINK_ID.test(id)) return logged('DELETE', 204, writer);
   const status = await withStore(async (kv) => {
     if (await overWriteBudget(kv, writer)) return 429;
     const entry = entryOf(await kv.get(`link:${id}`));
@@ -47,6 +49,7 @@ export async function DELETE(request: Request, { params }: Context) {
 
 export async function GET(request: Request, { params }: Context) {
   const { id } = await params;
+  if (!SHORT_LINK_ID.test(id)) return answer(404);
   let blob: string | undefined;
   const status = await withStore(async (kv) => {
     const minute = Math.floor(Date.now() / 60_000);

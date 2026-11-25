@@ -19,8 +19,14 @@ export default function ShortLinkPage() {
   useEffect(() => {
     const key = (keyRef.current ??= window.location.hash.slice(1));
     window.history.replaceState(null, '', window.location.pathname);
+    // A reload has no key. A tab that opened this link before hands the bridge its session with no key, so the
+    // bridge says the request is done, or that the tab lost its link, as it does for a long link.
+    if (!key) return setOpened(seenIn(id) ?? 'damaged');
     let live = true;
-    openShortLink(id, key).then((link) => live && setOpened(link ?? 'damaged'));
+    openShortLink(id, key).then((link) => {
+      if (link) remember(id, link);
+      if (live) setOpened(link ?? 'damaged');
+    });
     return () => {
       live = false;
     };
@@ -36,6 +42,26 @@ export default function ShortLinkPage() {
     );
   }
   return <CLIBridge opened={opened} />;
+}
+
+const SEEN_KEY = 'short-link-seen:';
+
+/** Keeps the session and relay of a link this tab opened, never its key or its secret. */
+function remember(id: string, { session, relay }: OpenedLink) {
+  try {
+    sessionStorage.setItem(SEEN_KEY + id, JSON.stringify({ session, relay }));
+  } catch {
+    // Storage can be blocked; a reload then says the link is damaged.
+  }
+}
+
+function seenIn(id: string): OpenedLink | undefined {
+  try {
+    const seen = JSON.parse(sessionStorage.getItem(SEEN_KEY + id) ?? 'null');
+    return seen ? { session: seen.session, relay: seen.relay, fragment: '' } : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function Screen({ children }: { children: React.ReactNode }) {

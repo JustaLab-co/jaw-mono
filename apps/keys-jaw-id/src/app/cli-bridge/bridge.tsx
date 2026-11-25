@@ -22,7 +22,7 @@ import {
 } from '@jaw.id/core';
 
 /**
- * CLI Bridge Page — Relay Mode
+ * CLI Bridge Page, relay mode
  *
  * Connects to the cloud relay (wss://relay.jaw.id) instead of a local daemon.
  * All messages are E2E encrypted via ECDH + AES-256-GCM.
@@ -251,7 +251,7 @@ function CLIBridgeContent({ opened }: { opened?: OpenedLink }) {
 
         ws.onopen = () => {
           if (cancelled) return;
-          // Send key_exchange (unencrypted — contains only our public key)
+          // Send key_exchange, unencrypted: it carries only our public key
           ws!.send(
             JSON.stringify({
               type: 'key_exchange',

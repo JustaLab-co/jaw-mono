@@ -251,6 +251,16 @@ describe('GET /api/a/[id]', () => {
     expect((await get('nope')).status).toBe(404);
   });
 
+  it('spends no store call on an id no writer could have stored', async () => {
+    kv.current = {
+      ...store,
+      count: () => Promise.reject(new Error('called')),
+      get: () => Promise.reject(new Error('called')),
+    };
+    expect((await get('x'.repeat(2000))).status).toBe(404);
+    expect((await del('../../etc')).status).toBe(204);
+  });
+
   it('answers 404 after expiresAt even while the store still holds the key', async () => {
     await put(ID, body());
     const stored = store.values.get(`link:${ID}`);
