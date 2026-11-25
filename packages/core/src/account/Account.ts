@@ -1,5 +1,5 @@
 import type { Address, Hash, Hex, TypedDataDefinition, TypedData, LocalAccount } from 'viem';
-import { isHex, encodeFunctionData, erc20Abi, createPublicClient, numberToHex } from 'viem';
+import { isHex, encodeFunctionData, erc20Abi, createPublicClient, numberToHex, maxUint256 } from 'viem';
 import { toWebAuthnAccount, type SmartAccount } from 'viem/account-abstraction';
 import {
     createSmartAccount,
@@ -57,7 +57,7 @@ import {
     type CallPermissionDetail,
     type SpendPermissionDetail,
 } from '../rpc/permissions.js';
-import { JAW_RPC_URL, JAW_PAYMASTER_URL, jawPaymasterUrl, ERC20_PAYMASTER_ADDRESS } from '../constants.js';
+import { JAW_RPC_URL, JAW_PAYMASTER_URL, jawPaymasterUrl } from '../constants.js';
 import { type Chain, chains as chainStore, dropChainClients } from '../store/index.js';
 import { logAccountIssuance } from '../analytics/index.js';
 
@@ -1582,7 +1582,7 @@ export class Account {
      * pairing is applied in `getBundlerClient`, since leaving it here alone would
      * let a `context: undefined` passed downstream fall back to the chain again.
      *
-     * `gas` is deliberately left on the returned context: it sizes the approval.
+     * `gas` is deliberately left on the returned context: it caps the approval.
      * `createPaymasterFunctions` strips it before anything goes on the wire.
      * @internal
      */
@@ -1615,120 +1615,95 @@ export class Account {
     ): Promise<{ to: Address; value?: bigint; data: Hex } | null> {
         const account = smartAccount ?? this._smartAccount;
         // Only add approval if using JAW ERC-20 paymaster
-        if (!Account.isJawErc20Paymaster(paymasterUrl)) {
+        if (!paymasterUrl || !Account.isJawErc20Paymaster(paymasterUrl)) {
             return null;
         }
 
-        // Extract token address and gas amount from context
-        const tokenAddress = paymasterContext?.token as string | undefined;
-        let gasAmount = paymasterContext?.gas as string | bigint | undefined;
-        // Who the allowance is for. The quote names it; the constant is the
-        // fallback for the path where `gas` came in the context and no quote is
-        // fetched. Approving one address and being charged by another leaves the
-        // paymaster unable to settle just the same.
-        let spender = ERC20_PAYMASTER_ADDRESS as Address;
-
-        if (!tokenAddress) {
+        const tokenAddress = paymasterContext?.token as Address | undefined;
+        const callerGas = paymasterContext?.gas as string | bigint | undefined;
+        const batch = calls ?? [];
+        if (!tokenAddress || batch.length === 0) {
             return null;
         }
 
-        // If gasAmount is undefined, estimate it using the paymaster
-        if (gasAmount === undefined && paymasterUrl && calls && calls.length > 0) {
-            try {
-                const { fetchTokenQuotes, calculateTokenCostFromGas } = await import('./erc20Paymaster.js');
-                const { getBundlerClient, prepareCallsForExecution } = await import('./smartAccount.js');
-
-                // Get token quote for exchange rate
-                const quotes = await fetchTokenQuotes(paymasterUrl, this._chain.id, [tokenAddress as Address]);
-
-                if (quotes.length === 0) {
-                    // No quote is no size. Carrying on would put the userOp in
-                    // front of the paymaster with no allowance behind it, which
-                    // is the same failure a thrown estimate produces.
-                    throw new Error('the paymaster returned no quote for it');
-                }
-
-                // Get paymaster address from quote
-                const paymasterAddress = quotes[0].paymasterAddress;
-                spender = paymasterAddress;
-
-                // Create a dummy approval call for estimation
-                // Use MaxUint256 for approval - amount doesn't affect gas estimation
-                const MaxUint256 = BigInt('0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff');
-                const dummyApprovalCall = {
-                    to: tokenAddress as Address,
-                    value: 0n,
-                    data: encodeFunctionData({
-                        abi: erc20Abi,
-                        functionName: 'approve',
-                        args: [paymasterAddress, MaxUint256],
-                    }),
-                };
-
-                // Include dummy approval in estimation to get accurate gas limits,
-                // and let the send's own preparation add what it would add: on a
-                // 7702 account not yet owning the permission manager that is an
-                // extra owner-setup call, whose gas the ceiling has to cover too.
-                const { calls: callsWithApproval, authorization } = await prepareCallsForExecution(
-                    account,
-                    [dummyApprovalCall, ...calls],
-                    this._chain,
-                    localAccount
-                );
-
-                // Prepare a UserOp to get gas estimates
-                const bundlerClient = getBundlerClient(this._chain, paymasterUrl, { token: tokenAddress });
-
-                const userOp = await bundlerClient.prepareUserOperation({
-                    account,
-                    calls: callsWithApproval,
-                    ...(authorization ? { authorization } : {}),
-                });
-
-                // Extract gas fields
-                const gas = {
-                    preVerificationGas: userOp.preVerificationGas,
-                    verificationGasLimit: userOp.verificationGasLimit,
-                    callGasLimit: userOp.callGasLimit,
-                    paymasterVerificationGasLimit:
-                        'paymasterVerificationGasLimit' in userOp
-                            ? (userOp as { paymasterVerificationGasLimit?: bigint }).paymasterVerificationGasLimit
-                            : undefined,
-                    paymasterPostOpGasLimit:
-                        'paymasterPostOpGasLimit' in userOp
-                            ? (userOp as { paymasterPostOpGasLimit?: bigint }).paymasterPostOpGasLimit
-                            : undefined,
-                    maxFeePerGas: userOp.maxFeePerGas,
-                    maxPriorityFeePerGas: userOp.maxPriorityFeePerGas,
-                };
-
-                // Calculate token cost
-                const tokenCost = calculateTokenCostFromGas(gas, quotes[0]);
-                gasAmount = tokenCost;
-            } catch (error) {
-                // Returning null here would leave the userOp on its way to the
-                // ERC-20 paymaster with no approval behind it — the exact failure
-                // this path exists to prevent, and one that resurfaces as a
-                // generic on-chain refusal naming none of this. Only the JAW
-                // ERC-20 paymaster reaches here, and it cannot settle without an
-                // allowance, so there is no send worth attempting.
-                throw new Error(
-                    `Could not size the ERC-20 paymaster approval for token ${tokenAddress} on chain ${this._chain.id}: ` +
-                        `${error instanceof Error ? error.message : String(error)}. ` +
-                        'Pass `gas` in the paymaster context to size the approval yourself, ' +
-                        'or send without the ERC-20 paymaster.',
-                    { cause: error }
-                );
+        // Both the spender and the ceiling come from a quote and an estimate
+        // made here, even when the context brings `gas`: the context is written
+        // by the caller. Approving one address while another one charges leaves
+        // the paymaster unable to settle.
+        let spender: Address;
+        let requiredAmount: bigint;
+        try {
+            const { fetchTokenQuotes, calculateTokenCostFromGas, withApprovalMargin } = await import(
+                './erc20Paymaster.js'
+            );
+            const quotes = await fetchTokenQuotes(paymasterUrl, this._chain.id, [tokenAddress]);
+            if (quotes.length === 0) {
+                throw new Error('the paymaster returned no quote for it');
             }
-        }
+            spender = quotes[0].paymasterAddress;
 
-        if (gasAmount === undefined) {
-            // If we still don't have gasAmount after estimation attempt, skip approval
-            return null;
-        }
+            const { getBundlerClient, prepareCallsForExecution } = await import('./smartAccount.js');
 
-        const { withApprovalMargin } = await import('./erc20Paymaster.js');
-        const requiredAmount = withApprovalMargin(BigInt(gasAmount));
+            // Approval amount does not change the gas an approve costs.
+            const dummyApprovalCall = {
+                to: tokenAddress,
+                value: 0n,
+                data: encodeFunctionData({
+                    abi: erc20Abi,
+                    functionName: 'approve',
+                    args: [spender, maxUint256],
+                }),
+            };
+
+            // Let the send's own preparation add what it would add: on a
+            // 7702 account not yet owning the permission manager that is an
+            // extra owner-setup call, whose gas the ceiling has to cover too.
+            const { calls: callsWithApproval, authorization } = await prepareCallsForExecution(
+                account,
+                [dummyApprovalCall, ...batch],
+                this._chain,
+                localAccount
+            );
+
+            const bundlerClient = getBundlerClient(this._chain, paymasterUrl, { token: tokenAddress });
+            const userOp = await bundlerClient.prepareUserOperation({
+                account,
+                calls: callsWithApproval,
+                ...(authorization ? { authorization } : {}),
+            });
+
+            const gas = {
+                preVerificationGas: userOp.preVerificationGas,
+                verificationGasLimit: userOp.verificationGasLimit,
+                callGasLimit: userOp.callGasLimit,
+                paymasterVerificationGasLimit:
+                    'paymasterVerificationGasLimit' in userOp
+                        ? (userOp as { paymasterVerificationGasLimit?: bigint }).paymasterVerificationGasLimit
+                        : undefined,
+                paymasterPostOpGasLimit:
+                    'paymasterPostOpGasLimit' in userOp
+                        ? (userOp as { paymasterPostOpGasLimit?: bigint }).paymasterPostOpGasLimit
+                        : undefined,
+                maxFeePerGas: userOp.maxFeePerGas,
+                maxPriorityFeePerGas: userOp.maxPriorityFeePerGas,
+            };
+            const ceiling = calculateTokenCostFromGas(gas, quotes[0]);
+
+            // A context `gas` is the ceiling the caller quoted. The approve is
+            // capped at it and at this estimate; with no `gas`, only the
+            // estimate caps it. The approval margin is added after this cap.
+            const shown = callerGas === undefined ? ceiling : BigInt(callerGas);
+            requiredAmount = withApprovalMargin(shown < ceiling ? shown : ceiling);
+        } catch (error) {
+            // Only the JAW ERC-20 paymaster reaches here, and it cannot settle
+            // without an allowance, so there is no send worth attempting.
+            throw new Error(
+                `Could not size the ERC-20 paymaster approval for token ${tokenAddress} on chain ${this._chain.id}: ` +
+                    `${error instanceof Error ? error.message : String(error)}. ` +
+                    'Retry, or send without the ERC-20 paymaster.',
+                { cause: error }
+            );
+        }
 
         // Check current allowance
         const publicClient = createPublicClient({
