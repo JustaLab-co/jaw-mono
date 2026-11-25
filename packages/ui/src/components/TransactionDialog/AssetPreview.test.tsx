@@ -597,6 +597,13 @@ describe('AssetPreview bridge views and the simulated receive side', () => {
     expect(out.includes(NOTE)).toBe(paysOut);
   });
 
+  it('a same-chain swap that pays out 1 base unit of pinned USDC whose decimals the simulation could not read', () => {
+    const usdcIn = mapAssetChanges([{ token: { address: BASE_PINNED.USDC }, value: { pre: 0n, post: 1n, diff: 1n } }]);
+    const out = html({ assetsOut: [ethOut], assetsIn: usdcIn, bridge: ethSwap, simulated: true, ...onBase });
+    expect(getSide(out)).toContain('The simulation sees no verified asset arriving.');
+    expect(out).not.toContain(NOTE);
+  });
+
   it('a same-chain swap that pays out a pinned token shows it priced, marked as not guaranteed', async () => {
     prices.fetch.mockImplementation(async (s) => (s === 'USDC' ? 1 : 0));
     const usdcIn = {

@@ -435,9 +435,11 @@ export const AssetPreview = ({
   // A simulated token names itself, so it is priced only at an address the table pins, by the
   // table's symbol. On the generic screen any other token's symbol is still looked up, to say why
   // its price is not shown.
+  const pinnedAt = (address: string) =>
+    contracts && chainId !== undefined ? pinnedToken(contracts, chainId, address) : undefined;
   const pinnedOrUnverified = (d: AssetDelta): AssetDelta => {
     if (d.isNative) return d;
-    const pinned = contracts && chainId !== undefined ? pinnedToken(contracts, chainId, d.address) : undefined;
+    const pinned = pinnedAt(d.address);
     return pinned ? { ...d, symbol: pinned.symbol } : { ...d, unverified: true };
   };
 
@@ -463,8 +465,11 @@ export const AssetPreview = ({
     bridgeIn = assetsIn.map((d) => (d.isNative ? { ...d, symbol: nativeSymbol } : pinnedOrUnverified(d)));
   // Only the native coin or a pinned token past dust counts as the swap paying out. A token at any
   // other address can report itself as anything, and a reverted batch pays nothing either way.
+  // The floor is in the table's decimals, since the simulation may not have read them.
   const paysOut = bridgeIn.some((d) =>
-    d.isNative ? d.diff >= NATIVE_DUST : !d.unverified && d.diff >= tokenDust(d.decimals)
+    d.isNative
+      ? d.diff >= NATIVE_DUST
+      : !d.unverified && d.diff >= tokenDust(pinnedAt(d.address)?.decimals ?? d.decimals)
   );
   const nothingArrives = !!bridge?.sameChain && !!simulated && !willRevert && !error && !paysOut;
 
