@@ -1,0 +1,27 @@
+# Mutations for mutate.py. Each one swaps a piece of FeePreselect.lean for a
+# plausible bug. The text after `- ` must occur exactly once in the model;
+# `+ ` lines replace it.
+
+mutation open on the coin whenever it is listed, the bug ENGR-1521 fixes
+-   | some c => if need ≤ c.balance then some c else ts.find? provenErc20
++   | some c => some c
+
+mutation compare the coin balance strictly
+-   | some c => if need ≤ c.balance then some c else ts.find? provenErc20
++   | some c => if need < c.balance then some c else ts.find? provenErc20
+
+mutation fall back to any ERC-20 the balance heuristic marks selectable
+- def provenErc20 (t : Tok) : Bool := !t.isNative && t.selectable && t.priced
++ def provenErc20 (t : Tok) : Bool := !t.isNative && t.selectable
+
+mutation let the preselection replace the owner's pick
+-     { sel := if s.owner then s.sel else pick
++     { sel := pick
+
+mutation report no error while the coin falls short
+-         | some p => !p.isNative
++         | some _ => false
+
+mutation keep the owner flag after a reset to nothing
+-   { s with sel := t, owner := t.isSome }
++   { s with sel := t, owner := true }

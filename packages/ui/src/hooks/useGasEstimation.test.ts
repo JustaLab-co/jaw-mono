@@ -26,7 +26,7 @@ import { Erc20EstimationError, estimateErc20PaymasterCosts } from '@jaw.id/core'
 import type { Account } from '@jaw.id/core';
 import { useGasEstimation, type UseGasEstimationResult, type TransactionCall } from './useGasEstimation';
 import type { FeeTokenOption } from '../components/FeeTokenSelector';
-import { resolveFeeBlock } from '../utils/transactionFailure';
+import { INSUFFICIENT_FUNDS_ERROR, resolveFeeBlock } from '../utils/transactionFailure';
 
 const erc20Mock = vi.mocked(estimateErc20PaymasterCosts);
 
@@ -1113,5 +1113,125 @@ describe('useGasEstimation fee-token outcome per ERC-20 result', () => {
       expect(usdcNow().estimationFailure).toBe(failed ? 'execution reverted' : undefined);
       expect(usdcNow().isSelectable).toBe(!failed);
     });
+  });
+});
+
+// ENGR-1521: the coin estimate passing says nothing about whether the coin balance covers the
+// fee, so the preselection compares balances to fees instead of trusting a balance above zero.
+describe('useGasEstimation preselects a fee token the account can pay with', () => {
+  const FEE = '0.0002';
+  const FEE_WEI = 200_000_000_000_000n;
+  const passingEth = () => makeAccount(async () => FEE);
+  const unaffordable = { ...usdcEstimate, hasSufficientBalance: false };
+
+  it('dust coin and enough USDC: opens on USDC', async () => {
+    erc20Mock.mockResolvedValue([usdcEstimate]);
+    await mount(passingEth(), [nativeEth(FEE_WEI - 1n), token({})]);
+
+    expect(hook.selectedFeeToken?.symbol).toBe('USDC');
+    expect(hook.isPayingWithErc20).toBe(true);
+    // The coin's shortfall stays recorded, so picking the coin by hand blocks on funds.
+    expect(hook.gasEstimationError).toBe(INSUFFICIENT_FUNDS_ERROR);
+    expect(hook.gasFee).toBe(FEE);
+    expect(blockNow()).toBeNull();
+
+    act(() => hook.setSelectedFeeToken(tokensNow.find((t) => t.isNative)!));
+    expect(blockNow()).toBe('funds');
+  });
+
+  it('a coin balance exactly at the fee covers it', async () => {
+    erc20Mock.mockResolvedValue([usdcEstimate]);
+    await mount(passingEth(), [nativeEth(FEE_WEI), token({})]);
+
+    expect(hook.selectedFeeToken?.isNative).toBe(true);
+  });
+
+  it('enough coin: opens on the coin even with USDC available', async () => {
+    erc20Mock.mockResolvedValue([usdcEstimate]);
+    await mount(passingEth(), [nativeEth(10n ** 18n), token({})]);
+
+    expect(hook.selectedFeeToken?.isNative).toBe(true);
+    expect(hook.gasEstimationError).toBe('');
+  });
+
+  it('no coin in the list (an empty coin is dropped) and enough USDC: opens on USDC', async () => {
+    erc20Mock.mockResolvedValue([usdcEstimate]);
+    await mount(passingEth(), [token({})]);
+
+    expect(hook.selectedFeeToken?.symbol).toBe('USDC');
+  });
+
+  it('skips a token the paymaster could not prove for the next one that it did', async () => {
+    erc20Mock.mockResolvedValue([unaffordable, usdtEstimate]);
+    await mount(passingEth(), [nativeEth(1n), token({}), token({ symbol: 'USDT', address: USDT })]);
+
+    expect(hook.selectedFeeToken?.symbol).toBe('USDT');
+  });
+
+  it('neither covers: insufficient funds and no preselection', async () => {
+    erc20Mock.mockResolvedValue([unaffordable]);
+    await mount(passingEth(), [nativeEth(1n), token({})]);
+
+    expect(hook.selectedFeeToken).toBeNull();
+    expect(hook.gasEstimationError).toBe(INSUFFICIENT_FUNDS_ERROR);
+    expect(blockNow()).toBe('funds');
+  });
+
+  it('a coin that covers the fee but not the value sent with it does not pay', async () => {
+    erc20Mock.mockResolvedValue([usdcEstimate]);
+    const send: TransactionCall[] = [{ to: RECIPIENT, value: 10n ** 18n }];
+    await mount(passingEth(), [nativeEth(10n ** 18n), token({})], send);
+
+    expect(hook.selectedFeeToken?.symbol).toBe('USDC');
+  });
+
+  it('an empty list (fee tokens unsupported) keeps paying in the coin, with no error', async () => {
+    await mount(passingEth(), []);
+
+    expect(hook.selectedFeeToken).toBeNull();
+    expect(hook.gasEstimationError).toBe('');
+    expect(hook.gasFee).toBe(FEE);
+  });
+
+  it('re-decides its own pick when the real call costs more than the coin holds', async () => {
+    erc20Mock.mockResolvedValue([usdcEstimate]);
+    const fees = ['0.0001', '0.0003'];
+    const calc = vi.fn(async () => fees.shift()!);
+    await mount(makeAccount(calc), [nativeEth(FEE_WEI), token({})], []);
+    expect(hook.selectedFeeToken?.isNative).toBe(true);
+
+    await act(async () => setCallsExternally(CALLS));
+    await settle();
+
+    expect(hook.gasFee).toBe('0.0003');
+    expect(hook.selectedFeeToken?.symbol).toBe('USDC');
+  });
+
+  it("keeps the owner's pick across a re-estimate", async () => {
+    erc20Mock.mockResolvedValue([usdcEstimate]);
+    await mount(passingEth(), [nativeEth(10n ** 18n), token({})]);
+    expect(hook.selectedFeeToken?.isNative).toBe(true);
+
+    act(() => hook.setSelectedFeeToken(tokensNow.find((t) => !t.isNative)!));
+    await act(async () => {
+      hook.refetch();
+    });
+    await settle();
+
+    expect(hook.selectedFeeToken?.symbol).toBe('USDC');
+  });
+
+  it('a reset to nothing hands the choice back to the preselection', async () => {
+    erc20Mock.mockResolvedValue([usdcEstimate]);
+    await mount(passingEth(), [nativeEth(10n ** 18n), token({})]);
+
+    act(() => hook.setSelectedFeeToken(tokensNow.find((t) => !t.isNative)!));
+    act(() => hook.setSelectedFeeToken(null));
+    await act(async () => {
+      hook.refetch();
+    });
+    await settle();
+
+    expect(hook.selectedFeeToken?.isNative).toBe(true);
   });
 });
