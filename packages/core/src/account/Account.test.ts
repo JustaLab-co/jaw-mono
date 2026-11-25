@@ -27,10 +27,10 @@ vi.mock('../passkey-manager/index.js', async (importOriginal) => {
     };
 });
 
-vi.mock('./erc20Paymaster.js', () => ({
-    fetchTokenQuotes: vi.fn(),
-    calculateTokenCostFromGas: vi.fn(),
-}));
+vi.mock('./erc20Paymaster.js', async (importOriginal) => {
+    const { withApprovalMargin } = await importOriginal<typeof import('./erc20Paymaster.js')>();
+    return { fetchTokenQuotes: vi.fn(), calculateTokenCostFromGas: vi.fn(), withApprovalMargin };
+});
 
 vi.mock('./smartAccount.js', () => ({
     createSmartAccount: vi.fn(),
@@ -1368,6 +1368,8 @@ describe('Account — ERC-20 paymaster approval', () => {
     };
     // `calculateTokenCostFromGas` is mocked to this, so the approve is assertable.
     const CEILING = 1_500_000n;
+    // The approve carries a quarter on top of the ceiling.
+    const APPROVED = 1_875_000n;
 
     const expectedApproval = () => ({
         to: USDC,
@@ -1375,7 +1377,7 @@ describe('Account — ERC-20 paymaster approval', () => {
         data: encodeFunctionData({
             abi: erc20Abi,
             functionName: 'approve',
-            args: [ERC20_PAYMASTER_ADDRESS as `0x${string}`, CEILING],
+            args: [ERC20_PAYMASTER_ADDRESS as `0x${string}`, APPROVED],
         }),
     });
 
@@ -1575,9 +1577,40 @@ describe('Account — ERC-20 paymaster approval', () => {
             data: encodeFunctionData({
                 abi: erc20Abi,
                 functionName: 'approve',
-                args: [OTHER_PAYMASTER, CEILING],
+                args: [OTHER_PAYMASTER, APPROVED],
             }),
         });
+    });
+
+    // The paymaster refuses an op whose allowance is under the max fee it
+    // computes at signing, and that fee moves after the estimate.
+    it('approves again when the allowance covers the ceiling but not the margin', async () => {
+        vi.mocked(createPublicClient).mockReturnValue({ readContract: vi.fn().mockResolvedValue(CEILING) } as never);
+        const { sendCalls } = await import('./smartAccount.js');
+        const account = await makeAccount();
+
+        await account.sendCalls([{ to: RECIPIENT }]);
+
+        expect(vi.mocked(sendCalls).mock.calls[0][1][0]).toEqual(expectedApproval());
+    });
+
+    it('skips the approve when the allowance already covers the margin', async () => {
+        vi.mocked(createPublicClient).mockReturnValue({ readContract: vi.fn().mockResolvedValue(APPROVED) } as never);
+        const { sendCalls } = await import('./smartAccount.js');
+        const account = await makeAccount();
+
+        await account.sendCalls([{ to: RECIPIENT }]);
+
+        expect(vi.mocked(sendCalls).mock.calls[0][1]).toEqual([{ to: RECIPIENT, value: undefined, data: undefined }]);
+    });
+
+    it('puts the margin on a gas the caller passes, once', async () => {
+        const { sendCalls } = await import('./smartAccount.js');
+        const account = await makeAccount();
+
+        await account.sendCalls([{ to: RECIPIENT }], undefined, PAYMASTER_URL, { token: USDC, gas: String(CEILING) });
+
+        expect(vi.mocked(sendCalls).mock.calls[0][1][0]).toEqual(expectedApproval());
     });
 
     it('sizes over what the send prepares, owner setup included', async () => {

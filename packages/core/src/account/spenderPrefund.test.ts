@@ -352,8 +352,22 @@ describe('checkSpenderPrefund', () => {
             /with the fee on top/
         );
         await expect(
-            check({ paymasterContext, read: reader({ [ACCOUNT]: PREFUND + 50_000n }) })
+            check({ paymasterContext, read: reader({ [ACCOUNT]: PREFUND + 62_500n }) })
         ).resolves.toBeDefined();
+    });
+
+    // The approve grants the fee with the approval margin on top, and the
+    // signing side checks the balance against that. A balance that covers only
+    // the raw fee would pass here and be refused there.
+    it('leaves the fee its approval margin behind', async () => {
+        const paymasterContext = { token: USDC, gas: '50000' };
+
+        await expect(check({ paymasterContext, read: reader({ [ACCOUNT]: PREFUND + 50_000n }) })).rejects.toThrow(
+            /with the fee on top/
+        );
+        await expect(check({ paymasterContext, read: reader({ [ACCOUNT]: PREFUND + 62_499n }) })).rejects.toThrow(
+            /with the fee on top/
+        );
     });
 
     // A paymaster charging in something else takes nothing from the balance the

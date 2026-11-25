@@ -122,12 +122,13 @@ The `@jaw.id/core` package follows this structure:
 
 ### ERC-20 Gas Fee Model
 
-`estimateErc20PaymasterCosts` (`packages/core/src/account/erc20Paymaster.ts`) returns two values per token:
+`estimateErc20PaymasterCosts` (`packages/core/src/account/erc20Paymaster.ts`) returns three values per token:
 
 - `tokenCost` — realistic fee shown to the user: the userOp's phases are replayed via `eth_simulateV1` (deploying undeployed accounts inside the simulation), combined with the EntryPoint's overhead and unused-gas penalty, priced at a buffered effective gas price (baseFee × 1.25 + priority, capped at maxFeePerGas), capped at the ceiling. Falls back to summed gas limits when simulation is unavailable.
-- `tokenCostMax` — worst-case ceiling ("Up to"): all five gas limits plus the quoted postOp gas at maxFeePerGas. This is the amount the paymaster approval must cover and what `hasSufficientBalance` checks against.
+- `tokenCostMax`: worst-case ceiling, all five gas limits plus the quoted postOp gas at maxFeePerGas. It is the `gas` that `buildErc20PaymasterContext` puts in the paymaster context.
+- `tokenCostApproved`: `tokenCostMax` with the approval margin on top (`withApprovalMargin`, 1.25x, rounded up). The paymaster refuses an op whose allowance is under the max fee it computes when it signs, and that fee moves after the estimate. This is the amount the approve grants, what `hasSufficientBalance` checks against, the "Up to" figure, and what a spender prefund leaves behind when the fee is paid in its token.
 
-UIs must build the ERC-20 paymaster context via `buildErc20PaymasterContext(estimate)` so the approve-with-ceiling rule stays in one place.
+UIs must build the ERC-20 paymaster context via `buildErc20PaymasterContext(estimate)`, and the SDK adds the margin when it builds the approve, so the approve-with-margin rule stays in one place. Do not add the margin to `gas` again, and do not size an approve or a balance check from `tokenCostMax`.
 
 ### Authentication Modes
 

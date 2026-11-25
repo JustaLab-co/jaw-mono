@@ -13,6 +13,7 @@ import {
     Erc20EstimationError,
     estimateErc20PaymasterCosts,
     fetchTokenQuotes,
+    withApprovalMargin,
     type TokenInfo,
     type TokenQuote,
     type UserOpGasFields,
@@ -134,6 +135,22 @@ describe('buildErc20PaymasterContext', () => {
     });
 });
 
+describe('withApprovalMargin', () => {
+    it('adds a quarter', () => {
+        expect(withApprovalMargin(30_800_000n)).toBe(38_500_000n);
+    });
+
+    it('rounds up so the allowance never lands under the margin', () => {
+        // 1.25 -> 2, 3.75 -> 4
+        expect(withApprovalMargin(1n)).toBe(2n);
+        expect(withApprovalMargin(3n)).toBe(4n);
+    });
+
+    it('leaves zero at zero', () => {
+        expect(withApprovalMargin(0n)).toBe(0n);
+    });
+});
+
 describe('computeEffectiveGasPrice', () => {
     it('returns buffered base fee plus priority when under the ceiling', () => {
         // 40 * 1.25 + 2 = 52
@@ -192,15 +209,30 @@ describe('calculateTokenEstimatesFromGas', () => {
         expect(est.tokenCost).toBe(est.tokenCostMax);
     });
 
-    it('checks balance against the ceiling, not the displayed estimate', () => {
-        // Balance covers the display (12.4) but not the ceiling (30.8)
+    it('checks balance against the approved amount, not the displayed estimate', () => {
+        // Balance covers the display (12.4) but not the approved amount (38.5)
         const poor: TokenInfo[] = [{ address: TOKEN, symbol: 'USDC', decimals: 6, balance: 20_000_000n }];
         const [est] = calculateTokenEstimatesFromGas(gas, [quote], poor, { displayGasPrice: 52n });
         expect(est.hasSufficientBalance).toBe(false);
 
-        const rich: TokenInfo[] = [{ address: TOKEN, symbol: 'USDC', decimals: 6, balance: 30_800_000n }];
+        const rich: TokenInfo[] = [{ address: TOKEN, symbol: 'USDC', decimals: 6, balance: 38_500_000n }];
         const [ok] = calculateTokenEstimatesFromGas(gas, [quote], rich, { displayGasPrice: 52n });
         expect(ok.hasSufficientBalance).toBe(true);
+    });
+
+    it('reports the approved amount as the ceiling plus a quarter', () => {
+        const [est] = calculateTokenEstimatesFromGas(gas, [quote], tokens, { displayGasPrice: 52n });
+        // 30_800_000 * 1.25
+        expect(est.tokenCostApproved).toBe(38_500_000n);
+        expect(est.tokenCostApprovedFormatted).toBe('38.50');
+    });
+
+    // The paymaster refuses an op whose allowance is under its own max fee,
+    // and that fee moves between the estimate and the send.
+    it('rejects a balance that covers the ceiling but not the margin on top', () => {
+        const tight: TokenInfo[] = [{ address: TOKEN, symbol: 'USDC', decimals: 6, balance: 30_800_000n }];
+        const [est] = calculateTokenEstimatesFromGas(gas, [quote], tight, { displayGasPrice: 52n });
+        expect(est.hasSufficientBalance).toBe(false);
     });
 
     it("carries the quote's native-to-USD rate onto the estimate, and leaves it out when absent", () => {
