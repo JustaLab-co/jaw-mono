@@ -1,3 +1,17 @@
+## 1.17.1 (2026-11-25)
+
+### 🩹 Fixes
+
+- **core:** approve the erc-20 paymaster with a 1.25x margin ([#676](https://github.com/JustaLab-co/jaw-mono/pull/676))
+
+### 🧱 Updated Dependencies
+
+- Updated @jaw.id/core to 1.13.1
+
+### ❤️ Thank You
+
+- Mariano Aguero @mariano-aguero
+
 ## 1.17.0 (2026-11-24)
 
 ### 🚀 Features
