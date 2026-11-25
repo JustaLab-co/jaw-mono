@@ -1,3 +1,13 @@
+## 1.13.2 (2026-11-25)
+
+### 🩹 Fixes
+
+- **core:** approve the quoted erc-20 paymaster, capped by own estimate ([#673](https://github.com/JustaLab-co/jaw-mono/pull/673))
+
+### ❤️ Thank You
+
+- Mariano Aguero @mariano-aguero
+
 ## 1.13.1 (2026-11-25)
 
 ### 🩹 Fixes
