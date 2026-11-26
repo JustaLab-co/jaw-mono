@@ -1,3 +1,13 @@
+## 1.17.4 (2026-11-26)
+
+### 🩹 Fixes
+
+- **ui:** show the swap destination on the bridge grant screen ([#679](https://github.com/JustaLab-co/jaw-mono/pull/679))
+
+### ❤️ Thank You
+
+- Mariano Aguero @mariano-aguero
+
 ## 1.17.3 (2026-11-25)
 
 ### 🩹 Fixes
