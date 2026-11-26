@@ -52,7 +52,7 @@ For every case: open `/core`, connect, run `eth_sendTransaction` with `to` your 
 
 5. **Nothing can pay.** Send it 1000 wei of ETH and nothing else. Run the request.
    Expect: the fee row reads "Insufficient funds" and Confirm is disabled. Picking ETH by hand in "Pay with" keeps it blocked.
-6. **A batch that spends all the USDC.** Account 1 again, with ETH and USDC. Run `wallet_sendCalls` with one call, `transfer(<your second wallet>, <the whole USDC balance>)` on the USDC contract, and wait for the asset preview to list the USDC going out.
+6. **A batch that spends all the USDC.** This one runs in the in-app dialog: open `/core?mode=app-specific`, create an account there (app-specific passkeys are per app, so Account 1 is not available), and fund it with 0.001 ETH and 2 USDC. Run `wallet_sendCalls` with one call, `transfer(<your second wallet>, <the whole USDC balance>)` on the USDC contract, and wait for the asset preview to list the USDC going out.
    Expect: in "Pay with", USDC is greyed out and the dialog is on ETH. Then the same with all but 1 USDC: USDC is offered again.
 
 Proof: five screenshots plus the basescan page for case 2, saved under `tools/verify/evidence/<timestamp>-fee-token/` with the two addresses and the commit (`git rev-parse HEAD`).
