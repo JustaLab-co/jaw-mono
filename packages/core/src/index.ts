@@ -113,6 +113,7 @@ export {
     lookupPasskeyFromBackend,
     type PasskeyLookupResponse,
     type PasskeyAccount,
+    type PasskeyAuthenticatorInfo,
     type NativePasskeyGetFn,
     type NativePasskeyCreateFn,
     type NativeCredentialResult,

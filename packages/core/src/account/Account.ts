@@ -483,14 +483,15 @@ export class Account {
         const passkeyManager = Account.passkeyManager(config);
 
         // Create the passkey
-        const { credentialId, publicKey, webAuthnAccount, passkeyAccount } = await passkeyManager.createPasskey(
-            username,
-            resolvedRpId,
-            resolvedRpName,
-            undefined, // createFn — browser uses default, native path uses internalNativeCreateFn
-            resolved.internalNativeCreateFn,
-            resolved.getFn
-        );
+        const { credentialId, publicKey, webAuthnAccount, passkeyAccount, authenticator } =
+            await passkeyManager.createPasskey(
+                username,
+                resolvedRpId,
+                resolvedRpName,
+                undefined, // createFn — browser uses default, native path uses internalNativeCreateFn
+                resolved.internalNativeCreateFn,
+                resolved.getFn
+            );
 
         const chain = Account.buildChainConfig(chainId, apiKey, paymasterUrl, paymasterContext);
 
@@ -504,7 +505,15 @@ export class Account {
         const address = await smartAccount.getAddress();
 
         // Store the passkey account with the smart account address and the record it was created from
-        await passkeyManager.storePasskeyAccount(username, credentialId, publicKey, address, false, record);
+        await passkeyManager.storePasskeyAccount(
+            username,
+            credentialId,
+            publicKey,
+            address,
+            false,
+            record,
+            authenticator
+        );
 
         // Log account issuance for analytics (fire-and-forget)
         logAccountIssuance({ address, type: 'create', apiKey });
@@ -566,6 +575,10 @@ export class Account {
 
         // Store for login (marks as imported)
         await passkeyManager.storePasskeyAccountForLogin(importResult.credential.id, address, false, record);
+        // Saved locally before this returns; the passkey server is told in the background.
+        if (importResult.authenticator) {
+            void passkeyManager.recordAuthenticatorInfo(importResult.credential.id, importResult.authenticator);
+        }
 
         const passkeyAccount = passkeyManager.getAccountByCredentialId(importResult.credential.id);
         if (!passkeyAccount) {

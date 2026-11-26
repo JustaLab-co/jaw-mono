@@ -28,5 +28,6 @@
   "rpc-request-mcp-send-calls.json",
   "rpc-request-no-params.json",
   "rpc-request-null-params.json",
+  "short-link-current.json",
   "shutdown.json"
 ]

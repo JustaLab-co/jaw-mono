@@ -1,10 +1,24 @@
 import { createWebAuthnCredential, toWebAuthnAccount } from 'viem/account-abstraction';
+import type { CreateWebAuthnCredentialParameters } from 'viem/account-abstraction';
 import type * as WebAuthnP256 from 'ox/WebAuthnP256';
 import * as PublicKey from 'ox/PublicKey';
 import { restCall } from '../api/index.js';
-import type { PasskeyRegistrationRequest, PasskeyLookupResponse } from './types.js';
+import type { PasskeyRegistrationRequest, PasskeyLookupResponse, PasskeyUpdateRequest } from './types.js';
 import type { AccountRecord } from '../account/accountRecord.js';
 import type { WebAuthnAccount } from 'viem/account-abstraction';
+import {
+    readAuthenticatorInfo,
+    readAssertionAuthenticatorInfo,
+    type PasskeyAuthenticatorInfo,
+} from './authenticatorData.js';
+
+/**
+ * Extensions requested when a passkey is created. `prf: {}` asks the
+ * authenticator to enable the PRF extension for the new credential, so a
+ * stable secret can later be evaluated from it. Authenticators that do not
+ * support PRF ignore it.
+ */
+const PASSKEY_CREATION_EXTENSIONS = { prf: {} };
 
 /**
  * Low-level WebAuthn credential creation function (viem-compatible).
@@ -27,6 +41,8 @@ export type PasskeyGetFn = NonNullable<WebAuthnP256.sign.Options['getFn']>;
 export interface NativeCredentialResult {
     id: string;
     publicKey: `0x${string}`;
+    /** What the authenticator reported at creation, when the native library returned it. */
+    authenticator?: PasskeyAuthenticatorInfo;
 }
 
 /**
@@ -81,6 +97,10 @@ export interface NativePasskeyCreateResponse {
         attestationObject: string; // base64url
         clientDataJSON: string; // base64url
     };
+    /** Client extension results, when the native library returns them. */
+    clientExtensionResults?: {
+        prf?: { enabled?: boolean };
+    };
 }
 
 /**
@@ -97,6 +117,10 @@ export interface NativePasskeyCreateOptions {
         requireResidentKey?: boolean;
         userVerification?: 'discouraged' | 'preferred' | 'required';
         authenticatorAttachment?: 'platform' | 'cross-platform';
+    };
+    /** WebAuthn extensions to request. JAW asks for `prf` so the passkey can derive keys later. */
+    extensions?: {
+        prf?: Record<string, never>;
     };
 }
 
@@ -131,6 +155,8 @@ export interface WebAuthnCredentialResult {
 export interface WebAuthnAuthenticationResult {
     credential: WebAuthnCredentialResult;
     challenge: Uint8Array;
+    /** The backup flags the authenticator reported on this login, when readable. */
+    authenticator?: PasskeyAuthenticatorInfo;
 }
 
 export interface ImportWebAuthnAuthenticationResult {
@@ -139,6 +165,27 @@ export interface ImportWebAuthnAuthenticationResult {
         id: string;
         publicKey: `0x${string}`;
     };
+    /** The backup flags the authenticator reported on this login, when readable. */
+    authenticator?: PasskeyAuthenticatorInfo;
+}
+
+/**
+ * Read the backup flags from a login credential. Browser credentials and the
+ * wrapped native getFn both carry `response.authenticatorData`; a custom getFn
+ * may not, which gives nothing.
+ *
+ * Never throws, so a login or an import never fails over this optional
+ * metadata: an extension that proxies the credential can block the read
+ * (Firefox with 1Password, see authenticatorInfoFromCredential).
+ */
+function authenticatorInfoFromAssertion(credential: unknown): PasskeyAuthenticatorInfo {
+    try {
+        const authData = (credential as { response?: { authenticatorData?: ArrayBuffer | Uint8Array } } | null)
+            ?.response?.authenticatorData;
+        return readAssertionAuthenticatorInfo(authData ? new Uint8Array(authData) : undefined);
+    } catch {
+        return {};
+    }
 }
 
 /**
@@ -276,11 +323,16 @@ export function wrapNativeCreateFn(nativeCreateFn: NativePasskeyCreateFn): Inter
                 requireResidentKey: true,
                 userVerification: 'preferred',
             },
+            extensions: PASSKEY_CREATION_EXTENSIONS,
         });
 
         const publicKey = extractPublicKeyFromAttestation(result.response.attestationObject);
+        const authenticator = readAuthenticatorInfo(
+            toBytes(result.response.attestationObject),
+            result.clientExtensionResults
+        );
 
-        return { id: result.id, publicKey };
+        return { id: result.id, publicKey, authenticator };
     };
 }
 
@@ -371,6 +423,7 @@ export async function authenticateWithWebAuthnUtils(
         return {
             credential,
             challenge,
+            authenticator: authenticatorInfoFromAssertion(credential),
         };
     } catch (error) {
         if (error instanceof WebAuthnAuthenticationError) {
@@ -400,6 +453,7 @@ export async function createPasskeyUtils(
     credentialId: string;
     publicKey: `0x${string}`;
     webAuthnAccount: WebAuthnAccount;
+    authenticator: PasskeyAuthenticatorInfo;
 }> {
     // Native create path: bypasses crypto.subtle entirely (React Native)
     if (nativeCreateFn) {
@@ -418,6 +472,7 @@ export async function createPasskeyUtils(
             credentialId: nativeResult.id,
             publicKey: nativeResult.publicKey,
             webAuthnAccount,
+            authenticator: nativeResult.authenticator ?? {},
         };
     }
 
@@ -432,6 +487,10 @@ export async function createPasskeyUtils(
             id: rpId,
             name: rpName,
         },
+        // ox types `prf` as always carrying `eval`, but WebAuthn allows an empty
+        // `prf: {}` at creation to only enable it. Evaluating here would put a PRF
+        // output in memory for nothing, so the empty form is passed on purpose.
+        extensions: PASSKEY_CREATION_EXTENSIONS as unknown as CreateWebAuthnCredentialParameters['extensions'],
         createFn,
     });
 
@@ -445,7 +504,41 @@ export async function createPasskeyUtils(
         credentialId: credential.id,
         publicKey: credential.publicKey,
         webAuthnAccount,
+        authenticator: authenticatorInfoFromCredential(credential.raw),
     };
+}
+
+/**
+ * Read PRF support, AAGUID and backup flags from a browser PublicKeyCredential.
+ * A custom createFn may return an object without these members, so each is optional.
+ *
+ * Never throws: this runs after the passkey exists, so a failure here would leave
+ * a passkey with no local or backend record. Some extensions proxy the credential
+ * and block a second read of it (Firefox with 1Password: "Permission denied to
+ * access object", which is why ox reads it once, up front). Each read is guarded
+ * on its own, so one blocked member does not lose the other.
+ */
+function authenticatorInfoFromCredential(raw: unknown): PasskeyAuthenticatorInfo {
+    const credential = raw as
+        | {
+              response?: { attestationObject?: ArrayBuffer | Uint8Array };
+              getClientExtensionResults?: () => { prf?: { enabled?: boolean } };
+          }
+        | undefined;
+    let attestationObject: Uint8Array | undefined;
+    try {
+        const value = credential?.response?.attestationObject;
+        attestationObject = value ? new Uint8Array(value) : undefined;
+    } catch {
+        attestationObject = undefined;
+    }
+    let extensionResults: { prf?: { enabled?: boolean } } | undefined;
+    try {
+        extensionResults = credential?.getClientExtensionResults?.();
+    } catch {
+        extensionResults = undefined;
+    }
+    return readAuthenticatorInfo(attestationObject, extensionResults);
 }
 
 /**
@@ -496,6 +589,7 @@ export async function importPasskeyUtils(
                 id: credential.id,
                 publicKey: passkeyData.publicKey,
             },
+            authenticator: authenticatorInfoFromAssertion(credential),
         };
     } catch (error) {
         throw new PasskeyLookupError(
@@ -571,6 +665,44 @@ export async function registerPasskeyInBackend(
     } catch (error) {
         throw new PasskeyRegistrationError(
             `Failed to register passkey: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            error
+        );
+    }
+}
+
+/**
+ * Send what became known about a registered passkey after creation (PRF
+ * support, backup flags) to `PATCH <passkeys>/:credentialId`.
+ * @param credentialId - The registered credential
+ * @param update - Only the fields that changed
+ * @param apiKey - Optional API key for authentication
+ * @param dev - Whether to use the staging environment (ignored when serverUrl is given)
+ * @param serverUrl - Optional passkeys endpoint URL; the update goes to `<serverUrl>/:credentialId`
+ * @throws {PasskeyRegistrationError} If the update fails
+ */
+export async function updatePasskeyInBackend(
+    credentialId: string,
+    update: PasskeyUpdateRequest,
+    apiKey?: string,
+    dev?: boolean,
+    serverUrl?: string
+): Promise<void> {
+    const endpoint = serverUrl ? passkeysEndpoint(serverUrl) : undefined;
+    try {
+        await restCall(
+            'UPDATE_PASSKEY',
+            'PATCH',
+            update,
+            apiKey ? { 'x-api-key': apiKey } : {},
+            { credentialId },
+            dev,
+            endpoint?.baseUrl,
+            undefined,
+            endpoint ? `${endpoint.path.replace(/\/$/, '')}/:credentialId` : undefined
+        );
+    } catch (error) {
+        throw new PasskeyRegistrationError(
+            `Failed to update passkey: ${error instanceof Error ? error.message : 'Unknown error'}`,
             error
         );
     }

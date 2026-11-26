@@ -2,15 +2,23 @@ name: CI
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_call:
 
 permissions:
   actions: read
   contents: read
 
+# A newer push to a PR cancels its older run. Every other run, including the
+# call from release-and-deploy.yml on main, gets a group of its own.
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   validate:
     name: ci
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:

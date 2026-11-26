@@ -199,6 +199,7 @@ describe('Account.create', () => {
             credentialId: CREDENTIAL_ID,
             publicKey: PUBLIC_KEY,
             webAuthnAccount: { type: 'webAuthn', publicKey: PUBLIC_KEY } as never,
+            authenticator: {},
         });
 
         const account = await Account.create(config(storage), { username: 'alice' });

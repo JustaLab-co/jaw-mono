@@ -36,6 +36,7 @@
 /apps/keys-jaw-id/src/lib/crypto-handler.ts           @Ghadi8 @mariano-aguero
 /apps/keys-jaw-id/src/middleware.ts                   @Ghadi8 @mariano-aguero
 /apps/keys-jaw-id/src/app/cli-bridge/page.tsx         @Ghadi8 @mariano-aguero
+/apps/keys-jaw-id/src/app/cli-bridge/bridge.tsx       @Ghadi8 @mariano-aguero
 /apps/keys-jaw-id/src/lib/handshake-route.ts          @Ghadi8 @mariano-aguero
 
 # Mirrors .github/risky-paths: the bridge calls an owner signs
@@ -44,3 +45,6 @@
 /packages/ui/src/hooks/useBridgeContracts.ts         @Ghadi8 @mariano-aguero
 /apps/keys-jaw-id/src/app/cli-bridge/fixtures/**    @Ghadi8 @mariano-aguero
 /apps/keys-jaw-id/src/lib/bridge-frames.ts             @Ghadi8 @mariano-aguero
+/apps/keys-jaw-id/src/app/a/**                       @Ghadi8 @mariano-aguero
+/apps/keys-jaw-id/src/app/api/a/**                   @Ghadi8 @mariano-aguero
+/apps/keys-jaw-id/src/lib/short-link.ts              @Ghadi8 @mariano-aguero
