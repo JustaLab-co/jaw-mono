@@ -7,7 +7,7 @@ out="$root/tools/verify/evidence/$(date +%Y%m%d-%H%M%S)-fee-token"
 mkdir -p "$out"
 git -C "$root" rev-parse HEAD > "$out/commit.txt"
 
-(cd "$root/packages/ui" && bunx vitest run src/hooks/useGasEstimation.test.ts src/utils/feePreselect.test.ts) \
+(cd "$root/packages/ui" && bunx vitest run src/hooks/useGasEstimation.test.ts src/utils/feePreselect.test.ts src/react/ReactUIHandler.feeOutflow.test.tsx) \
   2>&1 | tee "$out/vitest.txt" | grep -E "Test Files|Tests "
 
 if command -v lake >/dev/null 2>&1 || [ -x "$HOME/.elan/bin/lake" ]; then
