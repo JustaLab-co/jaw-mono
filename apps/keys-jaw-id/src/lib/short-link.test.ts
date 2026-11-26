@@ -140,7 +140,12 @@ describe('openShortLink on a batch', () => {
     ['two members on one chain', { ...batch, members: [member(0, 84532), member(1, 84532)] }],
     ['one member twice', { ...batch, members: [member(0, 84532), member(0, 11155111)] }],
     ['a member with a bad id', { ...batch, members: [{ ...member(0, 84532), id: '../cli-key' }] }],
-    ['a member with a bad key', { ...batch, members: [{ ...member(0, 84532), key: 'short' }] }],
+    ['a member with a bad key', { ...batch, members: [{ ...member(0, 84532), key: 'AAAA' }] }],
+    [
+      'a member whose key is not canonical',
+      { ...batch, members: [{ ...member(0, 84532), key: 'AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgJ' }] },
+    ],
+    ['a member that names the batch itself', { ...batch, members: [{ ...member(0, 84532), id }] }],
     ['a member with a chain that is not an integer', { ...batch, members: [{ ...member(0, 84532), chainId: 1.5 }] }],
     ['a member with a chain given as text', { ...batch, members: [{ ...member(0, 84532), chainId: '84532' }] }],
     ['a member on chain 0', { ...batch, members: [{ ...member(0, 84532), chainId: 0 }] }],

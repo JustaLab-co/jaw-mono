@@ -52,7 +52,7 @@ export async function openShortLink(
       sealed.slice(IV_BYTES)
     );
     const opened = JSON.parse(new TextDecoder().decode(plain));
-    return opened?.v === 2 ? batchOf(opened) : linkOf(opened);
+    return opened?.v === 2 ? batchOf(opened, id) : linkOf(opened);
   } catch {
     return undefined;
   }
@@ -65,12 +65,13 @@ function linkOf(v: Record<string, unknown>): OpenedLink | undefined {
   return { session: session as string, relay: relay as string, fragment: `pk=${pk}&s=${s}` };
 }
 
-function batchOf(v: Record<string, unknown>): OpenedBatch | undefined {
+function batchOf(v: Record<string, unknown>, id: string): OpenedBatch | undefined {
   const { account, members } = v;
   if (typeof account !== 'string' || !isAddress(account)) return undefined;
   if (!Array.isArray(members) || members.length === 0 || members.length > MAX_BATCH_MEMBERS) return undefined;
-  if (!members.every(isMember)) return undefined;
-  // One request per chain, so no two signatures of a batch can take the same nonce.
+  // A member naming the batch itself would open as a batch again.
+  if (!members.every((m) => isMember(m) && m.id !== id)) return undefined;
+  // One member per chain. The page still checks each member's request against the chain it is listed under.
   const distinct = (field: 'id' | 'chainId') => new Set(members.map((m) => m[field])).size === members.length;
   if (!distinct('id') || !distinct('chainId')) return undefined;
   return { account, members: members.map(({ id, key, chainId }) => ({ id, key, chainId })) };
@@ -84,6 +85,7 @@ function isMember(m: unknown): m is BatchMember {
     SHORT_LINK_ID.test(id) &&
     typeof key === 'string' &&
     KEY.test(key) &&
+    canonicalBytes(key) !== undefined &&
     Number.isSafeInteger(chainId) &&
     (chainId as number) > 0
   );

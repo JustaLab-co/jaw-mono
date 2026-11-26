@@ -91,7 +91,7 @@ describe('/a/[id]', () => {
     const plain = {
       v: 2,
       account: '0x1111111111111111111111111111111111111111',
-      members: [{ id, key, chainId: 84532 }],
+      members: [{ id: 'BAQEBAQEBAQEBAQEBAQEBA', key, chainId: 84532 }],
     };
     const aes = await crypto.subtle.importKey('raw', Buffer.from(key, 'base64url'), 'AES-GCM', false, ['encrypt']);
     const iv = new Uint8Array(12).fill(9);
