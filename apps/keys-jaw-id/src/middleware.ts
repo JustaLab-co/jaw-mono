@@ -22,7 +22,10 @@ export function middleware(request: NextRequest) {
   // These URLs are not known at build time and vary per connecting dApp.
   // If dApp RPC proxying is ever routed through api.justaname.id exclusively,
   // the wildcards can be removed.
-  const isCLIBridge = request.nextUrl.pathname === '/cli-bridge';
+  const { pathname } = request.nextUrl;
+  // A short owner link opens the cli-bridge flow, so it needs the same relay access.
+  const isShortLink = pathname.startsWith('/a/');
+  const isCLIBridge = pathname === '/cli-bridge' || isShortLink;
   const connectSrc = [
     "'self'",
     'https://api.justaname.id',
@@ -94,7 +97,13 @@ export function middleware(request: NextRequest) {
   if (!isEmbeddable) {
     response.headers.set('X-Frame-Options', 'DENY');
   }
-  response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+  // A short link's page and blob are fetched under its id, which nothing else may learn from a Referer.
+  const holdsShortLink = isShortLink || pathname.startsWith('/api/a/');
+  response.headers.set('Referrer-Policy', holdsShortLink ? 'no-referrer' : 'strict-origin-when-cross-origin');
+  if (isShortLink) {
+    response.headers.set('X-Robots-Tag', 'noindex');
+    response.headers.set('Cache-Control', 'no-store');
+  }
   response.headers.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
   response.headers.set('X-DNS-Prefetch-Control', 'off');
 

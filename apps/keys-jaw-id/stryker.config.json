@@ -10,7 +10,10 @@
     "src/lib/popup-communicator.ts",
     "src/lib/crypto-handler.ts",
     "src/lib/handshake-route.ts",
-    "src/middleware.ts"
+    "src/middleware.ts",
+    "src/lib/short-link.ts",
+    "src/lib/link-kv.ts",
+    "src/app/api/a/[[]id]/route.ts"
   ],
   "ignoreStatic": true,
   "reporters": ["clear-text", "html", "json"],

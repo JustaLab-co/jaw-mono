@@ -11,6 +11,7 @@ import { createHmac } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import CLIBridgePage from './page';
+import ShortLinkPage from '../a/[id]/page';
 import { FakeSocket, answers, created, deliver, root, secret, setUp, start, tearDown, unb64 } from './test-harness';
 
 type Client = { family: string; versions: string; current: boolean };
@@ -21,6 +22,7 @@ type Fixture = {
   frame?: Record<string, unknown>;
   fragment?: string;
   query?: string;
+  shortLink?: { id: string; key: string; blob: string };
   expect?: Record<string, unknown>;
 };
 
@@ -33,7 +35,12 @@ const fixtures: Fixture[] = fixtureFiles
 const framesOf = (type: string) => fixtures.filter((f) => f.frame?.type === type);
 const HANDLED_FRAME_TYPES = ['init', 'rpc_request', 'shutdown'];
 const FAMILIES = ['cli', 'mcp'];
-const kindOf = (f: Fixture) => (f.frame ? String(f.frame.type) : 'link');
+const kindOf = (f: Fixture) => (f.frame ? String(f.frame.type) : f.shortLink ? 'short-link' : 'link');
+// Only the MCP server hands out short links; the CLI opens the long link itself.
+const KINDS: Record<string, string[]> = {
+  cli: [...HANDLED_FRAME_TYPES, 'link'],
+  mcp: [...HANDLED_FRAME_TYPES, 'link', 'short-link'],
+};
 
 beforeEach(setUp);
 afterEach(tearDown);
@@ -53,7 +60,7 @@ describe('the fixture folder', () => {
     expect(fixtureFiles.filter((file) => !file.endsWith('.json'))).toEqual([]);
     for (const f of fixtures) {
       expect(f.sentBy.length, f.name).toBeGreaterThan(0);
-      expect(Number('frame' in f) + Number('fragment' in f), f.name).toBe(1);
+      expect(Number('frame' in f) + Number('fragment' in f) + Number('shortLink' in f), f.name).toBe(1);
       if (f.frame) expect(HANDLED_FRAME_TYPES, f.name).toContain(f.frame.type);
       expect(f.clients.length, f.name).toBeGreaterThan(0);
       for (const c of f.clients) {
@@ -67,7 +74,7 @@ describe('the fixture folder', () => {
   it('has a current fixture for every kind of message each client sends today', () => {
     for (const family of FAMILIES) {
       const current = fixtures.filter((f) => f.clients.some((c) => c.family === family && c.current));
-      expect(new Set(current.map(kindOf)), family).toEqual(new Set([...HANDLED_FRAME_TYPES, 'link']));
+      expect(new Set(current.map(kindOf)), family).toEqual(new Set(KINDS[family]));
     }
   });
 
@@ -164,6 +171,34 @@ describe('cli-bridge page handles what clients send', () => {
       const proof = createHmac('sha256', Buffer.from(link.get('s')!, 'base64url'))
         .update(`jaw-bridge-key/1\n${params.get('session')}\n${link.get('pk')}\n${exchange.publicKey}`)
         .digest('hex');
+      expect(exchange.proof).toBe(proof);
+    }
+  );
+
+  it.each(fixtures.filter((f) => f.shortLink))(
+    'opens the short link in $name and proves it with the secret inside',
+    async ({ shortLink, expect: e }) => {
+      const opened = e!.opened as Record<string, string>;
+      fetchMock.mockImplementation(async (url: string) =>
+        url === `/api/a/${shortLink!.id}`
+          ? new Response(JSON.stringify({ blob: shortLink!.blob }))
+          : new Response(JSON.stringify(url === '/api/cli-key' ? { apiKey: WORKSPACE_KEY } : {}))
+      );
+      created.params = { id: shortLink!.id };
+      window.location.hash = shortLink!.key;
+      await act(async () => root.render(<ShortLinkPage />));
+      await vi.waitFor(() => expect(FakeSocket.all).toHaveLength(1));
+      const ws = FakeSocket.all[0];
+      expect(ws.url).toBe(`${opened.relay}?session=${encodeURIComponent(opened.session)}&role=browser`);
+
+      await act(async () => ws.onopen!());
+
+      const exchange = ws.sent[0];
+      expect(exchange.type).toBe('key_exchange');
+      const proof = createHmac('sha256', Buffer.from(opened.s, 'base64url'))
+        .update(`jaw-bridge-key/1\n${opened.session}\n${opened.pk}\n${exchange.publicKey}`)
+        .digest('hex');
+      expect(e!.proof).toBe(true);
       expect(exchange.proof).toBe(proof);
     }
   );

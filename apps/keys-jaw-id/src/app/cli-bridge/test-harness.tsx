@@ -114,6 +114,7 @@ export function setUp() {
   created.dismissed = 0;
   created.session = 's1';
   created.query = null;
+  created.params = {};
   created.request = async () => null;
   vi.stubGlobal('WebSocket', FakeSocket);
   host = document.createElement('div');
