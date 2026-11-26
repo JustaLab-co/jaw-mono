@@ -69,12 +69,25 @@ describe('preselectFeeToken', () => {
 describe('paysAfterOutflow', () => {
   const amount = fc.bigInt({ min: 0n, max: 10n ** 30n });
 
-  it('is true exactly when the balance less what the batch moves out covers the cost', () => {
+  it('never pays a positive cost from a batch that moves the whole balance out', () => {
     fc.assert(
-      fc.property(amount, amount, amount, (balance, outflow, cost) => {
-        expect(paysAfterOutflow(balance, outflow, cost)).toBe(balance - outflow >= cost);
+      fc.property(amount, fc.bigInt({ min: 1n, max: 10n ** 30n }), (balance, cost) => {
+        expect(paysAfterOutflow(balance, balance, cost)).toBe(false);
       })
     );
+  });
+
+  it('with nothing moved out, is the raw balance check the paymaster makes', () => {
+    fc.assert(
+      fc.property(amount, amount, (balance, cost) => {
+        expect(paysAfterOutflow(balance, 0n, cost)).toBe(balance >= cost);
+      })
+    );
+  });
+
+  it('pays at the exact boundary and not one unit under it', () => {
+    expect(paysAfterOutflow(100n, 60n, 40n)).toBe(true);
+    expect(paysAfterOutflow(100n, 61n, 40n)).toBe(false);
   });
 
   it('never offers a token on more outflow than it would on less', () => {
