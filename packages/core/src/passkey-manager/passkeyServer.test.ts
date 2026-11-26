@@ -3,7 +3,12 @@
  * endpoint itself, so a custom server receives GET and POST at exactly that URL.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { lookupPasskeyFromBackend, passkeysEndpoint, registerPasskeyInBackend } from './utils.js';
+import {
+    lookupPasskeyFromBackend,
+    passkeysEndpoint,
+    registerPasskeyInBackend,
+    updatePasskeyInBackend,
+} from './utils.js';
 
 const request = vi.fn();
 const backendInstance = vi.fn((_dev?: boolean, _baseUrl?: string) => ({ request }));
@@ -92,5 +97,43 @@ describe('without a custom server', () => {
         await registerPasskeyInBackend(PASSKEY, 'k1', false, 'https://api.justaname.id/wallet/v2/passkeys');
 
         expect(lastTarget()).toEqual({ baseUrl: 'https://api.justaname.id', url: '/wallet/v2/passkeys' });
+    });
+});
+
+describe('updating a registered passkey', () => {
+    const UPDATE = { prfSupported: true, backupState: true };
+
+    afterEach(() => {
+        request.mockReset();
+        backendInstance.mockClear();
+    });
+
+    it('PATCHes the JAW passkeys route at the credential, with only the changed fields', async () => {
+        request.mockResolvedValue({ data: { statusCode: 200, result: { data: {}, error: null } } });
+
+        await updatePasskeyInBackend('cred/1', UPDATE, 'k1');
+
+        expect(lastTarget()).toEqual({ baseUrl: undefined, url: '/wallet/v2/passkeys/cred%2F1' });
+        expect(request).toHaveBeenCalledWith(
+            expect.objectContaining({ method: 'PATCH', data: UPDATE, headers: { 'x-api-key': 'k1' } })
+        );
+    });
+
+    it.each([
+        ['https://passkeys.example.com/passkeys', 'https://passkeys.example.com', '/passkeys/cred-1'],
+        ['https://passkeys.example.com/api/v1/passkeys/', 'https://passkeys.example.com', '/api/v1/passkeys/cred-1'],
+        ['https://passkeys.example.com', 'https://passkeys.example.com', '/cred-1'],
+    ])('PATCHes a custom server %s below its configured url', async (serverUrl, baseUrl, url) => {
+        request.mockResolvedValue({ data: { statusCode: 200, result: { data: {}, error: null } } });
+
+        await updatePasskeyInBackend('cred-1', UPDATE, 'k1', false, serverUrl);
+
+        expect(lastTarget()).toEqual({ baseUrl, url });
+    });
+
+    it('wraps a failure in PasskeyRegistrationError', async () => {
+        request.mockRejectedValue(new Error('404'));
+
+        await expect(updatePasskeyInBackend('cred-1', UPDATE)).rejects.toThrow('Failed to update passkey');
     });
 });

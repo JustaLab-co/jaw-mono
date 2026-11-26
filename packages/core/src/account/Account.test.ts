@@ -802,6 +802,63 @@ describe('Account', () => {
             );
         });
 
+        it('Account.create registers the passkey with what its authenticator reported', async () => {
+            const { createSmartAccount } = await import('./smartAccount.js');
+            const { PasskeyManager } = await import('../passkey-manager/index.js');
+            const address = '0x1234567890123456789012345678901234567890';
+            vi.mocked(createSmartAccount).mockResolvedValue({
+                address,
+                getAddress: vi.fn().mockResolvedValue(address),
+            } as never);
+
+            const authenticator = {
+                prfSupported: true,
+                aaguid: 'ea9b8d66-4d01-1d21-3ce4-b6b48cb575d4',
+                backupEligible: true,
+                backupState: true,
+            };
+            const storePasskeyAccount = vi.fn();
+            vi.mocked(PasskeyManager).mockImplementation(
+                () =>
+                    ({
+                        checkAuth: vi.fn().mockReturnValue({ isAuthenticated: false }),
+                        fetchActiveCredentialId: vi.fn().mockReturnValue(null),
+                        getAccountByCredentialId: vi.fn().mockReturnValue(undefined),
+                        getCurrentAccount: vi.fn().mockReturnValue(undefined),
+                        fetchAccounts: vi.fn().mockReturnValue([]),
+                        createPasskey: vi.fn().mockResolvedValue({
+                            credentialId: 'prf-cred',
+                            publicKey: '0x04prf',
+                            webAuthnAccount: { type: 'webAuthn', publicKey: '0x04prf' },
+                            passkeyAccount: {
+                                username: 'alice',
+                                credentialId: 'prf-cred',
+                                publicKey: '0x04prf',
+                                creationDate: new Date().toISOString(),
+                                isImported: false,
+                                ...authenticator,
+                            },
+                            authenticator,
+                        }),
+                        storePasskeyAccount,
+                        setAccountAddresses: vi.fn(),
+                        storeAuthState: vi.fn(),
+                    }) as never
+            );
+
+            await Account.create({ chainId: 1, apiKey: 'test-api-key', rpId: 'example.com' }, { username: 'alice' });
+
+            expect(storePasskeyAccount).toHaveBeenCalledWith(
+                'alice',
+                'prf-cred',
+                '0x04prf',
+                address,
+                false,
+                expect.anything(),
+                authenticator
+            );
+        });
+
         it('Account.get with nativeGetFn should forward wrapped getFn and rpId', async () => {
             const { PasskeyManager } = await import('../passkey-manager/index.js');
             const { toWebAuthnAccount } = await import('viem/account-abstraction');
@@ -923,6 +980,45 @@ describe('Account', () => {
                     rpId: 'myapp.com',
                 })
             );
+        });
+
+        it('Account.import records the backup flags the login reported', async () => {
+            const { PasskeyManager } = await import('../passkey-manager/index.js');
+            const { createSmartAccount } = await import('./smartAccount.js');
+            const address = '0x1234567890123456789012345678901234567890';
+            vi.mocked(createSmartAccount).mockResolvedValue({
+                address,
+                getAddress: vi.fn().mockResolvedValue(address),
+            } as never);
+
+            const recordAuthenticatorInfo = vi.fn().mockResolvedValue({});
+            vi.mocked(PasskeyManager).mockImplementation(
+                () =>
+                    ({
+                        getAccountByCredentialId: vi.fn().mockReturnValue({
+                            username: 'alice',
+                            credentialId: 'imp-cred',
+                            publicKey: '0x04imported',
+                            creationDate: new Date().toISOString(),
+                            isImported: true,
+                        }),
+                        importPasskeyAccount: vi.fn().mockResolvedValue({
+                            name: 'imported',
+                            credential: { id: 'imp-cred', publicKey: '0x04imported' },
+                            authenticator: { backupEligible: true, backupState: true },
+                        }),
+                        storePasskeyAccountForLogin: vi.fn(),
+                        fetchAccountRecord: vi.fn().mockRejectedValue(new Error('no record endpoint in tests')),
+                        recordAuthenticatorInfo,
+                    }) as never
+            );
+
+            await Account.import({ chainId: 1, apiKey: 'test-api-key', rpId: 'myapp.com' });
+
+            expect(recordAuthenticatorInfo).toHaveBeenCalledWith('imp-cred', {
+                backupEligible: true,
+                backupState: true,
+            });
         });
     });
 

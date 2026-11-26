@@ -46,6 +46,7 @@ beforeEach(() => {
         credentialId: 'cred-1',
         publicKey: PUBLIC_KEY,
         webAuthnAccount: { type: 'webAuthn', publicKey: PUBLIC_KEY } as never,
+        authenticator: {},
     });
     vi.mocked(importPasskeyUtils).mockResolvedValue({
         credential: { id: 'cred-1', publicKey: PUBLIC_KEY },

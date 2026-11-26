@@ -1,4 +1,5 @@
-import { type PasskeyAccount, Account, type Chain } from '@jaw.id/core';
+import { type PasskeyAccount, Account, PasskeyManager, type Chain } from '@jaw.id/core';
+import { derivePrfKeys, PrfUnavailableError } from '@jaw.id/core/internal';
 import { debugLog } from './debug-log';
 import type { Address } from 'viem';
 
@@ -114,6 +115,38 @@ export class PasskeyService {
       };
     } catch (error) {
       console.error('Failed to create passkey:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Prompt for the account's passkey and derive one 32-byte key per label from
+   * its PRF output. The PRF output itself never leaves @jaw.id/core; callers get
+   * only the derived keys, must zero them after use, and must never log, store
+   * or send them.
+   * @param credentialId - The account's credential; only this passkey may answer
+   * @param labels - Versioned labels, `jaw.id/<use>/v<N>`
+   *
+   * Records the outcome on the stored account (and the passkey server): a
+   * result means the passkey supports PRF, PrfUnavailableError that it does not.
+   * @throws {PrfUnavailableError} If the passkey's store does not support PRF
+   */
+  async derivePrfKeys<const L extends string>(
+    credentialId: string,
+    labels: readonly L[]
+  ): Promise<Record<L, Uint8Array>> {
+    if (!this.isWebAuthnSupported()) {
+      throw new Error('WebAuthn is not supported in this browser');
+    }
+    const manager = new PasskeyManager(undefined, undefined, this.apiKey);
+    try {
+      const keys = await derivePrfKeys({ rpId: this.rpId, credentialId }, labels);
+      void manager.recordAuthenticatorInfo(credentialId, { prfSupported: true });
+      return keys;
+    } catch (error) {
+      if (error instanceof PrfUnavailableError) {
+        void manager.recordAuthenticatorInfo(credentialId, { prfSupported: false });
+      }
       throw error;
     }
   }
