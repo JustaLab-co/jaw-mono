@@ -1890,6 +1890,8 @@ function TransactionDialogWrapper({
     permissionId,
     address: request.data.from,
     onFeeTokensUpdate: setFeeTokens,
+    // Under a permission the preview reads the granter, and another account pays the fee.
+    assetsOut: assetPreviewSimulated && !permissionId ? assetsOut : undefined,
   });
 
   // Compute paymaster URL based on fee token selection (for ERC-20 paymaster)
@@ -2233,6 +2235,7 @@ function SendTransactionDialogWrapper({
     isSponsored,
     address: request.data.from,
     onFeeTokensUpdate: setFeeTokens,
+    assetsOut: assetPreviewSimulated ? assetsOut : undefined,
   });
 
   // Compute paymaster URL based on fee token selection (for ERC-20 paymaster)

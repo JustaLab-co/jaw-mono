@@ -1,4 +1,16 @@
 import type { FeeTokenOption } from '../components/FeeTokenSelector';
+import type { AssetDelta } from './assetPreview';
+
+/** What the batch moves out of the account in `address`, by the asset preview. Zero with no preview. */
+export function outflowOf(assetsOut: readonly AssetDelta[] | undefined, address: string): bigint {
+  const token = address.toLowerCase();
+  return (assetsOut ?? [])
+    .filter((d) => d.direction === 'out' && d.address.toLowerCase() === token)
+    .reduce((sum, d) => sum - d.diff, 0n);
+}
+
+/** A fee token pays only from what the batch leaves of it. */
+export const paysAfterOutflow = (balance: bigint, outflow: bigint, cost: bigint): boolean => balance - outflow >= cost;
 
 /** An ERC-20 the paymaster priced and found the balance enough for: its ceiling exists only then. */
 export const provenErc20 = (t: FeeTokenOption): boolean => !t.isNative && t.isSelectable && !!t.gasCostMaxFormatted;

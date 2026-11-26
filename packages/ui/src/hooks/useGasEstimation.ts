@@ -3,7 +3,8 @@ import { parseEther, type Address, type Hex } from 'viem';
 import type { Account, TokenEstimate, TransactionCall } from '@jaw.id/core';
 import { Erc20EstimationError, estimateErc20PaymasterCosts, jawPaymasterUrl } from '@jaw.id/core';
 import type { FeeTokenOption } from '../components/FeeTokenSelector';
-import { preselectFeeToken, provenErc20 } from '../utils/feePreselect';
+import { outflowOf, paysAfterOutflow, preselectFeeToken, provenErc20 } from '../utils/feePreselect';
+import type { AssetDelta } from '../utils/assetPreview';
 import { classifyRevert, INSUFFICIENT_FUNDS_ERROR, isRevert, messageOf } from '../utils/transactionFailure';
 
 // ============================================================================
@@ -35,6 +36,8 @@ export interface UseGasEstimationConfig {
   address?: Address;
   /** Callback when fee tokens are updated with estimates */
   onFeeTokensUpdate?: (tokens: FeeTokenOption[]) => void;
+  /** What the asset preview says the batch moves out of the paying account, once it has run. */
+  assetsOut?: AssetDelta[];
 }
 
 /**
@@ -201,6 +204,7 @@ export function useGasEstimation({
   permissionId,
   address,
   onFeeTokensUpdate,
+  assetsOut,
 }: UseGasEstimationConfig): UseGasEstimationResult {
   // -------------------------------------------------------------------------
   // State
@@ -252,6 +256,15 @@ export function useGasEstimation({
     [chainId, permissionId, address, apiKey, isSponsored, transactionCalls]
   );
   const ethEstimatedForRef = useRef<string>('');
+
+  // The preview lands after the first estimate, so what it moves out re-runs the estimate; the
+  // coin estimate is reused, as it is when the token list arrives.
+  const assetsOutRef = useRef(assetsOut);
+  assetsOutRef.current = assetsOut;
+  const outflowKey = useMemo(
+    () => JSON.stringify((assetsOut ?? []).map((d) => [d.address.toLowerCase(), d.diff.toString()])),
+    [assetsOut]
+  );
 
   // Re-run estimation when a token joins the list, the coin included, since the preselection
   // reads its balance. Stable when only estimates change (preventing infinite loops).
@@ -421,7 +434,13 @@ export function useGasEstimation({
             gasCostMax: estimate.tokenCostApproved,
             exchangeRate: estimate.exchangeRate,
             exchangeRateNativeToUsd: estimate.exchangeRateNativeToUsd,
-            isSelectable: estimate.hasSufficientBalance,
+            isSelectable:
+              estimate.hasSufficientBalance &&
+              paysAfterOutflow(
+                token.balance,
+                outflowOf(assetsOutRef.current, token.address),
+                estimate.tokenCostApproved
+              ),
           };
         });
 
@@ -493,7 +512,18 @@ export function useGasEstimation({
     }
     // Note: feeTokens and onFeeTokensUpdate accessed via refs to prevent infinite loops
     // feeTokenAddresses triggers re-estimation when tokens are added (but not when estimates update)
-  }, [account, transactionCalls, chainId, apiKey, isSponsored, permissionId, address, feeTokenAddresses, ethInputsKey]);
+  }, [
+    account,
+    transactionCalls,
+    chainId,
+    apiKey,
+    isSponsored,
+    permissionId,
+    address,
+    feeTokenAddresses,
+    ethInputsKey,
+    outflowKey,
+  ]);
 
   /** Explicit refetch discards the reuse key so the ETH leg is genuinely re-measured. */
   const forceRefetch = useCallback(() => {
