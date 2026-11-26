@@ -1,3 +1,11 @@
+# Runs the tests of the projects this push changes, excluding docs app. Build,
+# lint and typecheck run in pre-commit and CI. FULL_HOOKS=1 runs the previous
+# full checks.
+if [ "$FULL_HOOKS" != 1 ]; then
+  sh "$(dirname "$0")/../tools/hooks/pre-push.sh" main -t test --exclude=docs
+  exit
+fi
+
 # Run affected build, test, and lint tasks, excluding docs app.
 # Compares against the PR base, as CI does, so a stacked branch checks only its
 # own commits. Falls back to main when gh fails or the branch has no PR.
