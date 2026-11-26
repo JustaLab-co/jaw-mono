@@ -37,6 +37,13 @@ on:
 permissions:
   contents: read
 
+# A newer preview of the same PR cancels the older one still waiting on Vercel.
+# Other labels and manual runs get a group of their own, so labelling a PR
+# never cancels a preview in flight.
+concurrency:
+  group: deploy-preview-${{ github.event.label.name == 'preview' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event.label.name == 'preview' }}
+
 jobs:
   resolve:
     if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'preview'
