@@ -37,6 +37,90 @@ vi.mock('../api/index.js', () => ({
     }),
 }));
 
+// Attestation objects assembled from the WebAuthn spec layout (§6.1, §6.5):
+// {fmt: "none", attStmt: {}, authData}, where authData is
+// rpIdHash(32) | flags | signCount(4) | aaguid(16) | credIdLen(2) | credId | COSE P-256 key.
+const GPM_AAGUID = 'ea9b8d66-4d01-1d21-3ce4-b6b48cb575d4';
+const ascii = (s: string) => Array.from(s, (c) => c.charCodeAt(0));
+function buildAttestation(flags: number): Uint8Array {
+    const x = Array.from({ length: 32 }, (_, i) => i + 1);
+    const y = Array.from({ length: 32 }, (_, i) => i + 33);
+    const coseKey = [0xa5, 0x01, 0x02, 0x03, 0x26, 0x20, 0x01, 0x21, 0x58, 0x20, ...x, 0x22, 0x58, 0x20, ...y];
+    const authData = [
+        ...new Array(32).fill(0x11),
+        flags,
+        0,
+        0,
+        0,
+        0,
+        0xea,
+        0x9b,
+        0x8d,
+        0x66,
+        0x4d,
+        0x01,
+        0x1d,
+        0x21,
+        0x3c,
+        0xe4,
+        0xb6,
+        0xb4,
+        0x8c,
+        0xb5,
+        0x75,
+        0xd4,
+        0x00,
+        0x04,
+        0xc1,
+        0xc2,
+        0xc3,
+        0xc4,
+        ...coseKey,
+    ];
+    return new Uint8Array([
+        0xa3,
+        0x63,
+        ...ascii('fmt'),
+        0x64,
+        ...ascii('none'),
+        0x67,
+        ...ascii('attStmt'),
+        0xa0,
+        0x68,
+        ...ascii('authData'),
+        0x58,
+        authData.length,
+        ...authData,
+    ]);
+}
+// UP | UV | BE | BS | AT
+const SYNCED_ATTESTATION = buildAttestation(0x01 | 0x04 | 0x08 | 0x10 | 0x40);
+// UP | UV | AT
+const DEVICE_BOUND_ATTESTATION = buildAttestation(0x01 | 0x04 | 0x40);
+function toB64Url(bytes: Uint8Array): string {
+    return btoa(String.fromCharCode(...bytes))
+        .replace(/\+/g, '-')
+        .replace(/\//g, '_')
+        .replace(/=/g, '');
+}
+
+// A credential whose response blocks reads, as Firefox with 1Password can
+// ("Permission denied to access object").
+function credentialWithBlockedResponse(id: string) {
+    return {
+        id,
+        type: 'public-key',
+        response: new Proxy(
+            {},
+            {
+                get() {
+                    throw new Error('Permission denied to access object');
+                },
+            }
+        ),
+    };
+}
+
 describe('passkey-manager/utils — React Native adapter support', () => {
     beforeEach(() => {
         vi.clearAllMocks();
@@ -101,6 +185,122 @@ describe('passkey-manager/utils — React Native adapter support', () => {
             );
         });
 
+        it('requests the PRF extension on the web path', async () => {
+            const { createWebAuthnCredential } = await import('viem/account-abstraction');
+
+            await createPasskeyUtils('bob', 'example.com', 'MyApp', vi.fn());
+
+            expect(createWebAuthnCredential).toHaveBeenCalledWith(expect.objectContaining({ extensions: { prf: {} } }));
+        });
+
+        it('records PRF support, AAGUID and backup flags from the browser credential', async () => {
+            const { createWebAuthnCredential } = await import('viem/account-abstraction');
+            vi.mocked(createWebAuthnCredential).mockResolvedValueOnce({
+                id: 'cred-prf',
+                publicKey: '0x04prf',
+                raw: {
+                    response: { attestationObject: SYNCED_ATTESTATION.buffer },
+                    getClientExtensionResults: () => ({ prf: { enabled: true } }),
+                } as never,
+            });
+
+            const result = await createPasskeyUtils('bob', 'example.com', 'MyApp', vi.fn());
+
+            expect(result.authenticator).toEqual({
+                prfSupported: true,
+                aaguid: GPM_AAGUID,
+                backupEligible: true,
+                backupState: true,
+            });
+        });
+
+        it('records an authenticator that reports no PRF support', async () => {
+            const { createWebAuthnCredential } = await import('viem/account-abstraction');
+            vi.mocked(createWebAuthnCredential).mockResolvedValueOnce({
+                id: 'cred-no-prf',
+                publicKey: '0x04noprf',
+                raw: {
+                    response: { attestationObject: DEVICE_BOUND_ATTESTATION },
+                    getClientExtensionResults: () => ({ prf: { enabled: false } }),
+                } as never,
+            });
+
+            const result = await createPasskeyUtils('bob', 'example.com', 'MyApp', vi.fn());
+
+            expect(result.authenticator).toEqual({
+                prfSupported: false,
+                aaguid: GPM_AAGUID,
+                backupEligible: false,
+                backupState: false,
+            });
+        });
+
+        it('still creates the passkey when a custom createFn returns no raw credential details', async () => {
+            const result = await createPasskeyUtils('bob', 'example.com', 'MyApp', vi.fn());
+
+            expect(result.credentialId).toBe('cred-standard-123');
+            expect(result.authenticator).toEqual({});
+        });
+
+        // Firefox with 1Password proxies the credential and can block a second read
+        // ("Permission denied to access object"). The passkey exists by then, so
+        // creation must still succeed: failing here would orphan it.
+        it('still creates the passkey when reading the attestation object is blocked', async () => {
+            const { createWebAuthnCredential } = await import('viem/account-abstraction');
+            const response = {};
+            Object.defineProperty(response, 'attestationObject', {
+                get() {
+                    throw new Error('Permission denied to access object');
+                },
+            });
+            vi.mocked(createWebAuthnCredential).mockResolvedValueOnce({
+                id: 'cred-blocked',
+                publicKey: '0x04blocked',
+                raw: { response, getClientExtensionResults: () => ({ prf: { enabled: true } }) } as never,
+            });
+
+            const result = await createPasskeyUtils('bob', 'example.com', 'MyApp', vi.fn());
+
+            expect(result.credentialId).toBe('cred-blocked');
+            // PRF support is still read; only what the attestation object holds is unknown.
+            expect(result.authenticator).toEqual({ prfSupported: true });
+        });
+
+        it('still creates the passkey when every read of the raw credential is blocked', async () => {
+            const { createWebAuthnCredential } = await import('viem/account-abstraction');
+            const blocked = new Proxy(
+                {},
+                {
+                    get() {
+                        throw new Error('Permission denied to access object');
+                    },
+                }
+            );
+            vi.mocked(createWebAuthnCredential).mockResolvedValueOnce({
+                id: 'cred-blocked',
+                publicKey: '0x04blocked',
+                raw: blocked as never,
+            });
+
+            const result = await createPasskeyUtils('bob', 'example.com', 'MyApp', vi.fn());
+
+            expect(result.credentialId).toBe('cred-blocked');
+            expect(result.authenticator).toEqual({});
+        });
+
+        it('passes through the authenticator info from the native path', async () => {
+            const authenticator = { prfSupported: true, backupEligible: true, backupState: true };
+            const result = await createPasskeyUtils(
+                'alice',
+                'example.com',
+                'MyApp',
+                undefined,
+                vi.fn().mockResolvedValue({ id: 'n', publicKey: '0x04n', authenticator })
+            );
+
+            expect(result.authenticator).toEqual(authenticator);
+        });
+
         it('should throw PasskeyRegistrationError when no WebAuthn support and no createFn', async () => {
             // In test env, window.PublicKeyCredential is not available
             await expect(createPasskeyUtils('charlie', 'example.com', 'MyApp')).rejects.toThrow(
@@ -116,6 +316,62 @@ describe('passkey-manager/utils — React Native adapter support', () => {
     });
 
     describe('authenticateWithWebAuthnUtils', () => {
+        // Login authenticator data: rpIdHash(32) | flags | signCount(4), no attested credential data.
+        const loginAuthData = (flags: number) => new Uint8Array([...new Array(32).fill(0x11), flags, 0, 0, 0, 1]);
+
+        it('reports the backup flags from the login authenticator data', async () => {
+            const getFn = vi.fn().mockResolvedValue({
+                id: 'cred-123',
+                type: 'public-key',
+                response: { authenticatorData: loginAuthData(0x01 | 0x04 | 0x08 | 0x10).buffer },
+            });
+
+            const result = await authenticateWithWebAuthnUtils('example.com', 'cred-123', undefined, getFn);
+
+            expect(result.authenticator).toEqual({ backupEligible: true, backupState: true });
+        });
+
+        it('reports nothing when the credential carries no authenticator data', async () => {
+            const getFn = vi.fn().mockResolvedValue({ id: 'cred-123', type: 'public-key' });
+
+            const result = await authenticateWithWebAuthnUtils('example.com', 'cred-123', undefined, getFn);
+
+            expect(result.authenticator).toEqual({});
+        });
+
+        it('still signs in when reading the authenticator data is blocked', async () => {
+            const getFn = vi.fn().mockResolvedValue(credentialWithBlockedResponse('cred-123'));
+
+            const result = await authenticateWithWebAuthnUtils('example.com', 'cred-123', undefined, getFn);
+
+            expect(result.credential.id).toBe('cred-123');
+            expect(result.authenticator).toEqual({});
+        });
+
+        it('reports the backup flags from a wrapped native getFn response', async () => {
+            const authData = loginAuthData(0x01 | 0x04 | 0x08);
+            const nativeGetFn: NativePasskeyGetFn = vi.fn().mockResolvedValue({
+                id: 'cred-123',
+                response: {
+                    authenticatorData: btoa(String.fromCharCode(...authData))
+                        .replace(/\+/g, '-')
+                        .replace(/\//g, '_')
+                        .replace(/=/g, ''),
+                    clientDataJSON: 'e30',
+                    signature: 'AQ',
+                },
+            });
+
+            const result = await authenticateWithWebAuthnUtils(
+                'example.com',
+                'cred-123',
+                undefined,
+                wrapNativeGetFn(nativeGetFn)
+            );
+
+            expect(result.authenticator).toEqual({ backupEligible: true, backupState: false });
+        });
+
         it('should use custom getFn when provided instead of navigator.credentials.get', async () => {
             const mockCredential = {
                 id: 'cred-123',
@@ -220,6 +476,28 @@ describe('passkey-manager/utils — React Native adapter support', () => {
     });
 
     describe('importPasskeyUtils', () => {
+        it('reports the backup flags from the login authenticator data', async () => {
+            const authData = new Uint8Array([...new Array(32).fill(0x11), 0x01 | 0x08 | 0x10, 0, 0, 0, 1]);
+            const getFn = vi.fn().mockResolvedValue({
+                id: 'cred-imported',
+                type: 'public-key',
+                response: { authenticatorData: authData.buffer },
+            });
+
+            const result = await importPasskeyUtils(getFn, 'example.com');
+
+            expect(result.authenticator).toEqual({ backupEligible: true, backupState: true });
+        });
+
+        it('still imports when reading the authenticator data is blocked', async () => {
+            const getFn = vi.fn().mockResolvedValue(credentialWithBlockedResponse('cred-imported'));
+
+            const result = await importPasskeyUtils(getFn, 'example.com');
+
+            expect(result.credential.id).toBe('cred-imported');
+            expect(result.authenticator).toEqual({});
+        });
+
         it('should use custom getFn when provided', async () => {
             const mockCredential = {
                 id: 'imported-cred-id',
@@ -405,6 +683,50 @@ describe('passkey-manager/utils — React Native adapter support', () => {
             // Verify extracted result
             expect(result.id).toBe('new-cred-id');
             expect(result.publicKey).toBe(EXPECTED_PUBKEY);
+        });
+
+        it('requests the PRF extension from the native library', async () => {
+            const mockNativeCreateFn: NativePasskeyCreateFn = vi.fn().mockResolvedValue({
+                id: 'new-cred-id',
+                response: { attestationObject: ATTESTATION_B64URL, clientDataJSON: 'e30' },
+            });
+
+            await wrapNativeCreateFn(mockNativeCreateFn)('alice', 'example.com', 'MyApp');
+
+            expect(vi.mocked(mockNativeCreateFn).mock.calls[0][0].extensions).toEqual({ prf: {} });
+        });
+
+        it('records PRF support, AAGUID and backup flags from the native response', async () => {
+            const mockNativeCreateFn: NativePasskeyCreateFn = vi.fn().mockResolvedValue({
+                id: 'native-prf',
+                response: { attestationObject: toB64Url(SYNCED_ATTESTATION), clientDataJSON: 'e30' },
+                clientExtensionResults: { prf: { enabled: true } },
+            });
+
+            const result = await wrapNativeCreateFn(mockNativeCreateFn)('alice', 'example.com', 'MyApp');
+
+            expect(result.publicKey).toBe(EXPECTED_PUBKEY);
+            expect(result.authenticator).toEqual({
+                prfSupported: true,
+                aaguid: GPM_AAGUID,
+                backupEligible: true,
+                backupState: true,
+            });
+        });
+
+        it('leaves PRF support unknown when the native library returns no extension results', async () => {
+            const mockNativeCreateFn: NativePasskeyCreateFn = vi.fn().mockResolvedValue({
+                id: 'native-old-lib',
+                response: { attestationObject: toB64Url(SYNCED_ATTESTATION), clientDataJSON: 'e30' },
+            });
+
+            const result = await wrapNativeCreateFn(mockNativeCreateFn)('alice', 'example.com', 'MyApp');
+
+            expect(result.authenticator).toEqual({
+                aaguid: GPM_AAGUID,
+                backupEligible: true,
+                backupState: true,
+            });
         });
 
         it('should throw PasskeyRegistrationError for invalid attestation (missing COSE markers)', async () => {

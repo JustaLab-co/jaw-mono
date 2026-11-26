@@ -9,11 +9,14 @@ export const created = {
   session: 's1',
   /** The whole query when a test opens the page at another URL than a session link. */
   query: null as string | null,
+  /** The route params, for the short link page. */
+  params: {} as Record<string, string>,
   request: (async () => null) as (args: RpcArgs) => Promise<unknown>,
 };
 
 export const navigationMock = {
   useSearchParams: () => new URLSearchParams(created.query ?? `session=${created.session}&relay=ws://relay.test`),
+  useParams: () => created.params,
 };
 
 export const uiMock = {

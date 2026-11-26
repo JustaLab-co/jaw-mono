@@ -14,3 +14,8 @@ export { setDappOrigin, dappOriginHeader } from './dappOrigin.js';
 // Also used by @jaw.id/ui, which runs on dApp pages in app-specific mode. There it
 // adds nothing: only keys sets the origin it reads.
 export { jawHttp } from './utils/jawHttp.js';
+
+// Passkey PRF key derivation, cross-platform mode only: in keys the PRF output is
+// the same for every app and never leaves keys. Not on the public entry point, so
+// app-specific mode (where it would run in the dApp's page) does not offer it.
+export { derivePrfKeys, PrfUnavailableError, type EvaluatePrfOptions } from './prf/index.js';

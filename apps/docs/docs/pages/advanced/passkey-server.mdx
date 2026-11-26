@@ -73,9 +73,21 @@ Registers a new passkey credential, and stores the record of the account it crea
 {
   "credentialId": "string",
   "publicKey": "0x...",
-  "displayName": "string"
+  "displayName": "string",
+  "prfSupported": true,
+  "aaguid": "ea9b8d66-4d01-1d21-3ce4-b6b48cb575d4",
+  "backupEligible": true,
+  "backupState": true
 }
 ```
+
+`credentialId`, `publicKey` and `displayName` are always sent. The other four describe the authenticator, as it reported itself when the passkey was created. Each one is optional and is left out when the authenticator did not say:
+
+- `prfSupported`: whether the passkey supports the WebAuthn PRF extension.
+- `aaguid`: the AAGUID of the passkey's authenticator or password manager, as a UUID. It is left out when the platform sends all zeros, as Safari does.
+- `backupEligible`, `backupState`: the authenticator's backup flags, meaning whether the passkey can be synced and whether it is.
+
+Storing them is optional. They are useful for metrics, and nothing in the SDK reads them back.
 
 **Success Response (200/201):** any non-null `data`, for example:
 
@@ -93,6 +105,33 @@ Registers a new passkey credential, and stores the record of the account it crea
 
 - If the credential ID is already registered, change nothing and return success. Never overwrite the public key of an existing credential.
 - Compute the account record from the public key, as described in [Computing the account record](#computing-the-account-record), and store it with the passkey in the same transaction.
+- Accept fields you do not know, and ignore them if you like. Do not reject the request because of them: the SDK can add optional fields to this body in a later release.
+
+### PATCH /passkeys/:credentialId - Update Authenticator Info (optional)
+
+Updates what is known about a registered passkey's authenticator. The SDK sends it after a sign-in or an import, when the authenticator reports backup flags that differ from what it has stored for that passkey. This is how passkeys registered before these fields existed get them filled in.
+
+The path is your passkeys endpoint followed by the credential ID: with `serverUrl` set to `https://your-server.example.com/passkeys`, the request goes to `https://your-server.example.com/passkeys/<credentialId>`. The credential ID is base64url, so it needs no escaping.
+
+**Headers:**
+
+- `Content-Type: application/json`
+
+**Request Body:** only the fields that changed, any of the four optional fields of the registration body:
+
+```json
+{
+  "backupEligible": true,
+  "backupState": true
+}
+```
+
+**Success Response (200):** any non-null `data`, as for registration.
+
+**Behavior:**
+
+- Update only the fields in the body, and return `404` for a credential that is not registered.
+- This endpoint is optional. The SDK ignores every error from it, including a `404` for the route itself, and does not retry: a sign-in or an import never fails because of it.
 
 ### GET /passkeys - Lookup Passkeys by Credential IDs
 
@@ -218,14 +257,18 @@ Store the record once, when the passkey is registered, and serve it from then on
 
 ## Data Format Requirements
 
-| Field            | Format                      | Description                                            |
-| ---------------- | --------------------------- | ------------------------------------------------------ |
-| **credentialId** | Base64url string            | Standard WebAuthn credential ID format                 |
-| **publicKey**    | Hex string with `0x` prefix | The passkey's P-256 public key: 64 bytes, `x` then `y` |
-| **displayName**  | String                      | Human-readable name for the passkey                    |
-| **address**      | Checksummed address         | The smart account address                              |
-| **owners**       | Array of hex strings        | Owner bytes the account was created with, in order     |
-| **nonce**        | Decimal string              | The nonce the account was created with                 |
+| Field              | Format                      | Description                                             |
+| ------------------ | --------------------------- | ------------------------------------------------------- |
+| **credentialId**   | Base64url string            | Standard WebAuthn credential ID format                  |
+| **publicKey**      | Hex string with `0x` prefix | The passkey's P-256 public key: 64 bytes, `x` then `y`  |
+| **displayName**    | String                      | Human-readable name for the passkey                     |
+| **prfSupported**   | Boolean, optional           | Whether the passkey supports the WebAuthn PRF extension |
+| **aaguid**         | UUID string, optional       | AAGUID of the passkey's authenticator                   |
+| **backupEligible** | Boolean, optional           | Whether the passkey can be backed up (synced)           |
+| **backupState**    | Boolean, optional           | Whether the passkey is backed up (synced)               |
+| **address**        | Checksummed address         | The smart account address                               |
+| **owners**         | Array of hex strings        | Owner bytes the account was created with, in order      |
+| **nonce**          | Decimal string              | The nonce the account was created with                  |
 
 ## When to Self-Host
 

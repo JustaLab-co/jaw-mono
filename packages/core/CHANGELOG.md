@@ -1,3 +1,13 @@
+## 1.14.0 (2026-11-26)
+
+### 🚀 Features
+
+- **core:** webAuthn prf support for jaw passkeys ([#681](https://github.com/JustaLab-co/jaw-mono/pull/681))
+
+### ❤️ Thank You
+
+- Nikhil Kumar @nikhilkumar1612
+
 ## 1.13.2 (2026-11-25)
 
 ### 🩹 Fixes

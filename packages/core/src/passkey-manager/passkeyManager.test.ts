@@ -543,6 +543,286 @@ describe('PasskeyManager', () => {
         });
     });
 
+    describe('authenticator info (PRF support, AAGUID, backup flags)', () => {
+        const AUTHENTICATOR = {
+            prfSupported: true,
+            aaguid: 'ea9b8d66-4d01-1d21-3ce4-b6b48cb575d4',
+            backupEligible: true,
+            backupState: true,
+        };
+
+        it('createPasskey stores and returns what the authenticator reported', async () => {
+            vi.spyOn(utils, 'createPasskeyUtils').mockResolvedValueOnce({
+                credentialId: mockCredentialId,
+                publicKey: mockPublicKey,
+                webAuthnAccount: { type: 'webAuthn' } as never,
+                authenticator: AUTHENTICATOR,
+            });
+
+            const result = await manager.createPasskey(mockUsername, 'example.com', 'MyApp');
+
+            expect(result.authenticator).toEqual(AUTHENTICATOR);
+            expect(result.passkeyAccount).toMatchObject(AUTHENTICATOR);
+            expect(manager.fetchAccounts()[0]).toMatchObject(AUTHENTICATOR);
+        });
+
+        it('storePasskeyAccount sends the authenticator info to the passkey server with the passkey', async () => {
+            await manager.storePasskeyAccount(
+                mockUsername,
+                mockCredentialId,
+                mockPublicKey,
+                mockAddress,
+                false,
+                RECORD,
+                AUTHENTICATOR
+            );
+
+            expect(utils.registerPasskeyInBackend).toHaveBeenLastCalledWith(
+                {
+                    credentialId: mockCredentialId,
+                    publicKey: mockPublicKey,
+                    displayName: mockUsername,
+                    ...AUTHENTICATOR,
+                },
+                undefined,
+                false,
+                undefined
+            );
+            expect(manager.fetchAccounts()[0]).toMatchObject(AUTHENTICATOR);
+        });
+
+        it('storePasskeyAccount sends an explicit "no PRF" as false', async () => {
+            await manager.storePasskeyAccount(
+                mockUsername,
+                mockCredentialId,
+                mockPublicKey,
+                mockAddress,
+                false,
+                RECORD,
+                {
+                    prfSupported: false,
+                    backupEligible: false,
+                    backupState: false,
+                }
+            );
+
+            expect(vi.mocked(utils.registerPasskeyInBackend).mock.lastCall?.[0]).toMatchObject({
+                prfSupported: false,
+                backupEligible: false,
+                backupState: false,
+            });
+        });
+
+        it('storePasskeyAccount without authenticator info sends only the original fields', async () => {
+            await manager.storePasskeyAccount(mockUsername, mockCredentialId, mockPublicKey, mockAddress);
+
+            expect(vi.mocked(utils.registerPasskeyInBackend).mock.lastCall?.[0]).toEqual({
+                credentialId: mockCredentialId,
+                publicKey: mockPublicKey,
+                displayName: mockUsername,
+            });
+        });
+
+        it('fills authenticator fields an existing entry lacks without overwriting ones it has', () => {
+            manager.addAccountToList({
+                username: mockUsername,
+                credentialId: mockCredentialId,
+                publicKey: mockPublicKey,
+                creationDate: new Date().toISOString(),
+                isImported: false,
+                prfSupported: false,
+            });
+
+            manager.addAccountToList({
+                username: mockUsername,
+                credentialId: mockCredentialId,
+                publicKey: mockPublicKey,
+                creationDate: new Date().toISOString(),
+                isImported: false,
+                ...AUTHENTICATOR,
+            });
+
+            expect(manager.fetchAccounts()[0]).toMatchObject({
+                prfSupported: false,
+                aaguid: AUTHENTICATOR.aaguid,
+                backupEligible: true,
+                backupState: true,
+            });
+        });
+    });
+
+    describe('recordAuthenticatorInfo (filling in passkeys created before it was recorded)', () => {
+        const stored = (fields: Partial<PasskeyAccount> = {}): PasskeyAccount => ({
+            username: mockUsername,
+            credentialId: mockCredentialId,
+            publicKey: mockPublicKey,
+            creationDate: new Date().toISOString(),
+            isImported: false,
+            ...fields,
+        });
+
+        beforeEach(() => {
+            vi.spyOn(utils, 'updatePasskeyInBackend').mockReset().mockResolvedValue(undefined);
+        });
+
+        it('fills unknown fields locally and sends them to the passkey server', async () => {
+            manager.addAccountToList(stored());
+
+            const changes = await manager.recordAuthenticatorInfo(mockCredentialId, {
+                backupEligible: true,
+                backupState: true,
+            });
+
+            expect(changes).toEqual({ backupEligible: true, backupState: true });
+            expect(manager.fetchAccounts()[0]).toMatchObject({ backupEligible: true, backupState: true });
+            expect(utils.updatePasskeyInBackend).toHaveBeenCalledWith(
+                mockCredentialId,
+                { backupEligible: true, backupState: true },
+                undefined,
+                false,
+                undefined
+            );
+        });
+
+        it('sends only the fields that changed', async () => {
+            manager.addAccountToList(stored({ backupEligible: true, backupState: false }));
+
+            await manager.recordAuthenticatorInfo(mockCredentialId, { backupEligible: true, backupState: true });
+
+            expect(vi.mocked(utils.updatePasskeyInBackend).mock.lastCall?.[1]).toEqual({ backupState: true });
+        });
+
+        it('sends nothing when nothing changed', async () => {
+            manager.addAccountToList(stored({ backupEligible: true, backupState: true, prfSupported: true }));
+
+            const changes = await manager.recordAuthenticatorInfo(mockCredentialId, {
+                backupEligible: true,
+                backupState: true,
+                prfSupported: true,
+            });
+
+            expect(changes).toEqual({});
+            expect(utils.updatePasskeyInBackend).not.toHaveBeenCalled();
+        });
+
+        it('does nothing for an account that is not stored', async () => {
+            const changes = await manager.recordAuthenticatorInfo('unknown-cred', { prfSupported: true });
+
+            expect(changes).toEqual({});
+            expect(manager.fetchAccounts()).toEqual([]);
+            expect(utils.updatePasskeyInBackend).not.toHaveBeenCalled();
+        });
+
+        it('updates only the passkey it was observed on when several are stored', async () => {
+            // A Chrome-profile passkey stored first, the observed passkey second: a
+            // wrong match or a change applied to every entry would copy the flags over.
+            const other = stored({
+                username: 'other',
+                credentialId: 'cred-other',
+                publicKey: '0x99',
+                prfSupported: false,
+                backupEligible: false,
+                backupState: false,
+            });
+            const target = stored({ username: 'target', credentialId: 'cred-target', publicKey: '0x88' });
+            manager.addAccountToList(other);
+            manager.addAccountToList(target);
+
+            const changes = await manager.recordAuthenticatorInfo('cred-target', {
+                prfSupported: true,
+                backupEligible: true,
+                backupState: true,
+            });
+
+            expect(changes).toEqual({ prfSupported: true, backupEligible: true, backupState: true });
+            const [first, second] = manager.fetchAccounts();
+            expect(first).toEqual(other);
+            expect(second).toEqual({ ...target, prfSupported: true, backupEligible: true, backupState: true });
+            expect(utils.updatePasskeyInBackend).toHaveBeenCalledTimes(1);
+            expect(vi.mocked(utils.updatePasskeyInBackend).mock.lastCall?.[0]).toBe('cred-target');
+        });
+
+        it('takes the latest backup state, since a passkey can become backed up later', async () => {
+            manager.addAccountToList(stored({ backupEligible: true, backupState: true }));
+
+            await manager.recordAuthenticatorInfo(mockCredentialId, { backupState: false });
+
+            expect(manager.fetchAccounts()[0].backupState).toBe(false);
+        });
+
+        it('keeps PRF support once seen: a later "no" from another browser does not overwrite it', async () => {
+            manager.addAccountToList(stored({ prfSupported: true }));
+
+            const changes = await manager.recordAuthenticatorInfo(mockCredentialId, { prfSupported: false });
+
+            expect(changes).toEqual({});
+            expect(manager.fetchAccounts()[0].prfSupported).toBe(true);
+        });
+
+        it('records "no PRF" only while unknown, and a later "yes" replaces it', async () => {
+            manager.addAccountToList(stored());
+
+            await manager.recordAuthenticatorInfo(mockCredentialId, { prfSupported: false });
+            expect(manager.fetchAccounts()[0].prfSupported).toBe(false);
+
+            await manager.recordAuthenticatorInfo(mockCredentialId, { prfSupported: true });
+            expect(manager.fetchAccounts()[0].prfSupported).toBe(true);
+        });
+
+        it('fills an AAGUID only when missing', async () => {
+            manager.addAccountToList(stored({ aaguid: 'ea9b8d66-4d01-1d21-3ce4-b6b48cb575d4' }));
+
+            const changes = await manager.recordAuthenticatorInfo(mockCredentialId, {
+                aaguid: '08987058-cadc-4b81-b6e1-30de50dcbe96',
+            });
+
+            expect(changes).toEqual({});
+            expect(manager.fetchAccounts()[0].aaguid).toBe('ea9b8d66-4d01-1d21-3ce4-b6b48cb575d4');
+        });
+
+        it('keeps the local update when the passkey server fails, and does not throw', async () => {
+            vi.mocked(utils.updatePasskeyInBackend).mockRejectedValue(new Error('404'));
+            manager.addAccountToList(stored());
+
+            await expect(manager.recordAuthenticatorInfo(mockCredentialId, { prfSupported: true })).resolves.toEqual({
+                prfSupported: true,
+            });
+            expect(manager.fetchAccounts()[0].prfSupported).toBe(true);
+        });
+
+        it('sends the update to a configured passkey server', async () => {
+            const custom = new PasskeyManager(
+                createMemoryStorage(),
+                { serverUrl: 'https://p.example.com/passkeys' },
+                'k1'
+            );
+            custom.addAccountToList(stored());
+
+            await custom.recordAuthenticatorInfo(mockCredentialId, { prfSupported: true });
+
+            expect(utils.updatePasskeyInBackend).toHaveBeenCalledWith(
+                mockCredentialId,
+                { prfSupported: true },
+                'k1',
+                false,
+                'https://p.example.com/passkeys'
+            );
+        });
+
+        it('a login records the backup flags it observed, before returning', async () => {
+            manager.addAccountToList(stored());
+            vi.spyOn(utils, 'authenticateWithWebAuthnUtils').mockResolvedValueOnce({
+                credential: { id: mockCredentialId, type: 'public-key' },
+                challenge: new Uint8Array(32),
+                authenticator: { backupEligible: true, backupState: true },
+            });
+
+            await manager.authenticateWithWebAuthn('example.com', mockCredentialId);
+
+            expect(manager.fetchAccounts()[0]).toMatchObject({ backupEligible: true, backupState: true });
+        });
+    });
+
     describe('storePasskeyAccountForLogin', () => {
         it('should lookup passkey from backend and store with isImported=true', async () => {
             await manager.storePasskeyAccountForLogin(mockCredentialId, mockAddress);
@@ -888,6 +1168,7 @@ describe('PasskeyManager', () => {
                 credentialId: 'native-cred',
                 publicKey: '0x04native' as `0x${string}`,
                 webAuthnAccount: { type: 'webAuthn' } as never,
+                authenticator: {},
             });
 
             await manager.createPasskey('alice', 'example.com', 'MyApp', mockCreateFn, mockNativeCreateFn, mockGetFn);
@@ -907,6 +1188,7 @@ describe('PasskeyManager', () => {
                 credentialId: 'rn-cred-id',
                 publicKey: '0x04rnpub' as `0x${string}`,
                 webAuthnAccount: { type: 'webAuthn' } as never,
+                authenticator: {},
             });
 
             const result = await manager.createPasskey(
