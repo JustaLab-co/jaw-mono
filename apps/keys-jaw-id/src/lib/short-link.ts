@@ -67,7 +67,7 @@ function linkOf(v: Record<string, unknown>): OpenedLink | undefined {
 
 function batchOf(v: Record<string, unknown>, id: string): OpenedBatch | undefined {
   const { account, members } = v;
-  if (typeof account !== 'string' || !isAddress(account)) return undefined;
+  if (typeof account !== 'string' || !isAddress(account, { strict: false })) return undefined;
   if (!Array.isArray(members) || members.length === 0 || members.length > MAX_BATCH_MEMBERS) return undefined;
   // A member naming the batch itself would open as a batch again.
   if (!members.every((m) => isMember(m) && m.id !== id)) return undefined;

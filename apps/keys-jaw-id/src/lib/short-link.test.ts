@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { openShortLink } from './short-link';
+import { sealForTest } from './short-link.testkit';
 
 const fixture = JSON.parse(
   readFileSync(join(__dirname, '../app/cli-bridge/fixtures/short-link-current.json'), 'utf8')
@@ -74,16 +75,7 @@ describe('openShortLink', () => {
 });
 
 describe('openShortLink on a plaintext it did not expect', () => {
-  async function sealed(plain: unknown) {
-    const iv = new Uint8Array(12).fill(9);
-    const k = await crypto.subtle.importKey('raw', Buffer.from(key, 'base64url'), 'AES-GCM', false, ['encrypt']);
-    const ct = await crypto.subtle.encrypt(
-      { name: 'AES-GCM', iv, additionalData: new TextEncoder().encode(`jaw-short-link/1\n${id}`) },
-      k,
-      new TextEncoder().encode(typeof plain === 'string' ? plain : JSON.stringify(plain))
-    );
-    return Buffer.concat([iv, new Uint8Array(ct)]).toString('base64url');
-  }
+  const sealed = (plain: unknown) => sealForTest(plain, id, key);
 
   it.each([
     ['another version', { ...opened, v: 2 }],
@@ -107,16 +99,7 @@ describe('openShortLink on a batch', () => {
   const member = (n: number, chainId: number) => ({ id: `${String.fromCharCode(65 + n)}`.repeat(22), key, chainId });
   const batch = { v: 2, account, members: [member(0, 84532), member(1, 11155111), member(2, 11155420)] };
 
-  async function sealed(plain: unknown) {
-    const iv = new Uint8Array(12).fill(9);
-    const k = await crypto.subtle.importKey('raw', Buffer.from(key, 'base64url'), 'AES-GCM', false, ['encrypt']);
-    const ct = await crypto.subtle.encrypt(
-      { name: 'AES-GCM', iv, additionalData: new TextEncoder().encode(`jaw-short-link/1\n${id}`) },
-      k,
-      new TextEncoder().encode(JSON.stringify(plain))
-    );
-    return Buffer.concat([iv, new Uint8Array(ct)]).toString('base64url');
-  }
+  const sealed = (plain: unknown) => sealForTest(plain, id, key);
   const open = async (plain: unknown) => openShortLink(id, key, serving({ blob: await sealed(plain) }));
 
   it('opens the account and the members, each with its short link and chain', async () => {
@@ -126,6 +109,11 @@ describe('openShortLink on a batch', () => {
   it('opens five members, the account cap', async () => {
     const five = [84532, 11155111, 11155420, 421614, 80002].map((c, n) => member(n, c));
     expect(await open({ ...batch, members: five })).toEqual({ account, members: five });
+  });
+
+  it('opens an account written in any letter case', async () => {
+    const mixed = '0xAbCdEf0000000000000000000000000000000001';
+    expect(await open({ ...batch, account: mixed })).toEqual({ account: mixed, members: batch.members });
   });
 
   it('keeps only the fields of a member it knows', async () => {
@@ -153,6 +141,7 @@ describe('openShortLink on a batch', () => {
     ['a member that is not an object', { ...batch, members: ['x'] }],
     ['no account', { ...batch, account: undefined }],
     ['an account that is not an address', { ...batch, account: '0x1234' }],
+    ['an account with characters outside hex', { ...batch, account: '0x111111111111111111111111111111111111111g' }],
     ['another version', { ...batch, v: 3 }],
   ])('gives nothing for %s', async (_, plain) => {
     expect(await open(plain)).toBeUndefined();

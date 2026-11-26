@@ -12,6 +12,7 @@ vi.mock('@jaw.id/core', async (original) =>
 
 import ShortLinkPage from './page';
 import { FakeSocket, created, host, root, setUp, tearDown } from '../../cli-bridge/test-harness';
+import { sealForTest } from '../../../lib/short-link.testkit';
 
 const fixture = JSON.parse(
   readFileSync(join(__dirname, '../../cli-bridge/fixtures/short-link-current.json'), 'utf8')
@@ -93,16 +94,8 @@ describe('/a/[id]', () => {
       account: '0x1111111111111111111111111111111111111111',
       members: [{ id: 'BAQEBAQEBAQEBAQEBAQEBA', key, chainId: 84532 }],
     };
-    const aes = await crypto.subtle.importKey('raw', Buffer.from(key, 'base64url'), 'AES-GCM', false, ['encrypt']);
-    const iv = new Uint8Array(12).fill(9);
-    const sealed = await crypto.subtle.encrypt(
-      { name: 'AES-GCM', iv, additionalData: new TextEncoder().encode(`jaw-short-link/1\n${id}`) },
-      aes,
-      new TextEncoder().encode(JSON.stringify(plain))
-    );
-    serve(
-      () => new Response(JSON.stringify({ blob: Buffer.concat([iv, new Uint8Array(sealed)]).toString('base64url') }))
-    );
+    const sealed = await sealForTest(plain, id, key);
+    serve(() => new Response(JSON.stringify({ blob: sealed })));
 
     await open(key);
     await vi.waitFor(() => expect(host.textContent).toContain('This link is damaged or has expired'));
