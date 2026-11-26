@@ -1381,6 +1381,20 @@ describe('useGasEstimation offers a fee token only if what the batch leaves of i
     expect(hook.selectedFeeToken).toBeNull();
   });
 
+  it('a USDC the owner picked stays selected but no longer payable once the preview spends it all', async () => {
+    erc20Mock.mockResolvedValue([usdcEstimate]);
+    await mount(passingEth(), [nativeEth(10n ** 18n), token({})]);
+    act(() => hook.setSelectedFeeToken(usdc()));
+
+    await act(async () => setAssetsOutExternally([spends(USDC, 10_000_000n)]));
+    await flush();
+
+    // The dialogs block Confirm on a selected ERC-20 that is not selectable.
+    expect(hook.selectedFeeToken?.symbol).toBe('USDC');
+    expect(hook.selectedFeeToken?.isSelectable).toBe(false);
+    expect(hook.isPayingWithErc20).toBe(true);
+  });
+
   it('a preview of a batch that moves no fee token out does not ask the paymaster again', async () => {
     erc20Mock.mockResolvedValue([usdcEstimate]);
     await mount(passingEth(), [nativeEth(10n ** 18n), token({})]);
