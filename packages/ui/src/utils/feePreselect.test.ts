@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
 import type { FeeTokenOption } from '../components/FeeTokenSelector';
-import { preselectFeeToken, provenErc20 } from './feePreselect';
+import { outflowOf, paysAfterOutflow, preselectFeeToken, provenErc20 } from './feePreselect';
+import type { AssetDelta } from './assetPreview';
 
 // A token reduced to the facts the choice reads, as lean/Model/FeePreselect.lean models it.
 const tok = (
@@ -62,5 +63,45 @@ describe('preselectFeeToken', () => {
         else expect(pick).toBeNull();
       })
     );
+  });
+});
+
+describe('paysAfterOutflow', () => {
+  const amount = fc.bigInt({ min: 0n, max: 10n ** 30n });
+
+  it('is true exactly when the balance less what the batch moves out covers the cost', () => {
+    fc.assert(
+      fc.property(amount, amount, amount, (balance, outflow, cost) => {
+        expect(paysAfterOutflow(balance, outflow, cost)).toBe(balance - outflow >= cost);
+      })
+    );
+  });
+
+  it('never offers a token on more outflow than it would on less', () => {
+    fc.assert(
+      fc.property(amount, amount, amount, amount, (balance, outflow, more, cost) => {
+        if (paysAfterOutflow(balance, outflow + more, cost))
+          expect(paysAfterOutflow(balance, outflow, cost)).toBe(true);
+      })
+    );
+  });
+});
+
+describe('outflowOf', () => {
+  const delta = (address: string, diff: bigint): AssetDelta => ({
+    address,
+    decimals: 6,
+    diff,
+    direction: diff < 0n ? 'out' : 'in',
+    amountFormatted: '',
+    isNative: false,
+  });
+
+  it('sums what goes out in that token, in any letter case, and ignores what comes in and other tokens', () => {
+    const assets = [delta('0xAbC', -5n), delta('0xabc', -2n), delta('0xabc', 7n), delta('0xdef', -9n)];
+
+    expect(outflowOf(assets, '0xABC')).toBe(7n);
+    expect(outflowOf(assets, '0x123')).toBe(0n);
+    expect(outflowOf(undefined, '0xabc')).toBe(0n);
   });
 });

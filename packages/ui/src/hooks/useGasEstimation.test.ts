@@ -26,6 +26,7 @@ import { Erc20EstimationError, estimateErc20PaymasterCosts } from '@jaw.id/core'
 import type { Account } from '@jaw.id/core';
 import { useGasEstimation, type UseGasEstimationResult, type TransactionCall } from './useGasEstimation';
 import type { FeeTokenOption } from '../components/FeeTokenSelector';
+import type { AssetDelta } from '../utils/assetPreview';
 import { INSUFFICIENT_FUNDS_ERROR, resolveFeeBlock } from '../utils/transactionFailure';
 
 const erc20Mock = vi.mocked(estimateErc20PaymasterCosts);
@@ -106,6 +107,7 @@ const blockNow = () =>
 let setTokensExternally: (tokens: FeeTokenOption[]) => void;
 let setCallsExternally: (calls: TransactionCall[]) => void;
 let setApiKeyExternally: (apiKey: string) => void;
+let setAssetsOutExternally: (assetsOut: AssetDelta[] | undefined) => void;
 
 function Probe({
   account,
@@ -113,13 +115,17 @@ function Probe({
   initialCalls = CALLS,
   isSponsored = false,
   permissionId,
+  initialAssetsOut,
 }: {
   account: Account;
   initialTokens: FeeTokenOption[];
   initialCalls?: TransactionCall[];
   isSponsored?: boolean;
   permissionId?: `0x${string}`;
+  initialAssetsOut?: AssetDelta[];
 }) {
+  const [assetsOut, setAssetsOut] = useState(initialAssetsOut);
+  setAssetsOutExternally = setAssetsOut;
   const [tokens, setTokens] = useState(initialTokens);
   const [calls, setCalls] = useState(initialCalls);
   const [apiKey, setApiKey] = useState('test-key');
@@ -135,6 +141,7 @@ function Probe({
     feeTokens: tokens,
     isSponsored,
     permissionId,
+    assetsOut,
     onFeeTokensUpdate: setTokens,
   });
   return null;
@@ -142,13 +149,28 @@ function Probe({
 
 let root: Root | null = null;
 
-async function mount(account: Account, initialTokens: FeeTokenOption[], initialCalls?: TransactionCall[]) {
+async function mount(
+  account: Account,
+  initialTokens: FeeTokenOption[],
+  initialCalls?: TransactionCall[],
+  initialAssetsOut?: AssetDelta[]
+) {
   root = createRoot(document.createElement('div'));
   await act(async () => {
-    root!.render(createElement(Probe, { account, initialTokens, initialCalls }));
+    root!.render(createElement(Probe, { account, initialTokens, initialCalls, initialAssetsOut }));
   });
   await settle();
 }
+
+/** What the asset preview says the batch moves out of the account in `address`. */
+const spends = (address: string, amount: bigint): AssetDelta => ({
+  address,
+  decimals: 6,
+  diff: -amount,
+  direction: 'out',
+  amountFormatted: '',
+  isNative: false,
+});
 
 async function flush() {
   for (let i = 0; i < 20; i++) await act(() => Promise.resolve());
@@ -1296,5 +1318,73 @@ describe('useGasEstimation preselects a fee token the account can pay with', () 
     });
     await settle();
     expect(hook.selectedFeeToken?.isNative).toBe(true);
+  });
+});
+
+describe('useGasEstimation offers a fee token only if what the batch leaves of it covers the fee', () => {
+  const FEE = '0.0002';
+  const passingEth = () => makeAccount(async () => FEE);
+  const usdc = () => tokensNow.find((t) => t.symbol === 'USDC')!;
+
+  it('a batch that spends all the USDC: USDC is not offered and the dialog opens on the coin', async () => {
+    erc20Mock.mockResolvedValue([usdcEstimate]);
+    await mount(passingEth(), [nativeEth(10n ** 18n), token({})], undefined, [spends(USDC, 10_000_000n)]);
+
+    expect(usdc().isSelectable).toBe(false);
+    expect(hook.selectedFeeToken?.isNative).toBe(true);
+  });
+
+  it('a batch that spends all the USDC and a dust coin: nothing is preselected and funds block the send', async () => {
+    erc20Mock.mockResolvedValue([usdcEstimate]);
+    await mount(passingEth(), [nativeEth(1n), token({})], undefined, [spends(USDC, 10_000_000n)]);
+
+    expect(usdc().isSelectable).toBe(false);
+    expect(hook.selectedFeeToken).toBeNull();
+    expect(blockNow()).toBe('funds');
+  });
+
+  it('a batch that leaves exactly the approved fee of USDC: USDC is offered', async () => {
+    erc20Mock.mockResolvedValue([usdcEstimate]);
+    await mount(passingEth(), [nativeEth(1n), token({})], undefined, [
+      spends(USDC, 10_000_000n - usdcEstimate.tokenCostApproved),
+    ]);
+
+    expect(usdc().isSelectable).toBe(true);
+    expect(hook.selectedFeeToken?.symbol).toBe('USDC');
+  });
+
+  it('a batch that leaves one unit less than the approved fee: USDC is not offered', async () => {
+    erc20Mock.mockResolvedValue([usdcEstimate]);
+    await mount(passingEth(), [nativeEth(1n), token({})], undefined, [
+      spends(USDC, 10_000_000n - usdcEstimate.tokenCostApproved + 1n),
+    ]);
+
+    expect(usdc().isSelectable).toBe(false);
+  });
+
+  it('the address of the outflow in other letter case still counts', async () => {
+    erc20Mock.mockResolvedValue([usdcEstimate]);
+    await mount(passingEth(), [nativeEth(1n), token({})], undefined, [spends(USDC.toLowerCase(), 10_000_000n)]);
+
+    expect(usdc().isSelectable).toBe(false);
+  });
+
+  it('the preview arriving after the estimate takes USDC out of the offer and off the preselection', async () => {
+    erc20Mock.mockResolvedValue([usdcEstimate]);
+    await mount(passingEth(), [nativeEth(1n), token({})]);
+    expect(hook.selectedFeeToken?.symbol).toBe('USDC');
+
+    await act(async () => setAssetsOutExternally([spends(USDC, 10_000_000n)]));
+    await flush();
+
+    expect(usdc().isSelectable).toBe(false);
+    expect(hook.selectedFeeToken).toBeNull();
+  });
+
+  it('an outflow of another token leaves USDC offered', async () => {
+    erc20Mock.mockResolvedValue([usdcEstimate]);
+    await mount(passingEth(), [nativeEth(1n), token({})], undefined, [spends(USDT, 10_000_000n)]);
+
+    expect(usdc().isSelectable).toBe(true);
   });
 });
