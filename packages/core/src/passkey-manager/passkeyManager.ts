@@ -1,6 +1,6 @@
 import { createLocalStorage, type SyncStorage } from '../storage-manager/index.js';
 import { Address } from 'viem';
-import { PasskeyAccount, AuthCheckResult, AuthState } from './types.js';
+import { PasskeyAccount, AuthCheckResult, AuthState, type PasskeyAuthenticatorInfo } from './types.js';
 import type { JawProviderPreference } from '../provider/index.js';
 import {
     registerPasskeyInBackend,
@@ -144,6 +144,7 @@ export class PasskeyManager {
         if (account.isImported && !existing.isImported) patch.isImported = true;
         if (account.address && !existing.address) patch.address = account.address;
         if (account.account && !existing.account) patch.account = account.account;
+        Object.assign(patch, missingAuthenticatorFields(existing, account));
 
         if (Object.keys(patch).length === 0) return;
 
@@ -214,8 +215,9 @@ export class PasskeyManager {
         publicKey: `0x${string}`;
         webAuthnAccount: WebAuthnAccount;
         passkeyAccount: PasskeyAccount;
+        authenticator: PasskeyAuthenticatorInfo;
     }> {
-        const { credentialId, publicKey, webAuthnAccount } = await createPasskeyUtils(
+        const { credentialId, publicKey, webAuthnAccount, authenticator } = await createPasskeyUtils(
             username,
             rpId,
             rpName,
@@ -227,11 +229,12 @@ export class PasskeyManager {
             username,
             credentialId,
             publicKey,
+            ...authenticator,
             creationDate: new Date().toISOString(),
             isImported: false,
         };
         this.addAccountToList(passkeyAccount);
-        return { credentialId, publicKey, webAuthnAccount, passkeyAccount };
+        return { credentialId, publicKey, webAuthnAccount, passkeyAccount, authenticator };
     }
 
     /**
@@ -277,6 +280,7 @@ export class PasskeyManager {
      * @param address - Wallet address associated with the passkey
      * @param dev - Whether to use the staging environment (default: false)
      * @param account - The record the account was created from
+     * @param authenticator - What the authenticator reported at creation (PRF support, AAGUID, backup flags)
      * @throws {PasskeyRegistrationError} If backend registration fails
      */
     async storePasskeyAccount(
@@ -285,7 +289,8 @@ export class PasskeyManager {
         publicKey: `0x${string}`,
         address: Address,
         dev = false,
-        account?: AccountRecord
+        account?: AccountRecord,
+        authenticator?: PasskeyAuthenticatorInfo
     ): Promise<void> {
         this.validateDisplayName(name);
         this.validateCredentialId(credentialId);
@@ -297,6 +302,7 @@ export class PasskeyManager {
                 credentialId,
                 publicKey,
                 displayName: name.trim(),
+                ...authenticator,
             },
             this.apiKey,
             dev,
@@ -313,6 +319,7 @@ export class PasskeyManager {
             publicKey,
             address,
             ...(account ? { account } : {}),
+            ...authenticator,
             creationDate: new Date().toISOString(),
             isImported: false,
         };
@@ -445,4 +452,17 @@ export class PasskeyManager {
             throw new Error('Display name cannot exceed 100 characters');
         }
     }
+}
+
+const AUTHENTICATOR_FIELDS = ['prfSupported', 'aaguid', 'backupEligible', 'backupState'] as const;
+
+/** The authenticator fields `incoming` has that `existing` lacks. */
+function missingAuthenticatorFields(existing: PasskeyAccount, incoming: PasskeyAccount): PasskeyAuthenticatorInfo {
+    const patch: PasskeyAuthenticatorInfo = {};
+    for (const field of AUTHENTICATOR_FIELDS) {
+        if (existing[field] === undefined && incoming[field] !== undefined) {
+            (patch as Record<string, unknown>)[field] = incoming[field];
+        }
+    }
+    return patch;
 }

@@ -543,6 +543,114 @@ describe('PasskeyManager', () => {
         });
     });
 
+    describe('authenticator info (PRF support, AAGUID, backup flags)', () => {
+        const AUTHENTICATOR = {
+            prfSupported: true,
+            aaguid: 'ea9b8d66-4d01-1d21-3ce4-b6b48cb575d4',
+            backupEligible: true,
+            backupState: true,
+        };
+
+        it('createPasskey stores and returns what the authenticator reported', async () => {
+            vi.spyOn(utils, 'createPasskeyUtils').mockResolvedValueOnce({
+                credentialId: mockCredentialId,
+                publicKey: mockPublicKey,
+                webAuthnAccount: { type: 'webAuthn' } as never,
+                authenticator: AUTHENTICATOR,
+            });
+
+            const result = await manager.createPasskey(mockUsername, 'example.com', 'MyApp');
+
+            expect(result.authenticator).toEqual(AUTHENTICATOR);
+            expect(result.passkeyAccount).toMatchObject(AUTHENTICATOR);
+            expect(manager.fetchAccounts()[0]).toMatchObject(AUTHENTICATOR);
+        });
+
+        it('storePasskeyAccount sends the authenticator info to the passkey server with the passkey', async () => {
+            await manager.storePasskeyAccount(
+                mockUsername,
+                mockCredentialId,
+                mockPublicKey,
+                mockAddress,
+                false,
+                RECORD,
+                AUTHENTICATOR
+            );
+
+            expect(utils.registerPasskeyInBackend).toHaveBeenLastCalledWith(
+                {
+                    credentialId: mockCredentialId,
+                    publicKey: mockPublicKey,
+                    displayName: mockUsername,
+                    ...AUTHENTICATOR,
+                },
+                undefined,
+                false,
+                undefined
+            );
+            expect(manager.fetchAccounts()[0]).toMatchObject(AUTHENTICATOR);
+        });
+
+        it('storePasskeyAccount sends an explicit "no PRF" as false', async () => {
+            await manager.storePasskeyAccount(
+                mockUsername,
+                mockCredentialId,
+                mockPublicKey,
+                mockAddress,
+                false,
+                RECORD,
+                {
+                    prfSupported: false,
+                    backupEligible: false,
+                    backupState: false,
+                }
+            );
+
+            expect(vi.mocked(utils.registerPasskeyInBackend).mock.lastCall?.[0]).toMatchObject({
+                prfSupported: false,
+                backupEligible: false,
+                backupState: false,
+            });
+        });
+
+        it('storePasskeyAccount without authenticator info sends only the original fields', async () => {
+            await manager.storePasskeyAccount(mockUsername, mockCredentialId, mockPublicKey, mockAddress);
+
+            expect(vi.mocked(utils.registerPasskeyInBackend).mock.lastCall?.[0]).toEqual({
+                credentialId: mockCredentialId,
+                publicKey: mockPublicKey,
+                displayName: mockUsername,
+            });
+        });
+
+        it('fills authenticator fields an existing entry lacks without overwriting ones it has', () => {
+            manager.addAccountToList({
+                username: mockUsername,
+                credentialId: mockCredentialId,
+                publicKey: mockPublicKey,
+                creationDate: new Date().toISOString(),
+                isImported: false,
+                prfSupported: false,
+            });
+
+            manager.addAccountToList({
+                username: mockUsername,
+                credentialId: mockCredentialId,
+                publicKey: mockPublicKey,
+                creationDate: new Date().toISOString(),
+                isImported: false,
+                ...AUTHENTICATOR,
+            });
+
+            expect(manager.fetchAccounts()[0]).toMatchObject({
+                prfSupported: false,
+                aaguid: AUTHENTICATOR.aaguid,
+                backupEligible: true,
+                backupState: true,
+            });
+        });
+    });
+
     describe('storePasskeyAccountForLogin', () => {
         it('should lookup passkey from backend and store with isImported=true', async () => {
             await manager.storePasskeyAccountForLogin(mockCredentialId, mockAddress);
@@ -888,6 +996,7 @@ describe('PasskeyManager', () => {
                 credentialId: 'native-cred',
                 publicKey: '0x04native' as `0x${string}`,
                 webAuthnAccount: { type: 'webAuthn' } as never,
+                authenticator: {},
             });
 
             await manager.createPasskey('alice', 'example.com', 'MyApp', mockCreateFn, mockNativeCreateFn, mockGetFn);
@@ -907,6 +1016,7 @@ describe('PasskeyManager', () => {
                 credentialId: 'rn-cred-id',
                 publicKey: '0x04rnpub' as `0x${string}`,
                 webAuthnAccount: { type: 'webAuthn' } as never,
+                authenticator: {},
             });
 
             const result = await manager.createPasskey(

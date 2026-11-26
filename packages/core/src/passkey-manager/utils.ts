@@ -1,10 +1,20 @@
 import { createWebAuthnCredential, toWebAuthnAccount } from 'viem/account-abstraction';
+import type { CreateWebAuthnCredentialParameters } from 'viem/account-abstraction';
 import type * as WebAuthnP256 from 'ox/WebAuthnP256';
 import * as PublicKey from 'ox/PublicKey';
 import { restCall } from '../api/index.js';
 import type { PasskeyRegistrationRequest, PasskeyLookupResponse } from './types.js';
 import type { AccountRecord } from '../account/accountRecord.js';
 import type { WebAuthnAccount } from 'viem/account-abstraction';
+import { readAuthenticatorInfo, type PasskeyAuthenticatorInfo } from './authenticatorData.js';
+
+/**
+ * Extensions requested when a passkey is created. `prf: {}` asks the
+ * authenticator to enable the PRF extension for the new credential, so a
+ * stable secret can later be evaluated from it. Authenticators that do not
+ * support PRF ignore it.
+ */
+const PASSKEY_CREATION_EXTENSIONS = { prf: {} };
 
 /**
  * Low-level WebAuthn credential creation function (viem-compatible).
@@ -27,6 +37,8 @@ export type PasskeyGetFn = NonNullable<WebAuthnP256.sign.Options['getFn']>;
 export interface NativeCredentialResult {
     id: string;
     publicKey: `0x${string}`;
+    /** What the authenticator reported at creation, when the native library returned it. */
+    authenticator?: PasskeyAuthenticatorInfo;
 }
 
 /**
@@ -81,6 +93,10 @@ export interface NativePasskeyCreateResponse {
         attestationObject: string; // base64url
         clientDataJSON: string; // base64url
     };
+    /** Client extension results, when the native library returns them. */
+    clientExtensionResults?: {
+        prf?: { enabled?: boolean };
+    };
 }
 
 /**
@@ -97,6 +113,10 @@ export interface NativePasskeyCreateOptions {
         requireResidentKey?: boolean;
         userVerification?: 'discouraged' | 'preferred' | 'required';
         authenticatorAttachment?: 'platform' | 'cross-platform';
+    };
+    /** WebAuthn extensions to request. JAW asks for `prf` so the passkey can derive keys later. */
+    extensions?: {
+        prf?: Record<string, never>;
     };
 }
 
@@ -276,11 +296,16 @@ export function wrapNativeCreateFn(nativeCreateFn: NativePasskeyCreateFn): Inter
                 requireResidentKey: true,
                 userVerification: 'preferred',
             },
+            extensions: PASSKEY_CREATION_EXTENSIONS,
         });
 
         const publicKey = extractPublicKeyFromAttestation(result.response.attestationObject);
+        const authenticator = readAuthenticatorInfo(
+            toBytes(result.response.attestationObject),
+            result.clientExtensionResults
+        );
 
-        return { id: result.id, publicKey };
+        return { id: result.id, publicKey, authenticator };
     };
 }
 
@@ -400,6 +425,7 @@ export async function createPasskeyUtils(
     credentialId: string;
     publicKey: `0x${string}`;
     webAuthnAccount: WebAuthnAccount;
+    authenticator: PasskeyAuthenticatorInfo;
 }> {
     // Native create path: bypasses crypto.subtle entirely (React Native)
     if (nativeCreateFn) {
@@ -418,6 +444,7 @@ export async function createPasskeyUtils(
             credentialId: nativeResult.id,
             publicKey: nativeResult.publicKey,
             webAuthnAccount,
+            authenticator: nativeResult.authenticator ?? {},
         };
     }
 
@@ -432,6 +459,10 @@ export async function createPasskeyUtils(
             id: rpId,
             name: rpName,
         },
+        // ox types `prf` as always carrying `eval`, but WebAuthn allows an empty
+        // `prf: {}` at creation to only enable it. Evaluating here would put a PRF
+        // output in memory for nothing, so the empty form is passed on purpose.
+        extensions: PASSKEY_CREATION_EXTENSIONS as unknown as CreateWebAuthnCredentialParameters['extensions'],
         createFn,
     });
 
@@ -445,7 +476,29 @@ export async function createPasskeyUtils(
         credentialId: credential.id,
         publicKey: credential.publicKey,
         webAuthnAccount,
+        authenticator: authenticatorInfoFromCredential(credential.raw),
     };
+}
+
+/**
+ * Read PRF support, AAGUID and backup flags from a browser PublicKeyCredential.
+ * A custom createFn may return an object without these members, so each is optional.
+ */
+function authenticatorInfoFromCredential(raw: unknown): PasskeyAuthenticatorInfo {
+    const credential = raw as
+        | {
+              response?: { attestationObject?: ArrayBuffer | Uint8Array };
+              getClientExtensionResults?: () => { prf?: { enabled?: boolean } };
+          }
+        | undefined;
+    const attestationObject = credential?.response?.attestationObject;
+    let extensionResults: { prf?: { enabled?: boolean } } | undefined;
+    try {
+        extensionResults = credential?.getClientExtensionResults?.();
+    } catch {
+        extensionResults = undefined;
+    }
+    return readAuthenticatorInfo(attestationObject ? new Uint8Array(attestationObject) : undefined, extensionResults);
 }
 
 /**

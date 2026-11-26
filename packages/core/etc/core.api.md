@@ -908,6 +908,7 @@ export type ModeType = (typeof Mode)[keyof typeof Mode];
 
 // @public
 export interface NativeCredentialResult {
+    authenticator?: PasskeyAuthenticatorInfo;
     // (undocumented)
     id: string;
     // (undocumented)
@@ -938,8 +939,8 @@ export interface NormalizedAddFundsParams {
 // @public
 export function normalizePermissionNote(note: unknown): string | undefined;
 
-// @public (undocumented)
-export interface PasskeyAccount {
+// @public
+export interface PasskeyAccount extends PasskeyAuthenticatorInfo {
     account?: AccountRecord;
     // (undocumented)
     address?: `0x${string}`;
@@ -953,6 +954,14 @@ export interface PasskeyAccount {
     publicKey: `0x${string}`;
     // (undocumented)
     username: string;
+}
+
+// @public
+export interface PasskeyAuthenticatorInfo {
+    aaguid?: string;
+    backupEligible?: boolean;
+    backupState?: boolean;
+    prfSupported?: boolean;
 }
 
 // @public (undocumented)
@@ -986,6 +995,7 @@ export class PasskeyManager {
         publicKey: `0x${string}`;
         webAuthnAccount: WebAuthnAccount;
         passkeyAccount: PasskeyAccount;
+        authenticator: PasskeyAuthenticatorInfo;
     }>;
     fetchAccountRecord(credentialId: string, dev?: boolean): Promise<AccountRecord>;
     fetchAccounts(): PasskeyAccount[];
@@ -1005,7 +1015,7 @@ export class PasskeyManager {
         account?: AccountRecord;
     }>): void;
     storeAuthState(address: Address_2, credentialId: string): void;
-    storePasskeyAccount(name: string, credentialId: string, publicKey: `0x${string}`, address: Address_2, dev?: boolean, account?: AccountRecord): Promise<void>;
+    storePasskeyAccount(name: string, credentialId: string, publicKey: `0x${string}`, address: Address_2, dev?: boolean, account?: AccountRecord, authenticator?: PasskeyAuthenticatorInfo): Promise<void>;
     storePasskeyAccountForLogin(credentialId: string, address: Address_2, dev?: boolean, account?: AccountRecord): Promise<void>;
     updatePreference(preference: Partial<JawProviderPreference>): void;
 }
