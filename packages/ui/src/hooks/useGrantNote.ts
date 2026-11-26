@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useMemo } from 'react';
 import { normalizePermissionNote } from '@jaw.id/core';
+import { useRefuseOnce } from './useRefuseOnce';
 
 export interface GrantNote {
   /** The note as the grant will store it, for the screen to show and the grant to send. */
@@ -25,17 +26,7 @@ export function useGrantNote(note: unknown, onRefuse: (reason: string) => void, 
     }
   }, [note, enabled]);
 
-  // A refusal answers the dapp, so it goes out once per screen: the callback is held in a ref so a
-  // new one each render does not refuse again, and `refused` keeps the effect from refusing twice
-  // when it runs twice (Strict Mode in development).
-  const onRefuseRef = useRef(onRefuse);
-  onRefuseRef.current = onRefuse;
-  const refused = useRef(false);
-  useEffect(() => {
-    if (result.refusal === undefined || refused.current) return;
-    refused.current = true;
-    onRefuseRef.current(result.refusal);
-  }, [result]);
+  useRefuseOnce(result.refusal, onRefuse);
 
   return result;
 }
