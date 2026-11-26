@@ -12,14 +12,18 @@ import { resolveBridgeApiKey } from '../../lib/cli-api-key';
 import { txUrl } from '../../lib/explorer';
 import { sendFromAnswer, sendFromStatus, type Send } from '../../lib/send-status';
 import { DEFAULT_BRIDGE_APP_NAME, resolveBridgeAppName } from '../../lib/bridge-app-name';
+import { generateKeyPair, deriveSharedSecret, exportKeyToHexString, importKeyFromHexString } from '@jaw.id/core';
 import {
-  generateKeyPair,
-  deriveSharedSecret,
-  encrypt,
-  decrypt,
-  exportKeyToHexString,
-  importKeyFromHexString,
-} from '@jaw.id/core';
+  REPLACED_BY_ANOTHER_TAB,
+  SERVER_WAIT_MS,
+  ask,
+  canonical,
+  deserializeAndDecrypt,
+  encryptAndSerialize,
+  idReused,
+  reportBridgeClient,
+  type RpcResponse,
+} from '../../lib/bridge-channel';
 
 /**
  * CLI Bridge Page, relay mode
@@ -39,48 +43,6 @@ import {
  */
 
 type BridgeState = 'connecting' | 'connected' | 'ended' | 'lost' | 'error';
-
-/** Base64 encode a Uint8Array or ArrayBuffer */
-function toBase64(buf: Uint8Array | ArrayBuffer): string {
-  const bytes = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
-  let binary = '';
-  for (let i = 0; i < bytes.length; i++) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  return btoa(binary);
-}
-
-/** Base64 decode to Uint8Array */
-function fromBase64(b64: string): Uint8Array {
-  const binary = atob(b64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes;
-}
-
-async function encryptAndSerialize(
-  sharedSecret: CryptoKey,
-  payload: Record<string, unknown>
-): Promise<{ type: 'encrypted'; iv: string; ciphertext: string }> {
-  const { iv, cipherText } = await encrypt(sharedSecret, JSON.stringify(payload));
-  return {
-    type: 'encrypted',
-    iv: toBase64(iv),
-    ciphertext: toBase64(cipherText),
-  };
-}
-
-async function deserializeAndDecrypt(
-  sharedSecret: CryptoKey,
-  msg: { iv: string; ciphertext: string }
-): Promise<Record<string, unknown>> {
-  const iv = fromBase64(msg.iv);
-  const cipherText = fromBase64(msg.ciphertext);
-  const plaintext = await decrypt(sharedSecret, { iv, cipherText: cipherText.buffer as ArrayBuffer });
-  return JSON.parse(plaintext);
-}
 
 function CLIBridgeContent({ opened }: { opened?: OpenedLink }) {
   const searchParams = useSearchParams();
@@ -630,6 +592,9 @@ function SendPanel({ send }: { send: Send }) {
   );
 }
 
+// Where a replaced tab goes: no session, relay or key, so it connects to nothing.
+const REPLACED_URL = '/cli-bridge?replaced=1';
+
 const LINK_GONE = 'This link is no longer active. Ask the agent for a new one.';
 const LINK_LOST =
   'This tab lost its link. Open the link from the chat again. If it no longer opens, ask the agent for a new one.';
@@ -652,91 +617,6 @@ function wasEnded(sessionId: string) {
   } catch {
     return false;
   }
-}
-
-// The relay keeps one browser per session and closes the older socket with
-// this code when the link is opened in another tab.
-const REPLACED_BY_ANOTHER_TAB = 4003;
-
-// Where a replaced tab goes: no session, relay or key, so it connects to nothing.
-const REPLACED_URL = '/cli-bridge?replaced=1';
-
-// A live server sends init as soon as the key exchange reaches it.
-const SERVER_WAIT_MS = 20_000;
-
-/** JSON with object keys sorted, so a request rebuilt from storage in another key order is still the same request. */
-function canonical(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
-  if (value && typeof value === 'object') {
-    const entries = Object.entries(value).filter(([, v]) => v !== undefined);
-    entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-    return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonical(v)}`).join(',')}}`;
-  }
-  return JSON.stringify(value) ?? 'null';
-}
-
-function reportBridgeClient(client: string) {
-  try {
-    fetch('/api/bridge-client', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ client }),
-    }).catch(() => undefined);
-  } catch {
-    // The count is optional; the bridge carries on without it.
-  }
-}
-
-type RpcResponse = Record<string, unknown> & { type: 'rpc_response'; id: string };
-
-async function ask(
-  sdk: ReturnType<typeof JAW.create>,
-  id: string,
-  method: string,
-  params: unknown[],
-  expected?: string
-): Promise<RpcResponse> {
-  try {
-    const result = await sdk.provider.request({ method, params });
-    const address = extractAddress(method, result);
-    if (expected && address && !sameAccount(address, expected)) {
-      const message = `This wallet is signed in as ${address}. The request is for ${expected}.`;
-      return { type: 'rpc_response', id, success: false, error: { code: -32000, message } };
-    }
-    return { type: 'rpc_response', id, success: true, data: result, ...(address ? { address } : {}) };
-  } catch (err) {
-    const errObj = err as { code?: number; message?: string };
-    const code = errObj?.code ?? -32000;
-    const message = errObj?.message ?? (err instanceof Error ? err.message : String(err));
-    return { type: 'rpc_response', id, success: false, error: { code, message } };
-  }
-}
-
-/** An id already answered for another request is refused, so an answer never covers a request it was not given for. */
-const idReused = (id: string): RpcResponse => ({
-  type: 'rpc_response',
-  id,
-  success: false,
-  error: { code: -32600, message: 'this request id was already used for a different request' },
-});
-
-function extractAddress(method: string, result: unknown): string | undefined {
-  if (method !== 'wallet_connect' && method !== 'eth_requestAccounts') return;
-
-  if (Array.isArray(result) && typeof result[0] === 'string') {
-    return result[0];
-  }
-  if (result && typeof result === 'object' && 'accounts' in result) {
-    const accounts = (result as Record<string, unknown>).accounts;
-    if (Array.isArray(accounts) && accounts.length > 0) {
-      const first = accounts[0];
-      if (typeof first === 'string') return first;
-      if (first && typeof first === 'object' && 'address' in first) {
-        return (first as Record<string, unknown>).address as string;
-      }
-    }
-  }
-  return undefined;
 }
 
 /** The bridge for a long link, read from the address, or for a short link `/a/[id]` already opened. */
