@@ -27,7 +27,7 @@ export default defineConfig({
       // A failing test still writes the summary the PR check compares.
       reportOnFailure: true,
       reportsDirectory: '../../coverage/apps/keys-jaw-id',
-      thresholds: { lines: 49, branches: 79, functions: 76, statements: 49 },
+      thresholds: { lines: 55, branches: 82, functions: 79, statements: 55 },
     },
     // Run once and exit. The Nx-inferred `test` target invokes `vitest` (not
     // `vitest run`), which would otherwise start watch mode in an interactive
