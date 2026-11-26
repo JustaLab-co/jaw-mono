@@ -1381,6 +1381,17 @@ describe('useGasEstimation offers a fee token only if what the batch leaves of i
     expect(hook.selectedFeeToken).toBeNull();
   });
 
+  it('a preview of a batch that moves no fee token out does not ask the paymaster again', async () => {
+    erc20Mock.mockResolvedValue([usdcEstimate]);
+    await mount(passingEth(), [nativeEth(10n ** 18n), token({})]);
+    const asked = erc20Mock.mock.calls.length;
+
+    await act(async () => setAssetsOutExternally([spends('0x9999999999999999999999999999999999999999', 5n)]));
+    await flush();
+
+    expect(erc20Mock.mock.calls.length).toBe(asked);
+  });
+
   it('an outflow of another token leaves USDC offered', async () => {
     erc20Mock.mockResolvedValue([usdcEstimate]);
     await mount(passingEth(), [nativeEth(1n), token({})], undefined, [spends(USDT, 10_000_000n)]);
