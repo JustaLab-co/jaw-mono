@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { evaluatePrf, PrfUnavailableError, PRF_SALT_V1 } from './evaluate.js';
 import { WebAuthnAuthenticationError } from '../passkey-manager/utils.js';
 
@@ -73,6 +73,29 @@ describe('evaluatePrf', () => {
         await expect(evaluatePrf({ rpId: 'keys.jaw.id', credentialId: CREDENTIAL_ID, getFn })).rejects.toThrow(
             WebAuthnAuthenticationError
         );
+    });
+
+    describe('in the browser, without getFn (the path keys.jaw.id uses)', () => {
+        afterEach(() => {
+            vi.unstubAllGlobals();
+        });
+
+        it('asks navigator.credentials for the account passkey and returns its PRF output', async () => {
+            const get = vi.fn().mockResolvedValue(credentialWith(prfResult(new Uint8Array(32).fill(9))));
+            vi.stubGlobal('window', { PublicKeyCredential: vi.fn() });
+            vi.stubGlobal('navigator', { credentials: { get } });
+
+            const output = await evaluatePrf({ rpId: 'keys.jaw.id', credentialId: CREDENTIAL_ID });
+
+            expect(output).toEqual(new Uint8Array(32).fill(9));
+            expect(get).toHaveBeenCalledTimes(1);
+            const { publicKey } = get.mock.calls[0][0];
+            expect(publicKey.rpId).toBe('keys.jaw.id');
+            expect(publicKey.userVerification).toBe('required');
+            expect(publicKey.allowCredentials).toHaveLength(1);
+            expect(Array.from(publicKey.allowCredentials[0].id)).toEqual([1, 2, 3, 4]);
+            expect(new TextDecoder().decode(publicKey.extensions.prf.eval.first)).toBe(PRF_SALT_V1);
+        });
     });
 
     it('throws when WebAuthn is unavailable and no getFn is given', async () => {

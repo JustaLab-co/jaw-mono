@@ -86,6 +86,15 @@ describe('parseAuthenticatorData', () => {
         expect(info.backupState).toBe(false);
     });
 
+    it('keeps an AAGUID that contains zero bytes, such as Chrome profile passkeys', () => {
+        // adce0002-35bc-c60a-648b-0b25f1f05503: only an all-zero AAGUID means unknown.
+        const chromeProfile = [
+            0xad, 0xce, 0x00, 0x02, 0x35, 0xbc, 0xc6, 0x0a, 0x64, 0x8b, 0x0b, 0x25, 0xf1, 0xf0, 0x55, 0x03,
+        ];
+        const info = parseAuthenticatorData(authData(FLAG_UP | FLAG_AT, chromeProfile));
+        expect(info.aaguid).toBe('adce0002-35bc-c60a-648b-0b25f1f05503');
+    });
+
     it('leaves the AAGUID unknown when the platform zeroed it', () => {
         const info = parseAuthenticatorData(authData(FLAG_UP | FLAG_AT, new Array(16).fill(0)));
         expect(info.aaguid).toBeUndefined();

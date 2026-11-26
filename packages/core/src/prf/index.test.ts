@@ -1,6 +1,13 @@
-import { describe, it, expect, vi } from 'vitest';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
 import { derivePrfKeys, PrfUnavailableError } from './index.js';
 import { deriveKeyFromPrf } from './derive.js';
+
+// A pass-through spy: keys are still derived by the real HKDF, and the tests
+// can read the PRF output array it was given after derivePrfKeys returns.
+vi.mock('./derive.js', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('./derive.js')>();
+    return { ...actual, deriveKeyFromPrf: vi.fn(actual.deriveKeyFromPrf) };
+});
 
 const CREDENTIAL_ID = 'AQIDBA';
 const PRF_OUTPUT = Uint8Array.from({ length: 32 }, (_, i) => i);
@@ -14,6 +21,10 @@ function getFnReturning(prf: Uint8Array | undefined) {
 }
 
 describe('derivePrfKeys', () => {
+    beforeEach(() => {
+        vi.mocked(deriveKeyFromPrf).mockClear();
+    });
+
     it('prompts once and derives one key per label', async () => {
         const getFn = getFnReturning(new Uint8Array(PRF_OUTPUT));
         const labels = ['jaw.id/backup-encryption/v1', 'jaw.id/privacy-pools/root/v1'] as const;
@@ -64,5 +75,41 @@ describe('derivePrfKeys', () => {
                 'jaw.id/backup-encryption/v1',
             ])
         ).rejects.toThrow(PrfUnavailableError);
+    });
+
+    it('zeroes the PRF output once the keys are derived', async () => {
+        const keys = await derivePrfKeys(
+            { rpId: 'keys.jaw.id', credentialId: CREDENTIAL_ID, getFn: getFnReturning(new Uint8Array(PRF_OUTPUT)) },
+            ['jaw.id/backup-encryption/v1', 'jaw.id/privacy-pools/root/v1']
+        );
+
+        const received = vi.mocked(deriveKeyFromPrf).mock.calls.map(([prfOutput]) => prfOutput);
+        expect(received).toHaveLength(2);
+        for (const prfOutput of received) expect(prfOutput).toEqual(new Uint8Array(32));
+        // The keys themselves are left for the caller.
+        expect(keys['jaw.id/backup-encryption/v1']).not.toEqual(new Uint8Array(32));
+    });
+
+    it('zeroes the PRF output and the keys already derived when a later key fails', async () => {
+        const actual = await vi.importActual<typeof import('./derive.js')>('./derive.js');
+        vi.mocked(deriveKeyFromPrf)
+            .mockImplementationOnce(actual.deriveKeyFromPrf)
+            .mockRejectedValueOnce(new Error('derive failed'));
+
+        await expect(
+            derivePrfKeys(
+                {
+                    rpId: 'keys.jaw.id',
+                    credentialId: CREDENTIAL_ID,
+                    getFn: getFnReturning(new Uint8Array(PRF_OUTPUT)),
+                },
+                ['jaw.id/backup-encryption/v1', 'jaw.id/privacy-pools/root/v1']
+            )
+        ).rejects.toThrow('derive failed');
+
+        const [[prfOutput]] = vi.mocked(deriveKeyFromPrf).mock.calls;
+        expect(prfOutput).toEqual(new Uint8Array(32));
+        const firstKey = await vi.mocked(deriveKeyFromPrf).mock.results[0].value;
+        expect(firstKey).toEqual(new Uint8Array(32));
     });
 });

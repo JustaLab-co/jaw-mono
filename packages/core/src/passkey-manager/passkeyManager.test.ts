@@ -713,6 +713,35 @@ describe('PasskeyManager', () => {
             expect(utils.updatePasskeyInBackend).not.toHaveBeenCalled();
         });
 
+        it('updates only the passkey it was observed on when several are stored', async () => {
+            // A Chrome-profile passkey stored first, the observed passkey second: a
+            // wrong match or a change applied to every entry would copy the flags over.
+            const other = stored({
+                username: 'other',
+                credentialId: 'cred-other',
+                publicKey: '0x99',
+                prfSupported: false,
+                backupEligible: false,
+                backupState: false,
+            });
+            const target = stored({ username: 'target', credentialId: 'cred-target', publicKey: '0x88' });
+            manager.addAccountToList(other);
+            manager.addAccountToList(target);
+
+            const changes = await manager.recordAuthenticatorInfo('cred-target', {
+                prfSupported: true,
+                backupEligible: true,
+                backupState: true,
+            });
+
+            expect(changes).toEqual({ prfSupported: true, backupEligible: true, backupState: true });
+            const [first, second] = manager.fetchAccounts();
+            expect(first).toEqual(other);
+            expect(second).toEqual({ ...target, prfSupported: true, backupEligible: true, backupState: true });
+            expect(utils.updatePasskeyInBackend).toHaveBeenCalledTimes(1);
+            expect(vi.mocked(utils.updatePasskeyInBackend).mock.lastCall?.[0]).toBe('cred-target');
+        });
+
         it('takes the latest backup state, since a passkey can become backed up later', async () => {
             manager.addAccountToList(stored({ backupEligible: true, backupState: true }));
 

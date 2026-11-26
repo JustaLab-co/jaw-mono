@@ -58,6 +58,9 @@ describe('assertPrfLabel', () => {
         'jaw.id/Backup/v1', // uppercase
         'jaw.id/backup encryption/v1', // space
         'jaw.id//v1', // empty segment
+        'xjaw.id/a/v1', // text before jaw.id/
+        'jaw.id/a/v1x', // text after the version
+        'jaw.id/a/v1/', // trailing slash
         '',
     ])('rejects %j', (label) => {
         expect(() => assertPrfLabel(label)).toThrow('Invalid PRF key label');
