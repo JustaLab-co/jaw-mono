@@ -4,6 +4,7 @@ import { PasskeyAccount, AuthCheckResult, AuthState, type PasskeyAuthenticatorIn
 import type { JawProviderPreference } from '../provider/index.js';
 import {
     registerPasskeyInBackend,
+    updatePasskeyInBackend,
     lookupPasskeyFromBackend,
     fetchAccountRecordFromBackend,
     WebAuthnAuthenticationResult,
@@ -256,7 +257,53 @@ export class PasskeyManager {
         },
         getFn?: PasskeyGetFn
     ): Promise<WebAuthnAuthenticationResult> {
-        return authenticateWithWebAuthnUtils(rpId, credentialId, options, getFn);
+        const result = await authenticateWithWebAuthnUtils(rpId, credentialId, options, getFn);
+        // Saved locally before this returns; the passkey server is told in the background.
+        if (result.authenticator) void this.recordAuthenticatorInfo(credentialId, result.authenticator);
+        return result;
+    }
+
+    /**
+     * Record what was observed about a stored passkey after its creation (the
+     * backup flags on a login, PRF support after a key derivation), so passkeys
+     * created before these were recorded get them filled in.
+     *
+     * Merge rules: the backup flags take the latest observed value (a passkey can
+     * become backed up later); `prfSupported: true` is kept once seen, and `false`
+     * is only written while unknown, since one browser without PRF says nothing
+     * about the passkey; `aaguid` is only filled when missing.
+     *
+     * The local entry is updated before the first await. The changed fields are
+     * then sent to the passkey server, best-effort: a failure there is swallowed,
+     * because this is bookkeeping and must never fail a login.
+     *
+     * @returns The fields that changed (empty when nothing did or the account is not stored)
+     */
+    async recordAuthenticatorInfo(
+        credentialId: string,
+        observed: PasskeyAuthenticatorInfo,
+        dev = false
+    ): Promise<PasskeyAuthenticatorInfo> {
+        const accounts = this.fetchAccounts();
+        const index = accounts.findIndex((account) => account.credentialId === credentialId);
+        if (index === -1) return {};
+
+        const changes = authenticatorChanges(accounts[index], observed);
+        if (Object.keys(changes).length === 0) return {};
+
+        this.storage.setItem(
+            'accounts',
+            accounts.map((account, i) => (i === index ? { ...account, ...changes } : account))
+        );
+
+        try {
+            await updatePasskeyInBackend(credentialId, changes, this.apiKey, dev, this.preference.serverUrl);
+        } catch {
+            // Best-effort: the next observation sends the change again only if
+            // it differs from what is stored, so a missed update stays missed
+            // until the value changes. Acceptable for metrics.
+        }
+        return changes;
     }
 
     /**
@@ -455,6 +502,18 @@ export class PasskeyManager {
 }
 
 const AUTHENTICATOR_FIELDS = ['prfSupported', 'aaguid', 'backupEligible', 'backupState'] as const;
+
+/** The observed fields that change the stored entry, under recordAuthenticatorInfo's merge rules. */
+function authenticatorChanges(stored: PasskeyAccount, observed: PasskeyAuthenticatorInfo): PasskeyAuthenticatorInfo {
+    const changes: PasskeyAuthenticatorInfo = {};
+    for (const field of ['backupEligible', 'backupState'] as const) {
+        if (observed[field] !== undefined && observed[field] !== stored[field]) changes[field] = observed[field];
+    }
+    if (observed.prfSupported === true && stored.prfSupported !== true) changes.prfSupported = true;
+    if (observed.prfSupported === false && stored.prfSupported === undefined) changes.prfSupported = false;
+    if (observed.aaguid !== undefined && stored.aaguid === undefined) changes.aaguid = observed.aaguid;
+    return changes;
+}
 
 /** The authenticator fields `incoming` has that `existing` lacks. */
 function missingAuthenticatorFields(existing: PasskeyAccount, incoming: PasskeyAccount): PasskeyAuthenticatorInfo {

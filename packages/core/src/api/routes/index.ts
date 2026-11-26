@@ -14,6 +14,7 @@ export type ROUTES = PasskeyRoutes & PermissionsRoutes & AnalyticsRoutes & Calls
  */
 export const Routes: Record<keyof ROUTES, string> = {
     REGISTER_PASSKEY: PASSKEY_ROUTE,
+    UPDATE_PASSKEY: `${PASSKEY_ROUTE}/:credentialId`,
     LOOKUP_PASSKEYS: PASSKEY_ROUTE,
     GET_ACCOUNT_BY_CREDENTIAL: ACCOUNT_ROUTE,
     STORE_PERMISSION: PERMISSIONS_ROUTE,

@@ -3,10 +3,14 @@ import type { CreateWebAuthnCredentialParameters } from 'viem/account-abstractio
 import type * as WebAuthnP256 from 'ox/WebAuthnP256';
 import * as PublicKey from 'ox/PublicKey';
 import { restCall } from '../api/index.js';
-import type { PasskeyRegistrationRequest, PasskeyLookupResponse } from './types.js';
+import type { PasskeyRegistrationRequest, PasskeyLookupResponse, PasskeyUpdateRequest } from './types.js';
 import type { AccountRecord } from '../account/accountRecord.js';
 import type { WebAuthnAccount } from 'viem/account-abstraction';
-import { readAuthenticatorInfo, type PasskeyAuthenticatorInfo } from './authenticatorData.js';
+import {
+    readAuthenticatorInfo,
+    readAssertionAuthenticatorInfo,
+    type PasskeyAuthenticatorInfo,
+} from './authenticatorData.js';
 
 /**
  * Extensions requested when a passkey is created. `prf: {}` asks the
@@ -151,6 +155,8 @@ export interface WebAuthnCredentialResult {
 export interface WebAuthnAuthenticationResult {
     credential: WebAuthnCredentialResult;
     challenge: Uint8Array;
+    /** The backup flags the authenticator reported on this login, when readable. */
+    authenticator?: PasskeyAuthenticatorInfo;
 }
 
 export interface ImportWebAuthnAuthenticationResult {
@@ -159,6 +165,19 @@ export interface ImportWebAuthnAuthenticationResult {
         id: string;
         publicKey: `0x${string}`;
     };
+    /** The backup flags the authenticator reported on this login, when readable. */
+    authenticator?: PasskeyAuthenticatorInfo;
+}
+
+/**
+ * Read the backup flags from a login credential. Browser credentials and the
+ * wrapped native getFn both carry `response.authenticatorData`; a custom getFn
+ * may not, which gives nothing.
+ */
+function authenticatorInfoFromAssertion(credential: unknown): PasskeyAuthenticatorInfo {
+    const authData = (credential as { response?: { authenticatorData?: ArrayBuffer | Uint8Array } } | null)?.response
+        ?.authenticatorData;
+    return readAssertionAuthenticatorInfo(authData ? new Uint8Array(authData) : undefined);
 }
 
 /**
@@ -396,6 +415,7 @@ export async function authenticateWithWebAuthnUtils(
         return {
             credential,
             challenge,
+            authenticator: authenticatorInfoFromAssertion(credential),
         };
     } catch (error) {
         if (error instanceof WebAuthnAuthenticationError) {
@@ -549,6 +569,7 @@ export async function importPasskeyUtils(
                 id: credential.id,
                 publicKey: passkeyData.publicKey,
             },
+            authenticator: authenticatorInfoFromAssertion(credential),
         };
     } catch (error) {
         throw new PasskeyLookupError(
@@ -624,6 +645,44 @@ export async function registerPasskeyInBackend(
     } catch (error) {
         throw new PasskeyRegistrationError(
             `Failed to register passkey: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            error
+        );
+    }
+}
+
+/**
+ * Send what became known about a registered passkey after creation (PRF
+ * support, backup flags) to `PATCH <passkeys>/:credentialId`.
+ * @param credentialId - The registered credential
+ * @param update - Only the fields that changed
+ * @param apiKey - Optional API key for authentication
+ * @param dev - Whether to use the staging environment (ignored when serverUrl is given)
+ * @param serverUrl - Optional passkeys endpoint URL; the update goes to `<serverUrl>/:credentialId`
+ * @throws {PasskeyRegistrationError} If the update fails
+ */
+export async function updatePasskeyInBackend(
+    credentialId: string,
+    update: PasskeyUpdateRequest,
+    apiKey?: string,
+    dev?: boolean,
+    serverUrl?: string
+): Promise<void> {
+    const endpoint = serverUrl ? passkeysEndpoint(serverUrl) : undefined;
+    try {
+        await restCall(
+            'UPDATE_PASSKEY',
+            'PATCH',
+            update,
+            apiKey ? { 'x-api-key': apiKey } : {},
+            { credentialId },
+            dev,
+            endpoint?.baseUrl,
+            undefined,
+            endpoint ? `${endpoint.path.replace(/\/$/, '')}/:credentialId` : undefined
+        );
+    } catch (error) {
+        throw new PasskeyRegistrationError(
+            `Failed to update passkey: ${error instanceof Error ? error.message : 'Unknown error'}`,
             error
         );
     }

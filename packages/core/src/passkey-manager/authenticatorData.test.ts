@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { parseAuthenticatorData, authDataFromAttestationObject, readAuthenticatorInfo } from './authenticatorData.js';
+import {
+    parseAuthenticatorData,
+    authDataFromAttestationObject,
+    readAuthenticatorInfo,
+    readAssertionAuthenticatorInfo,
+} from './authenticatorData.js';
 
 // Fixtures are assembled from the WebAuthn spec layout (§6.1 authenticator data,
 // §6.5 attestation object), not from the parser under test.
@@ -183,5 +188,29 @@ describe('readAuthenticatorInfo', () => {
 
     it('returns nothing when given nothing', () => {
         expect(readAuthenticatorInfo(undefined, undefined)).toEqual({});
+    });
+});
+
+describe('readAssertionAuthenticatorInfo', () => {
+    it('reads the backup flags from login authenticator data, which has no AAGUID', () => {
+        expect(readAssertionAuthenticatorInfo(authData(FLAG_UP | FLAG_UV | FLAG_BE | FLAG_BS))).toEqual({
+            backupEligible: true,
+            backupState: true,
+        });
+        expect(readAssertionAuthenticatorInfo(authData(FLAG_UP | FLAG_UV))).toEqual({
+            backupEligible: false,
+            backupState: false,
+        });
+    });
+
+    it('never reports an AAGUID or PRF support', () => {
+        const info = readAssertionAuthenticatorInfo(authData(FLAG_UP | FLAG_BE | FLAG_AT));
+        expect('aaguid' in info).toBe(false);
+        expect('prfSupported' in info).toBe(false);
+    });
+
+    it('gives nothing for missing or unreadable data', () => {
+        expect(readAssertionAuthenticatorInfo(undefined)).toEqual({});
+        expect(readAssertionAuthenticatorInfo(new Uint8Array(10))).toEqual({});
     });
 });

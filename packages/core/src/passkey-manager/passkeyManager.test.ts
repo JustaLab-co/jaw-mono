@@ -651,6 +651,149 @@ describe('PasskeyManager', () => {
         });
     });
 
+    describe('recordAuthenticatorInfo (filling in passkeys created before it was recorded)', () => {
+        const stored = (fields: Partial<PasskeyAccount> = {}): PasskeyAccount => ({
+            username: mockUsername,
+            credentialId: mockCredentialId,
+            publicKey: mockPublicKey,
+            creationDate: new Date().toISOString(),
+            isImported: false,
+            ...fields,
+        });
+
+        beforeEach(() => {
+            vi.spyOn(utils, 'updatePasskeyInBackend').mockReset().mockResolvedValue(undefined);
+        });
+
+        it('fills unknown fields locally and sends them to the passkey server', async () => {
+            manager.addAccountToList(stored());
+
+            const changes = await manager.recordAuthenticatorInfo(mockCredentialId, {
+                backupEligible: true,
+                backupState: true,
+            });
+
+            expect(changes).toEqual({ backupEligible: true, backupState: true });
+            expect(manager.fetchAccounts()[0]).toMatchObject({ backupEligible: true, backupState: true });
+            expect(utils.updatePasskeyInBackend).toHaveBeenCalledWith(
+                mockCredentialId,
+                { backupEligible: true, backupState: true },
+                undefined,
+                false,
+                undefined
+            );
+        });
+
+        it('sends only the fields that changed', async () => {
+            manager.addAccountToList(stored({ backupEligible: true, backupState: false }));
+
+            await manager.recordAuthenticatorInfo(mockCredentialId, { backupEligible: true, backupState: true });
+
+            expect(vi.mocked(utils.updatePasskeyInBackend).mock.lastCall?.[1]).toEqual({ backupState: true });
+        });
+
+        it('sends nothing when nothing changed', async () => {
+            manager.addAccountToList(stored({ backupEligible: true, backupState: true, prfSupported: true }));
+
+            const changes = await manager.recordAuthenticatorInfo(mockCredentialId, {
+                backupEligible: true,
+                backupState: true,
+                prfSupported: true,
+            });
+
+            expect(changes).toEqual({});
+            expect(utils.updatePasskeyInBackend).not.toHaveBeenCalled();
+        });
+
+        it('does nothing for an account that is not stored', async () => {
+            const changes = await manager.recordAuthenticatorInfo('unknown-cred', { prfSupported: true });
+
+            expect(changes).toEqual({});
+            expect(manager.fetchAccounts()).toEqual([]);
+            expect(utils.updatePasskeyInBackend).not.toHaveBeenCalled();
+        });
+
+        it('takes the latest backup state, since a passkey can become backed up later', async () => {
+            manager.addAccountToList(stored({ backupEligible: true, backupState: true }));
+
+            await manager.recordAuthenticatorInfo(mockCredentialId, { backupState: false });
+
+            expect(manager.fetchAccounts()[0].backupState).toBe(false);
+        });
+
+        it('keeps PRF support once seen: a later "no" from another browser does not overwrite it', async () => {
+            manager.addAccountToList(stored({ prfSupported: true }));
+
+            const changes = await manager.recordAuthenticatorInfo(mockCredentialId, { prfSupported: false });
+
+            expect(changes).toEqual({});
+            expect(manager.fetchAccounts()[0].prfSupported).toBe(true);
+        });
+
+        it('records "no PRF" only while unknown, and a later "yes" replaces it', async () => {
+            manager.addAccountToList(stored());
+
+            await manager.recordAuthenticatorInfo(mockCredentialId, { prfSupported: false });
+            expect(manager.fetchAccounts()[0].prfSupported).toBe(false);
+
+            await manager.recordAuthenticatorInfo(mockCredentialId, { prfSupported: true });
+            expect(manager.fetchAccounts()[0].prfSupported).toBe(true);
+        });
+
+        it('fills an AAGUID only when missing', async () => {
+            manager.addAccountToList(stored({ aaguid: 'ea9b8d66-4d01-1d21-3ce4-b6b48cb575d4' }));
+
+            const changes = await manager.recordAuthenticatorInfo(mockCredentialId, {
+                aaguid: '08987058-cadc-4b81-b6e1-30de50dcbe96',
+            });
+
+            expect(changes).toEqual({});
+            expect(manager.fetchAccounts()[0].aaguid).toBe('ea9b8d66-4d01-1d21-3ce4-b6b48cb575d4');
+        });
+
+        it('keeps the local update when the passkey server fails, and does not throw', async () => {
+            vi.mocked(utils.updatePasskeyInBackend).mockRejectedValue(new Error('404'));
+            manager.addAccountToList(stored());
+
+            await expect(manager.recordAuthenticatorInfo(mockCredentialId, { prfSupported: true })).resolves.toEqual({
+                prfSupported: true,
+            });
+            expect(manager.fetchAccounts()[0].prfSupported).toBe(true);
+        });
+
+        it('sends the update to a configured passkey server', async () => {
+            const custom = new PasskeyManager(
+                createMemoryStorage(),
+                { serverUrl: 'https://p.example.com/passkeys' },
+                'k1'
+            );
+            custom.addAccountToList(stored());
+
+            await custom.recordAuthenticatorInfo(mockCredentialId, { prfSupported: true });
+
+            expect(utils.updatePasskeyInBackend).toHaveBeenCalledWith(
+                mockCredentialId,
+                { prfSupported: true },
+                'k1',
+                false,
+                'https://p.example.com/passkeys'
+            );
+        });
+
+        it('a login records the backup flags it observed, before returning', async () => {
+            manager.addAccountToList(stored());
+            vi.spyOn(utils, 'authenticateWithWebAuthnUtils').mockResolvedValueOnce({
+                credential: { id: mockCredentialId, type: 'public-key' },
+                challenge: new Uint8Array(32),
+                authenticator: { backupEligible: true, backupState: true },
+            });
+
+            await manager.authenticateWithWebAuthn('example.com', mockCredentialId);
+
+            expect(manager.fetchAccounts()[0]).toMatchObject({ backupEligible: true, backupState: true });
+        });
+    });
+
     describe('storePasskeyAccountForLogin', () => {
         it('should lookup passkey from backend and store with isImported=true', async () => {
             await manager.storePasskeyAccountForLogin(mockCredentialId, mockAddress);

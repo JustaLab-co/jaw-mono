@@ -1007,6 +1007,7 @@ export class PasskeyManager {
     // Warning: (ae-forgotten-export) The symbol "ImportWebAuthnAuthenticationResult" needs to be exported by the entry point index.d.ts
     importPasskeyAccount(getFn?: PasskeyGetFn, rpId?: string): Promise<ImportWebAuthnAuthenticationResult>;
     logout(): void;
+    recordAuthenticatorInfo(credentialId: string, observed: PasskeyAuthenticatorInfo, dev?: boolean): Promise<PasskeyAuthenticatorInfo>;
     removeAccount(credentialId: string): void;
     setAccountAddress(credentialId: string, address: `0x${string}`): void;
     setAccountAddresses(entries: Array<{

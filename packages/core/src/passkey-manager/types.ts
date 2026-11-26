@@ -47,6 +47,12 @@ export interface PasskeyRegistrationRequest extends PasskeyAuthenticatorInfo {
     displayName: string;
 }
 
+/**
+ * What became known about a registered passkey after it was created: the
+ * fields that changed, sent to `PATCH <passkeys>/:credentialId`.
+ */
+export type PasskeyUpdateRequest = PasskeyAuthenticatorInfo;
+
 export interface LookupPasskeysRequest {
     credentialIds: string[];
 }

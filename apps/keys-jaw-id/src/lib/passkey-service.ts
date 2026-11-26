@@ -1,5 +1,5 @@
-import { type PasskeyAccount, Account, type Chain } from '@jaw.id/core';
-import { derivePrfKeys } from '@jaw.id/core/internal';
+import { type PasskeyAccount, Account, PasskeyManager, type Chain } from '@jaw.id/core';
+import { derivePrfKeys, PrfUnavailableError } from '@jaw.id/core/internal';
 import { debugLog } from './debug-log';
 import type { Address } from 'viem';
 
@@ -126,6 +126,9 @@ export class PasskeyService {
    * or send them.
    * @param credentialId - The account's credential; only this passkey may answer
    * @param labels - Versioned labels, `jaw.id/<use>/v<N>`
+   *
+   * Records the outcome on the stored account (and the passkey server): a
+   * result means the passkey supports PRF, PrfUnavailableError that it does not.
    * @throws {PrfUnavailableError} If the passkey's store does not support PRF
    */
   async derivePrfKeys<const L extends string>(
@@ -135,7 +138,17 @@ export class PasskeyService {
     if (!this.isWebAuthnSupported()) {
       throw new Error('WebAuthn is not supported in this browser');
     }
-    return derivePrfKeys({ rpId: this.rpId, credentialId }, labels);
+    const manager = new PasskeyManager(undefined, undefined, this.apiKey);
+    try {
+      const keys = await derivePrfKeys({ rpId: this.rpId, credentialId }, labels);
+      void manager.recordAuthenticatorInfo(credentialId, { prfSupported: true });
+      return keys;
+    } catch (error) {
+      if (error instanceof PrfUnavailableError) {
+        void manager.recordAuthenticatorInfo(credentialId, { prfSupported: false });
+      }
+      throw error;
+    }
   }
 
   /**

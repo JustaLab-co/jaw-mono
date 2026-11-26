@@ -151,6 +151,21 @@ class CborReader {
 }
 
 /**
+ * Read the backup flags from the authenticator data of a login (assertion).
+ * Logins carry no AAGUID and no PRF support flag, so only the two backup flags
+ * are learned here. Never throws: unreadable data gives nothing.
+ */
+export function readAssertionAuthenticatorInfo(authData: Uint8Array | undefined): PasskeyAuthenticatorInfo {
+    if (!authData) return {};
+    try {
+        const { backupEligible, backupState } = parseAuthenticatorData(authData);
+        return { backupEligible, backupState };
+    } catch {
+        return {};
+    }
+}
+
+/**
  * Collect what the authenticator reported at creation. Never throws: a
  * credential is still usable without this information, so a parse failure
  * leaves the fields undefined rather than failing account creation.

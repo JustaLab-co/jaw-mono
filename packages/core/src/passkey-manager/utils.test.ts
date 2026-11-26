@@ -253,6 +253,53 @@ describe('passkey-manager/utils — React Native adapter support', () => {
     });
 
     describe('authenticateWithWebAuthnUtils', () => {
+        // Login authenticator data: rpIdHash(32) | flags | signCount(4), no attested credential data.
+        const loginAuthData = (flags: number) => new Uint8Array([...new Array(32).fill(0x11), flags, 0, 0, 0, 1]);
+
+        it('reports the backup flags from the login authenticator data', async () => {
+            const getFn = vi.fn().mockResolvedValue({
+                id: 'cred-123',
+                type: 'public-key',
+                response: { authenticatorData: loginAuthData(0x01 | 0x04 | 0x08 | 0x10).buffer },
+            });
+
+            const result = await authenticateWithWebAuthnUtils('example.com', 'cred-123', undefined, getFn);
+
+            expect(result.authenticator).toEqual({ backupEligible: true, backupState: true });
+        });
+
+        it('reports nothing when the credential carries no authenticator data', async () => {
+            const getFn = vi.fn().mockResolvedValue({ id: 'cred-123', type: 'public-key' });
+
+            const result = await authenticateWithWebAuthnUtils('example.com', 'cred-123', undefined, getFn);
+
+            expect(result.authenticator).toEqual({});
+        });
+
+        it('reports the backup flags from a wrapped native getFn response', async () => {
+            const authData = loginAuthData(0x01 | 0x04 | 0x08);
+            const nativeGetFn: NativePasskeyGetFn = vi.fn().mockResolvedValue({
+                id: 'cred-123',
+                response: {
+                    authenticatorData: btoa(String.fromCharCode(...authData))
+                        .replace(/\+/g, '-')
+                        .replace(/\//g, '_')
+                        .replace(/=/g, ''),
+                    clientDataJSON: 'e30',
+                    signature: 'AQ',
+                },
+            });
+
+            const result = await authenticateWithWebAuthnUtils(
+                'example.com',
+                'cred-123',
+                undefined,
+                wrapNativeGetFn(nativeGetFn)
+            );
+
+            expect(result.authenticator).toEqual({ backupEligible: true, backupState: false });
+        });
+
         it('should use custom getFn when provided instead of navigator.credentials.get', async () => {
             const mockCredential = {
                 id: 'cred-123',
@@ -357,6 +404,19 @@ describe('passkey-manager/utils — React Native adapter support', () => {
     });
 
     describe('importPasskeyUtils', () => {
+        it('reports the backup flags from the login authenticator data', async () => {
+            const authData = new Uint8Array([...new Array(32).fill(0x11), 0x01 | 0x08 | 0x10, 0, 0, 0, 1]);
+            const getFn = vi.fn().mockResolvedValue({
+                id: 'cred-imported',
+                type: 'public-key',
+                response: { authenticatorData: authData.buffer },
+            });
+
+            const result = await importPasskeyUtils(getFn, 'example.com');
+
+            expect(result.authenticator).toEqual({ backupEligible: true, backupState: true });
+        });
+
         it('should use custom getFn when provided', async () => {
             const mockCredential = {
                 id: 'imported-cred-id',

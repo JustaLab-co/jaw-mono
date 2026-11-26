@@ -6,6 +6,7 @@ export type {
     AuthCheckResult,
     AuthState,
     PasskeyRegistrationRequest,
+    PasskeyUpdateRequest,
     PasskeyLookupResponse,
     BackendResponse,
     PasskeysByCredIdsResponse,
@@ -13,6 +14,7 @@ export type {
 } from './types.js';
 export {
     registerPasskeyInBackend,
+    updatePasskeyInBackend,
     lookupPasskeyFromBackend,
     PasskeyRegistrationError,
     PasskeyLookupError,

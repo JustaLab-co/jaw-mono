@@ -981,6 +981,45 @@ describe('Account', () => {
                 })
             );
         });
+
+        it('Account.import records the backup flags the login reported', async () => {
+            const { PasskeyManager } = await import('../passkey-manager/index.js');
+            const { createSmartAccount } = await import('./smartAccount.js');
+            const address = '0x1234567890123456789012345678901234567890';
+            vi.mocked(createSmartAccount).mockResolvedValue({
+                address,
+                getAddress: vi.fn().mockResolvedValue(address),
+            } as never);
+
+            const recordAuthenticatorInfo = vi.fn().mockResolvedValue({});
+            vi.mocked(PasskeyManager).mockImplementation(
+                () =>
+                    ({
+                        getAccountByCredentialId: vi.fn().mockReturnValue({
+                            username: 'alice',
+                            credentialId: 'imp-cred',
+                            publicKey: '0x04imported',
+                            creationDate: new Date().toISOString(),
+                            isImported: true,
+                        }),
+                        importPasskeyAccount: vi.fn().mockResolvedValue({
+                            name: 'imported',
+                            credential: { id: 'imp-cred', publicKey: '0x04imported' },
+                            authenticator: { backupEligible: true, backupState: true },
+                        }),
+                        storePasskeyAccountForLogin: vi.fn(),
+                        fetchAccountRecord: vi.fn().mockRejectedValue(new Error('no record endpoint in tests')),
+                        recordAuthenticatorInfo,
+                    }) as never
+            );
+
+            await Account.import({ chainId: 1, apiKey: 'test-api-key', rpId: 'myapp.com' });
+
+            expect(recordAuthenticatorInfo).toHaveBeenCalledWith('imp-cred', {
+                backupEligible: true,
+                backupState: true,
+            });
+        });
     });
 
     describe('restore', () => {

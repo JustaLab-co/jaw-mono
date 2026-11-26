@@ -1,5 +1,6 @@
 import type {
     PasskeyRegistrationRequest,
+    PasskeyUpdateRequest,
     PasskeysByCredIdsResponse,
     LookupPasskeysRequest,
     AccountByCredIdRequest,
@@ -25,6 +26,12 @@ export interface PasskeyRoutes {
         response: void;
         headers: Record<string, string>;
         pathParams?: never;
+    };
+    UPDATE_PASSKEY: {
+        request: PasskeyUpdateRequest;
+        response: void;
+        headers: Record<string, string>;
+        pathParams: { credentialId: string };
     };
     LOOKUP_PASSKEYS: {
         request: LookupPasskeysRequest;
