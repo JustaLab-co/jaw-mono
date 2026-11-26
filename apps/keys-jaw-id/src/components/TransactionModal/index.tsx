@@ -201,6 +201,25 @@ export const TransactionModal = ({
     calls: transactionCalls,
   });
 
+  const {
+    assetsOut,
+    assetsIn,
+    error: assetPreviewError,
+    loading: assetPreviewLoading,
+    simulated: assetPreviewSimulated,
+    willRevert: assetPreviewWillRevert,
+    revertCause: assetPreviewRevertCause,
+  } = useAssetPreview({
+    // Under a permission the calls execute as the granter, so the balance changes are theirs.
+    // Left undefined until the granter resolves: simulating from the spender would preview the
+    // wrong account, and a shortfall there would briefly read as "Insufficient funds".
+    account: permissionId ? onBehalfOf : signerAddress,
+    calls: transactionCalls,
+    chainId: chain?.id ?? 1,
+    apiKey: effectiveApiKey,
+    enabled: chain?.id !== undefined,
+  });
+
   // Use gas estimation hook for parallel ETH and ERC-20 estimation
   const {
     gasFee,
@@ -222,25 +241,8 @@ export const TransactionModal = ({
     permissionId,
     address: transactionRequest?.from,
     onFeeTokensUpdate: setFeeTokens,
-  });
-
-  const {
-    assetsOut,
-    assetsIn,
-    error: assetPreviewError,
-    loading: assetPreviewLoading,
-    simulated: assetPreviewSimulated,
-    willRevert: assetPreviewWillRevert,
-    revertCause: assetPreviewRevertCause,
-  } = useAssetPreview({
-    // Under a permission the calls execute as the granter, so the balance changes are theirs.
-    // Left undefined until the granter resolves: simulating from the spender would preview the
-    // wrong account, and a shortfall there would briefly read as "Insufficient funds".
-    account: permissionId ? onBehalfOf : signerAddress,
-    calls: transactionCalls,
-    chainId: chain?.id ?? 1,
-    apiKey: effectiveApiKey,
-    enabled: chain?.id !== undefined,
+    // Under a permission the preview reads the granter, and another account pays the fee.
+    assetsOut: assetPreviewSimulated && !permissionId ? assetsOut : undefined,
   });
 
   // Compute paymaster URL based on fee token selection (for ERC-20 paymaster)
