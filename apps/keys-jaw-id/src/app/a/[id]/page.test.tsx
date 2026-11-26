@@ -87,6 +87,30 @@ describe('/a/[id]', () => {
     expect(FakeSocket.all).toHaveLength(0);
   });
 
+  it('given a batch blob, when the page has no batch screen, then it opens no socket and keeps nothing for a reload', async () => {
+    const plain = {
+      v: 2,
+      account: '0x1111111111111111111111111111111111111111',
+      members: [{ id, key, chainId: 84532 }],
+    };
+    const aes = await crypto.subtle.importKey('raw', Buffer.from(key, 'base64url'), 'AES-GCM', false, ['encrypt']);
+    const iv = new Uint8Array(12).fill(9);
+    const sealed = await crypto.subtle.encrypt(
+      { name: 'AES-GCM', iv, additionalData: new TextEncoder().encode(`jaw-short-link/1\n${id}`) },
+      aes,
+      new TextEncoder().encode(JSON.stringify(plain))
+    );
+    serve(
+      () => new Response(JSON.stringify({ blob: Buffer.concat([iv, new Uint8Array(sealed)]).toString('base64url') }))
+    );
+
+    await open(key);
+    await vi.waitFor(() => expect(host.textContent).toContain('This link is damaged or has expired'));
+
+    expect(FakeSocket.all).toHaveLength(0);
+    expect(sessionStorage.getItem(`short-link-seen:${id}`)).toBeNull();
+  });
+
   it('given the tab opened the link before, when it reloads without the key after the request ended, then it shows the request as done', async () => {
     serve(() => new Response(JSON.stringify({ blob })));
     await open(key);

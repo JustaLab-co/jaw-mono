@@ -23,7 +23,9 @@ export default function ShortLinkPage() {
     // bridge says the request is done, or that the tab lost its link, as it does for a long link.
     if (!key) return setOpened(seenIn(id) ?? 'damaged');
     let live = true;
-    openShortLink(id, key).then((link) => {
+    openShortLink(id, key).then((opened) => {
+      // A batch link has no screen yet, so it reads as a link this page cannot open.
+      const link = opened && 'session' in opened ? opened : undefined;
       if (link) remember(id, link);
       if (live) setOpened(link ?? 'damaged');
     });
