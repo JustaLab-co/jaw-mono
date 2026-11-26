@@ -11,7 +11,7 @@ vi.mock('@jaw.id/core/internal', async (importActual) => ({
 }));
 
 const CREDENTIAL_ID = 'cred-1';
-const LABELS = ['jaw.id/dev-test/v1'] as const;
+const LABELS = ['jaw.id/backup-encryption/v1'] as const;
 
 describe('PasskeyService.derivePrfKeys', () => {
   let record: ReturnType<typeof vi.spyOn>;
@@ -28,7 +28,7 @@ describe('PasskeyService.derivePrfKeys', () => {
   });
 
   it('derives for the account passkey on the keys origin', async () => {
-    const keys = { 'jaw.id/dev-test/v1': new Uint8Array(32).fill(1) };
+    const keys = { 'jaw.id/backup-encryption/v1': new Uint8Array(32).fill(1) };
     derivePrfKeys.mockResolvedValue(keys);
 
     await expect(new PasskeyService({ apiKey: 'k1' }).derivePrfKeys(CREDENTIAL_ID, LABELS)).resolves.toBe(keys);
@@ -37,7 +37,7 @@ describe('PasskeyService.derivePrfKeys', () => {
   });
 
   it('records that the passkey supports PRF when keys come back', async () => {
-    derivePrfKeys.mockResolvedValue({ 'jaw.id/dev-test/v1': new Uint8Array(32) });
+    derivePrfKeys.mockResolvedValue({ 'jaw.id/backup-encryption/v1': new Uint8Array(32) });
 
     await new PasskeyService({ apiKey: 'k1' }).derivePrfKeys(CREDENTIAL_ID, LABELS);
 
