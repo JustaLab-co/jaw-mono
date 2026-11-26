@@ -51,6 +51,8 @@ import { isWildcard } from '../components/PermissionDialog/Sections';
 import { toDialogCalls } from '../components/PermissionDialog/calls';
 import { storedPermissionNote, grantOptions } from '../utils/permissionNote';
 import { useGrantNote } from '../hooks/useGrantNote';
+import { useRefuseOnce } from '../hooks/useRefuseOnce';
+import { swapDestinationOf } from '../utils/swapDestination';
 import { ConnectDialog } from '../components/ConnectDialog';
 import { AddFundsDialog } from '../components/AddFundsDialog';
 import { ResponsiveDialogAnchor } from '../components/DialogPresentation';
@@ -2485,6 +2487,14 @@ function PermissionDialogWrapper({
     onReject(new UIError(standardErrorCodes.rpc.invalidParams as UIErrorCode, reason))
   );
 
+  // The token swaps under the grant may buy, shown only. One that is not an address is refused on
+  // open, as the keys popup does.
+  const swapDestination = swapDestinationOf(request.data.capabilities?.swapDestination);
+  useRefuseOnce(
+    swapDestination === null ? 'capabilities.swapDestination must be a token address' : undefined,
+    (reason) => onReject(new UIError(standardErrorCodes.rpc.invalidParams as UIErrorCode, reason))
+  );
+
   // chainId can be number or hex string (like '0x1')
   const requestChainId = request.data.chainId;
   const chainId =
@@ -2634,7 +2644,7 @@ function PermissionDialogWrapper({
     // definition, so an empty URL would resolve to the chain's public RPC instead of
     // the proxy. Nothing to read without a configured endpoint.
     const rpcUrl = chain.rpcUrl;
-    if ((spendsData.length === 0 && callsData.length === 0) || !rpcUrl) {
+    if ((spendsData.length === 0 && callsData.length === 0 && !swapDestination) || !rpcUrl) {
       setIsLoadingTokenInfo(false);
       return;
     }
@@ -2652,6 +2662,7 @@ function PermissionDialogWrapper({
         new Set([
           ...spendsData.map((spend) => spend.token),
           ...callsData.map((call) => call.target).filter((t) => t && !isWildcard(t)),
+          ...(swapDestination ? [swapDestination] : []),
         ])
       ) as string[];
 
@@ -2701,7 +2712,7 @@ function PermissionDialogWrapper({
     return () => {
       isMounted = false;
     };
-  }, [chainId, spendsData, callsData, chain.rpcUrl, viemChain]);
+  }, [chainId, spendsData, callsData, swapDestination, chain.rpcUrl, viemChain]);
 
   // Fetch fee tokens from capabilities (same pattern as TransactionDialogWrapper)
   useEffect(() => {
@@ -2883,7 +2894,7 @@ function PermissionDialogWrapper({
   };
 
   // Refused on open above; nothing to show.
-  if (grantNote.refusal !== undefined) return null;
+  if (grantNote.refusal !== undefined || swapDestination === null) return null;
 
   if (needsPasskey) {
     return (
@@ -2908,6 +2919,7 @@ function PermissionDialogWrapper({
       }}
       mode="grant"
       note={grantNote.note}
+      swapDestination={swapDestination}
       spenderAddress={request.data.spender}
       accountAddress={request.data.address}
       origin={typeof window !== 'undefined' ? window.location.origin : 'unknown'}
