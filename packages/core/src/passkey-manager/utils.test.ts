@@ -104,6 +104,23 @@ function toB64Url(bytes: Uint8Array): string {
         .replace(/=/g, '');
 }
 
+// A credential whose response blocks reads, as Firefox with 1Password can
+// ("Permission denied to access object").
+function credentialWithBlockedResponse(id: string) {
+    return {
+        id,
+        type: 'public-key',
+        response: new Proxy(
+            {},
+            {
+                get() {
+                    throw new Error('Permission denied to access object');
+                },
+            }
+        ),
+    };
+}
+
 describe('passkey-manager/utils — React Native adapter support', () => {
     beforeEach(() => {
         vi.clearAllMocks();
@@ -225,6 +242,52 @@ describe('passkey-manager/utils — React Native adapter support', () => {
             expect(result.authenticator).toEqual({});
         });
 
+        // Firefox with 1Password proxies the credential and can block a second read
+        // ("Permission denied to access object"). The passkey exists by then, so
+        // creation must still succeed: failing here would orphan it.
+        it('still creates the passkey when reading the attestation object is blocked', async () => {
+            const { createWebAuthnCredential } = await import('viem/account-abstraction');
+            const response = {};
+            Object.defineProperty(response, 'attestationObject', {
+                get() {
+                    throw new Error('Permission denied to access object');
+                },
+            });
+            vi.mocked(createWebAuthnCredential).mockResolvedValueOnce({
+                id: 'cred-blocked',
+                publicKey: '0x04blocked',
+                raw: { response, getClientExtensionResults: () => ({ prf: { enabled: true } }) } as never,
+            });
+
+            const result = await createPasskeyUtils('bob', 'example.com', 'MyApp', vi.fn());
+
+            expect(result.credentialId).toBe('cred-blocked');
+            // PRF support is still read; only what the attestation object holds is unknown.
+            expect(result.authenticator).toEqual({ prfSupported: true });
+        });
+
+        it('still creates the passkey when every read of the raw credential is blocked', async () => {
+            const { createWebAuthnCredential } = await import('viem/account-abstraction');
+            const blocked = new Proxy(
+                {},
+                {
+                    get() {
+                        throw new Error('Permission denied to access object');
+                    },
+                }
+            );
+            vi.mocked(createWebAuthnCredential).mockResolvedValueOnce({
+                id: 'cred-blocked',
+                publicKey: '0x04blocked',
+                raw: blocked as never,
+            });
+
+            const result = await createPasskeyUtils('bob', 'example.com', 'MyApp', vi.fn());
+
+            expect(result.credentialId).toBe('cred-blocked');
+            expect(result.authenticator).toEqual({});
+        });
+
         it('passes through the authenticator info from the native path', async () => {
             const authenticator = { prfSupported: true, backupEligible: true, backupState: true };
             const result = await createPasskeyUtils(
@@ -273,6 +336,15 @@ describe('passkey-manager/utils — React Native adapter support', () => {
 
             const result = await authenticateWithWebAuthnUtils('example.com', 'cred-123', undefined, getFn);
 
+            expect(result.authenticator).toEqual({});
+        });
+
+        it('still signs in when reading the authenticator data is blocked', async () => {
+            const getFn = vi.fn().mockResolvedValue(credentialWithBlockedResponse('cred-123'));
+
+            const result = await authenticateWithWebAuthnUtils('example.com', 'cred-123', undefined, getFn);
+
+            expect(result.credential.id).toBe('cred-123');
             expect(result.authenticator).toEqual({});
         });
 
@@ -415,6 +487,15 @@ describe('passkey-manager/utils — React Native adapter support', () => {
             const result = await importPasskeyUtils(getFn, 'example.com');
 
             expect(result.authenticator).toEqual({ backupEligible: true, backupState: true });
+        });
+
+        it('still imports when reading the authenticator data is blocked', async () => {
+            const getFn = vi.fn().mockResolvedValue(credentialWithBlockedResponse('cred-imported'));
+
+            const result = await importPasskeyUtils(getFn, 'example.com');
+
+            expect(result.credential.id).toBe('cred-imported');
+            expect(result.authenticator).toEqual({});
         });
 
         it('should use custom getFn when provided', async () => {

@@ -167,6 +167,32 @@ describe('authDataFromAttestationObject', () => {
     });
 });
 
+// Input from an authenticator or a browser extension can be anything. Each case
+// must fail fast with an error (never hang, never allocate what the header claims),
+// and readAuthenticatorInfo must still return, keeping what it can.
+describe('authDataFromAttestationObject on hostile input', () => {
+    const text = (value: string) => [0x60 + value.length, ...new TextEncoder().encode(value)];
+    const EIGHT_BYTE_MAX = [0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff];
+    // A value nested 100,000 arrays deep under "fmt", before any authData.
+    const deeplyNested = [0xa1, ...text('fmt'), ...new Array(100_000).fill(0x81), 0x00];
+
+    it.each([
+        ['empty input', [], /truncated/],
+        ['a map claiming 2^64 entries', [0xbb, ...EIGHT_BYTE_MAX], /truncated/],
+        ['a skipped array claiming 2^64 items', [0xa1, ...text('fmt'), 0x9b, ...EIGHT_BYTE_MAX], /truncated/],
+        ['a key with an 8-byte length', [0xa1, 0x7b, ...EIGHT_BYTE_MAX], /truncated/],
+        ['authData with an 8-byte length', [0xa1, ...text('authData'), 0x5b, ...EIGHT_BYTE_MAX], /truncated/],
+        ['an indefinite-length map', [0xbf, 0xff], /Unsupported CBOR additional info/],
+        // Recursion ends in either a stack overflow or a missing authData; both throw.
+        ['deep nesting', deeplyNested, /.+/],
+    ])('throws on %s, and readAuthenticatorInfo keeps only the PRF result', (_, bytes, error) => {
+        const input = Uint8Array.from(bytes);
+
+        expect(() => authDataFromAttestationObject(input)).toThrow(error);
+        expect(readAuthenticatorInfo(input, { prf: { enabled: true } })).toEqual({ prfSupported: true });
+    });
+});
+
 describe('readAuthenticatorInfo', () => {
     const synced = attestationObject(authData(FLAG_UP | FLAG_UV | FLAG_BE | FLAG_BS | FLAG_AT));
 

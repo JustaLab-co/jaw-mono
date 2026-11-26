@@ -24,20 +24,33 @@ export function assertPrfLabel(label: string): void {
     }
 }
 
-/** HKDF-SHA256 (RFC 5869) through WebCrypto. */
+/**
+ * HKDF-SHA256 (RFC 5869) through WebCrypto.
+ *
+ * The copy of `ikm` handed to WebCrypto is zeroed once imported, so this leaves
+ * no copy of its own behind. Zeroing stays best effort: the CryptoKey holds the
+ * key material internally, where JavaScript cannot clear it.
+ */
 export async function hkdfSha256(
     ikm: Uint8Array,
     salt: Uint8Array,
     info: Uint8Array,
     length: number
 ): Promise<Uint8Array> {
-    const key = await crypto.subtle.importKey('raw', new Uint8Array(ikm), 'HKDF', false, ['deriveBits']);
+    // Copied into an ArrayBuffer-backed array, which the WebCrypto types require.
+    const ikmCopy = new Uint8Array(ikm);
+    let key: CryptoKey;
+    try {
+        key = await crypto.subtle.importKey('raw', ikmCopy, 'HKDF', false, ['deriveBits']);
+    } finally {
+        ikmCopy.fill(0);
+    }
     const bits = await crypto.subtle.deriveBits(
         { name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(salt), info: new Uint8Array(info) },
         key,
         length * 8
     );
-    return new Uint8Array(bits);
+    return new Uint8Array(bits); // a view over the derived bits, not a copy
 }
 
 /**

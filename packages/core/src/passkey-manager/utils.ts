@@ -173,11 +173,19 @@ export interface ImportWebAuthnAuthenticationResult {
  * Read the backup flags from a login credential. Browser credentials and the
  * wrapped native getFn both carry `response.authenticatorData`; a custom getFn
  * may not, which gives nothing.
+ *
+ * Never throws, so a login or an import never fails over this optional
+ * metadata: an extension that proxies the credential can block the read
+ * (Firefox with 1Password, see authenticatorInfoFromCredential).
  */
 function authenticatorInfoFromAssertion(credential: unknown): PasskeyAuthenticatorInfo {
-    const authData = (credential as { response?: { authenticatorData?: ArrayBuffer | Uint8Array } } | null)?.response
-        ?.authenticatorData;
-    return readAssertionAuthenticatorInfo(authData ? new Uint8Array(authData) : undefined);
+    try {
+        const authData = (credential as { response?: { authenticatorData?: ArrayBuffer | Uint8Array } } | null)
+            ?.response?.authenticatorData;
+        return readAssertionAuthenticatorInfo(authData ? new Uint8Array(authData) : undefined);
+    } catch {
+        return {};
+    }
 }
 
 /**
@@ -503,6 +511,12 @@ export async function createPasskeyUtils(
 /**
  * Read PRF support, AAGUID and backup flags from a browser PublicKeyCredential.
  * A custom createFn may return an object without these members, so each is optional.
+ *
+ * Never throws: this runs after the passkey exists, so a failure here would leave
+ * a passkey with no local or backend record. Some extensions proxy the credential
+ * and block a second read of it (Firefox with 1Password: "Permission denied to
+ * access object", which is why ox reads it once, up front). Each read is guarded
+ * on its own, so one blocked member does not lose the other.
  */
 function authenticatorInfoFromCredential(raw: unknown): PasskeyAuthenticatorInfo {
     const credential = raw as
@@ -511,14 +525,20 @@ function authenticatorInfoFromCredential(raw: unknown): PasskeyAuthenticatorInfo
               getClientExtensionResults?: () => { prf?: { enabled?: boolean } };
           }
         | undefined;
-    const attestationObject = credential?.response?.attestationObject;
+    let attestationObject: Uint8Array | undefined;
+    try {
+        const value = credential?.response?.attestationObject;
+        attestationObject = value ? new Uint8Array(value) : undefined;
+    } catch {
+        attestationObject = undefined;
+    }
     let extensionResults: { prf?: { enabled?: boolean } } | undefined;
     try {
         extensionResults = credential?.getClientExtensionResults?.();
     } catch {
         extensionResults = undefined;
     }
-    return readAuthenticatorInfo(attestationObject ? new Uint8Array(attestationObject) : undefined, extensionResults);
+    return readAuthenticatorInfo(attestationObject, extensionResults);
 }
 
 /**

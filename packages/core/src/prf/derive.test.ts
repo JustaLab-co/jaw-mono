@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { hkdfSha256, deriveKeyFromPrf, assertPrfLabel } from './derive.js';
 
 const hex = (bytes: Uint8Array) => Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
@@ -42,6 +42,34 @@ describe('deriveKeyFromPrf', () => {
 
     it('rejects a PRF output that is not 32 bytes', async () => {
         await expect(deriveKeyFromPrf(new Uint8Array(31), 'jaw.id/x/v1')).rejects.toThrow('must be 32 bytes');
+    });
+});
+
+describe('hkdfSha256 key material', () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it('zeroes the copy of the PRF output it hands to WebCrypto', async () => {
+        const importKey = vi.spyOn(crypto.subtle, 'importKey');
+        const prfOutput = Uint8Array.from({ length: 32 }, (_, i) => i + 1);
+
+        const key = await deriveKeyFromPrf(prfOutput, 'jaw.id/a/v1');
+
+        const handed = importKey.mock.calls[0][1] as Uint8Array;
+        expect(handed).not.toBe(prfOutput);
+        expect(handed).toEqual(new Uint8Array(32));
+        // The caller's array and the derived key are left alone.
+        expect(prfOutput[0]).toBe(1);
+        expect(key).not.toEqual(new Uint8Array(32));
+    });
+
+    it('zeroes that copy when the import fails too', async () => {
+        const importKey = vi.spyOn(crypto.subtle, 'importKey').mockRejectedValueOnce(new Error('import failed'));
+
+        await expect(deriveKeyFromPrf(new Uint8Array(32).fill(5), 'jaw.id/a/v1')).rejects.toThrow('import failed');
+
+        expect(importKey.mock.calls[0][1]).toEqual(new Uint8Array(32));
     });
 });
 
