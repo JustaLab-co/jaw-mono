@@ -257,13 +257,19 @@ export function useGasEstimation({
   );
   const ethEstimatedForRef = useRef<string>('');
 
-  // The preview lands after the first estimate, so what it moves out re-runs the estimate; the
-  // coin estimate is reused, as it is when the token list arrives.
+  // The preview lands after the first estimate, so what it moves out of an ERC-20 fee token
+  // re-runs the estimate; the coin estimate is reused, as it is when the token list arrives.
   const assetsOutRef = useRef(assetsOut);
   assetsOutRef.current = assetsOut;
   const outflowKey = useMemo(
-    () => JSON.stringify((assetsOut ?? []).map((d) => [d.address.toLowerCase(), d.diff.toString()])),
-    [assetsOut]
+    () =>
+      JSON.stringify(
+        feeTokens
+          .filter((t) => !t.isNative)
+          .map((t) => [t.address.toLowerCase(), outflowOf(assetsOut, t.address).toString()])
+          .filter(([, out]) => out !== '0')
+      ),
+    [assetsOut, feeTokens]
   );
 
   // Re-run estimation when a token joins the list, the coin included, since the preselection
