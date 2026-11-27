@@ -1,3 +1,13 @@
+## 1.17.6 (2026-11-27)
+
+### 🩹 Fixes
+
+- **ui:** preselect a fee token the account can pay with ([#678](https://github.com/JustaLab-co/jaw-mono/pull/678))
+
+### ❤️ Thank You
+
+- Mariano Aguero @mariano-aguero
+
 ## 1.17.5 (2026-11-26)
 
 ### 🧱 Updated Dependencies
