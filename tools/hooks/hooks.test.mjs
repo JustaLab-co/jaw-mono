@@ -23,6 +23,7 @@ case "$1" in
   graph) if [ -n "$BAD_GRAPH" ]; then echo '{' >"\${2#--file=}"; else cp "${here}/fixtures/graph.json" "\${2#--file=}"; fi ;;
   affected) cat "$NX_FIRST_LOG" 2>/dev/null; exit "\${NX_FIRST_RC:-0}" ;;
   run-many)
+    if [ -n "$BUILD_IN_COPY" ]; then mkdir -p "$(dirname "$BUILD_IN_COPY")" && echo built >"$BUILD_IN_COPY"; fi
     [ -n "$PROBE" ] && cat $PROBE >"${dir}/probe" 2>/dev/null
     echo "$NX_WORKSPACE_DATA_DIRECTORY $NX_CACHE_DIRECTORY" >"${dir}/nx.env"
     p=$(echo "$*" | sed 's/.* -p \\([^ ]*\\).*/\\1/')
@@ -444,4 +445,26 @@ test('pre-commit fails when the dependencies cannot be linked in', () => {
   const r = preCommit(s);
   assert.notEqual(r.code, 0);
   assert.ok(!r.calls.some((call) => call.startsWith('run-many')));
+});
+
+test('pre-commit runs no Nx at all for a docs-only commit', () => {
+  const s = scratch();
+  s.write('a/README.md', 'docs\n');
+  s.write('a/sub/notes.txt', 'notes\n');
+  s.git('add', 'a/README.md', 'a/sub/notes.txt');
+  const r = preCommit(s);
+  assert.equal(r.code, 0);
+  assert.deepEqual(r.calls, []);
+});
+
+// jaw-agent#261 and #213: a dependency built in the copy (its dist) must be
+// what the dependent's import sees, not the working tree's unbuilt package.
+test('pre-commit sees a workspace package built in the copy through node_modules', () => {
+  const s = scratch();
+  withWorkspaceLink(s);
+  s.write('a/sub/y.ts', 'x\n');
+  s.git('add', 'a/sub/y.ts');
+  const r = preCommit(s, { BUILD_IN_COPY: 'core/dist/index.d.ts', PROBE: 'node_modules/@x/core/dist/index.d.ts' });
+  assert.equal(r.code, 0);
+  assert.equal(readFileSync(join(s.dir, 'probe'), 'utf8'), 'built\n');
 });

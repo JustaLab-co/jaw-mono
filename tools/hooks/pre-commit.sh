@@ -13,7 +13,9 @@ dir=$(mktemp -d)
 trap 'rm -rf "$dir"' EXIT
 # Deletions and both sides of a move count: what is left behind may break.
 git diff --cached --name-only -z --no-renames --diff-filter=ACMRD >"$dir/staged"
-[ -s "$dir/staged" ] || exit 0
+# Lint and typecheck never read prose, so a docs-only commit runs no Nx.
+tr '\0' '\n' <"$dir/staged" | grep -vE '\.(md|mdx|txt)$' | tr '\n' '\0' >"$dir/code"
+[ -s "$dir/code" ] || exit 0
 
 # The staged tree, with the installed dependencies linked in. Workspace
 # packages resolve to their staged copy. Nx keeps its cache and the database
@@ -23,9 +25,11 @@ git checkout-index -a --prefix="$dir/tree/" || exit 1
 find "$root" -name .git -prune -o -name node_modules -type d -prune -print >"$dir/modules" || exit 1
 node "$here/link-modules.mjs" "$root" "$dir/tree" "$dir/modules" || exit 1
 cd "$dir/tree" || exit 1
+# Nx asks git for the default branch; an empty repo keeps it from erroring.
+git init -q || exit 1
 export NX_DAEMON=false NX_CACHE_DIRECTORY="$root/.nx/cache" NX_WORKSPACE_DATA_DIRECTORY="$root/.nx/workspace-data/pre-commit"
 
 nx graph --file="$dir/graph.json" >/dev/null || exit 1
-projects=$(node "$here/owners.mjs" "$dir/graph.json" "$dir/staged") || exit 1
+projects=$(node "$here/owners.mjs" "$dir/graph.json" "$dir/code") || exit 1
 [ -n "$projects" ] || exit 0
 nx run-many "$@" -p "$projects"
