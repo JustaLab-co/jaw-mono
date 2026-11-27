@@ -1023,11 +1023,8 @@ export class PasskeyManager {
 
 // @public
 export interface PasskeyOwnershipProof {
-    // (undocumented)
     authenticatorData: string;
-    // (undocumented)
     clientDataJSON: string;
-    // (undocumented)
     signature: string;
 }
 

@@ -1,3 +1,5 @@
+import * as Base64 from 'ox/Base64';
+
 /**
  * Proof that the caller holds a passkey, for the passkey server's update route.
  *
@@ -12,12 +14,15 @@
  * public on-chain.
  */
 
-export const PASSKEY_UPDATE_CHALLENGE_PREFIX = 'jaw.id/passkey-update/v1';
+const PASSKEY_UPDATE_CHALLENGE_PREFIX = 'jaw.id/passkey-update/v1';
 
 /** A WebAuthn assertion of the passkey, as the passkey server's update route takes it. Every part is base64url. */
 export interface PasskeyOwnershipProof {
+    /** The assertion's authenticator data: rpId hash, flags (user presence, backup flags) and sign count. */
     authenticatorData: string;
+    /** The client data the browser built: type, challenge and origin. */
     clientDataJSON: string;
+    /** ES256 signature, DER-encoded, over `authenticatorData || SHA-256(clientDataJSON)`. */
     signature: string;
 }
 
@@ -35,6 +40,8 @@ export function ownershipChallenge(): Uint8Array<ArrayBuffer> {
 }
 
 type Bytes = ArrayBuffer | Uint8Array;
+
+const BASE64URL = { url: true, pad: false } as const;
 
 /**
  * The proof carried by a sign-in, import or PRF assertion, or undefined when
@@ -63,9 +70,9 @@ export function ownershipProofFromAssertion(credential: unknown): PasskeyOwnersh
         }
 
         return {
-            authenticatorData: toBase64Url(toBytes(response.authenticatorData)),
-            clientDataJSON: toBase64Url(clientDataJSON),
-            signature: toBase64Url(toBytes(response.signature)),
+            authenticatorData: Base64.fromBytes(toBytes(response.authenticatorData), BASE64URL),
+            clientDataJSON: Base64.fromBytes(clientDataJSON, BASE64URL),
+            signature: Base64.fromBytes(toBytes(response.signature), BASE64URL),
         };
     } catch {
         return undefined;
@@ -74,10 +81,4 @@ export function ownershipProofFromAssertion(credential: unknown): PasskeyOwnersh
 
 function toBytes(value: Bytes): Uint8Array {
     return value instanceof Uint8Array ? value : new Uint8Array(value);
-}
-
-function toBase64Url(bytes: Uint8Array): string {
-    let binary = '';
-    for (const byte of bytes) binary += String.fromCharCode(byte);
-    return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
 }

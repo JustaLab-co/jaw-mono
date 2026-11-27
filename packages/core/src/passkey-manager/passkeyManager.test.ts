@@ -718,18 +718,21 @@ describe('PasskeyManager', () => {
                 proof,
             });
 
-            await manager.authenticateWithWebAuthn('keys.jaw.id', mockCredentialId);
-            await vi.waitFor(() => expect(utils.updatePasskeyInBackend).toHaveBeenCalled());
+            try {
+                await manager.authenticateWithWebAuthn('keys.jaw.id', mockCredentialId);
+                await vi.waitFor(() => expect(utils.updatePasskeyInBackend).toHaveBeenCalled());
 
-            expect(signIn).toHaveBeenCalledTimes(1);
-            expect(utils.updatePasskeyInBackend).toHaveBeenCalledWith(
-                mockCredentialId,
-                { backupEligible: true, backupState: true, proof },
-                undefined,
-                false,
-                undefined
-            );
-            signIn.mockRestore();
+                expect(signIn).toHaveBeenCalledTimes(1);
+                expect(utils.updatePasskeyInBackend).toHaveBeenCalledWith(
+                    mockCredentialId,
+                    { backupEligible: true, backupState: true, proof },
+                    undefined,
+                    false,
+                    undefined
+                );
+            } finally {
+                signIn.mockRestore();
+            }
         });
 
         it('sends only the fields that changed', async () => {
