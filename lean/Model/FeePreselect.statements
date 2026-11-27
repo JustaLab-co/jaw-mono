@@ -1,0 +1,574 @@
+{
+  "format": 1,
+  "toolchain": "leanprover/lean4:v4.34.1",
+  "module": "Model.FeePreselect",
+  "declarations": [
+    {
+      "name": "FeePreselect.State",
+      "kind": "inductive",
+      "type": "Type",
+      "typeHash": "7051ab654d793c216d744f7920d98d672357a0efa67248ee75d146d668f60997",
+      "valueHash": null
+    },
+    {
+      "name": "FeePreselect.State.casesOn",
+      "kind": "definition",
+      "type": "{motive : FeePreselect.State → Sort u} → (t : FeePreselect.State) → ((sel ownerPick : Option FeePreselect.Tok) → (err : Bool) → motive { sel := sel, ownerPick := ownerPick, err := err }) → motive t",
+      "typeHash": "d99b4d458c1d24bb7b76a8996549d11e0e2d8ff35e86e9b41680ad3cb02c922e",
+      "valueHash": "7294a5cb372254c298693e88514d443195b35d3f775dcb5d01b42c683a7f1bea"
+    },
+    {
+      "name": "FeePreselect.State.ctorIdx",
+      "kind": "definition",
+      "type": "FeePreselect.State → Nat",
+      "typeHash": "b327a887d8b1c8330ef9148e728418e5660984d5c4e482e227883d44354994f9",
+      "valueHash": "f2d2625bbd22c4cf766c214b44b5df8794870b5fac71a1ed441755803b4378c4"
+    },
+    {
+      "name": "FeePreselect.State.err",
+      "kind": "definition",
+      "type": "FeePreselect.State → Bool",
+      "typeHash": "f0ae6bdd000445368e894ecaaa8260277464df0df66f9deafde9394937af5fea",
+      "valueHash": "7532178ee11e9f40d59356ab8dbdff482e9ff0396782f3a6ae8c31d902c65dd1"
+    },
+    {
+      "name": "FeePreselect.State.mk",
+      "kind": "constructor",
+      "type": "Option FeePreselect.Tok → Option FeePreselect.Tok → Bool → FeePreselect.State",
+      "typeHash": "57adbc1baafa9a03111b201ad22dd47c55ac53235cbd68d04e5367c5658707e7",
+      "valueHash": null
+    },
+    {
+      "name": "FeePreselect.State.mk.inj",
+      "kind": "theorem",
+      "type": "∀ {sel ownerPick : Option FeePreselect.Tok} {err : Bool} {sel_1 ownerPick_1 : Option FeePreselect.Tok} {err_1 : Bool}, { sel := sel, ownerPick := ownerPick, err := err } = { sel := sel_1, ownerPick := ownerPick_1, err := err_1 } → sel = sel_1 ∧ ownerPick = ownerPick_1 ∧ err = err_1",
+      "typeHash": "9712b6c80bd730c020493586d92a2a19f15ec8a3b3bf58cb55c133609c33e97d",
+      "valueHash": null
+    },
+    {
+      "name": "FeePreselect.State.mk.injEq",
+      "kind": "theorem",
+      "type": "∀ (sel ownerPick : Option FeePreselect.Tok) (err : Bool) (sel_1 ownerPick_1 : Option FeePreselect.Tok) (err_1 : Bool), ({ sel := sel, ownerPick := ownerPick, err := err } = { sel := sel_1, ownerPick := ownerPick_1, err := err_1 }) = (sel = sel_1 ∧ ownerPick = ownerPick_1 ∧ err = err_1)",
+      "typeHash": "6c3c29e24678b9692016bc302b2c81626c5541b74e46274818168d3fa6d4a06d",
+      "valueHash": null
+    },
+    {
+      "name": "FeePreselect.State.mk.noConfusion",
+      "kind": "definition",
+      "type": "{P : Sort u} → {sel ownerPick : Option FeePreselect.Tok} → {err : Bool} → {sel' ownerPick' : Option FeePreselect.Tok} → {err' : Bool} → { sel := sel, ownerPick := ownerPick, err := err } = { sel := sel', ownerPick := ownerPick', err := err' } → (sel = sel' → ownerPick = ownerPick' → err = err' → P) → P",
+      "typeHash": "120c6132ff3f440bee3835e4d7ef33f98694b2fa34b547bb0bc19674df0dda07",
+      "valueHash": "aac27bf28b28eab08e7651b3be2f991976ba1271fe2dedb74e52051e33c600f9"
+    },
+    {
+      "name": "FeePreselect.State.mk.sizeOf_spec",
+      "kind": "theorem",
+      "type": "∀ (sel ownerPick : Option FeePreselect.Tok) (err : Bool), sizeOf { sel := sel, ownerPick := ownerPick, err := err } = 1 + sizeOf sel + sizeOf ownerPick + sizeOf err",
+      "typeHash": "91a20acb29094fd1aaaa565e15ca738ff0cf4efc590ea359705e4469c319aea4",
+      "valueHash": null
+    },
+    {
+      "name": "FeePreselect.State.noConfusion",
+      "kind": "definition",
+      "type": "{P : Sort u} → {t t' : FeePreselect.State} → t = t' → FeePreselect.State.noConfusionType P t t'",
+      "typeHash": "c7c759b4727825aec71a55cb3f84765c1ea28cbe586fc1ff977e38837b3f8f76",
+      "valueHash": "b2dc2d7d296f34143728ba3cab237c18e531dcc9eb09178aaa1573d6a3614bdd"
+    },
+    {
+      "name": "FeePreselect.State.noConfusionType",
+      "kind": "definition",
+      "type": "Sort u → FeePreselect.State → FeePreselect.State → Sort u",
+      "typeHash": "3906e29b4bfc9cf16be86314e6ad80b0ad7e766fdbf04a19f6848795f4563261",
+      "valueHash": "42d6107dc24e28bda43995b91238932a226912f5c4f7eb0e063f850f647ea162"
+    },
+    {
+      "name": "FeePreselect.State.ownerPick",
+      "kind": "definition",
+      "type": "FeePreselect.State → Option FeePreselect.Tok",
+      "typeHash": "cb524a7028d52001bb2f25000463b219cf95e9c0b74ea577b8f8934d620f596b",
+      "valueHash": "4b68e40c12f8672377073ab49d2fc2963e638f3222ec8d5a6f9a82e7e417e930"
+    },
+    {
+      "name": "FeePreselect.State.rec",
+      "kind": "recursor",
+      "type": "{motive : FeePreselect.State → Sort u} → ((sel ownerPick : Option FeePreselect.Tok) → (err : Bool) → motive { sel := sel, ownerPick := ownerPick, err := err }) → (t : FeePreselect.State) → motive t",
+      "typeHash": "5ad34d44b3b2c18acdd8b8daa68fefa0811572037c4102044b7279182b5b5e25",
+      "valueHash": null
+    },
+    {
+      "name": "FeePreselect.State.recOn",
+      "kind": "definition",
+      "type": "{motive : FeePreselect.State → Sort u} → (t : FeePreselect.State) → ((sel ownerPick : Option FeePreselect.Tok) → (err : Bool) → motive { sel := sel, ownerPick := ownerPick, err := err }) → motive t",
+      "typeHash": "d99b4d458c1d24bb7b76a8996549d11e0e2d8ff35e86e9b41680ad3cb02c922e",
+      "valueHash": "b4acc64d7ebcee97fbfb9b0699694d3548ba89366d72b9b3a4617e0e72b655eb"
+    },
+    {
+      "name": "FeePreselect.State.sel",
+      "kind": "definition",
+      "type": "FeePreselect.State → Option FeePreselect.Tok",
+      "typeHash": "cb524a7028d52001bb2f25000463b219cf95e9c0b74ea577b8f8934d620f596b",
+      "valueHash": "cf0fbfe06511e2b6d2639ef22018ffb065faec93a7c8d6a72b0ae86fef68443d"
+    },
+    {
+      "name": "FeePreselect.Tok",
+      "kind": "inductive",
+      "type": "Type",
+      "typeHash": "7051ab654d793c216d744f7920d98d672357a0efa67248ee75d146d668f60997",
+      "valueHash": null
+    },
+    {
+      "name": "FeePreselect.Tok.balance",
+      "kind": "definition",
+      "type": "FeePreselect.Tok → Nat",
+      "typeHash": "bc3993204d98c1798499f7582389724b304271abedf1ba19222122cd0c08657c",
+      "valueHash": "995e2816f40b90b261b1e4c8856a52394d34c8926f5fb13797a3c012c0e18859"
+    },
+    {
+      "name": "FeePreselect.Tok.casesOn",
+      "kind": "definition",
+      "type": "{motive : FeePreselect.Tok → Sort u} → (t : FeePreselect.Tok) → ((isNative : Bool) → (balance : Nat) → (selectable priced : Bool) → motive { isNative := isNative, balance := balance, selectable := selectable, priced := priced }) → motive t",
+      "typeHash": "76cb700963781ba54aa4e9f638852d93acf8fc12286853018fb3c6fd199728c5",
+      "valueHash": "827b73b459d6d53f88ad62a46301b2399d56e4d636210a46f8feacc22dd61b2f"
+    },
+    {
+      "name": "FeePreselect.Tok.ctorIdx",
+      "kind": "definition",
+      "type": "FeePreselect.Tok → Nat",
+      "typeHash": "079d7a718d0455bff12120dc5f17551c30bdcc3602ca653106fe141510945e7d",
+      "valueHash": "0096e61323e98f2975cad3533f83806b8fe85effacb8c3d9586246845da55c9b"
+    },
+    {
+      "name": "FeePreselect.Tok.isNative",
+      "kind": "definition",
+      "type": "FeePreselect.Tok → Bool",
+      "typeHash": "cacb603e7eaf99e620c795f2ec07fbf0d9970043ea8e37762f2edb9ec965fb4c",
+      "valueHash": "8e0f7af7d70cd2f7e67d1e73c2d843334514b02cf25c79e0a5829816968cf7d8"
+    },
+    {
+      "name": "FeePreselect.Tok.mk",
+      "kind": "constructor",
+      "type": "Bool → Nat → Bool → Bool → FeePreselect.Tok",
+      "typeHash": "bd00fd9fb197f3bae34078630e8a4a9c94ce1d7f309c5edb13b21d072f0cf5f1",
+      "valueHash": null
+    },
+    {
+      "name": "FeePreselect.Tok.mk.inj",
+      "kind": "theorem",
+      "type": "∀ {isNative : Bool} {balance : Nat} {selectable priced isNative_1 : Bool} {balance_1 : Nat} {selectable_1 priced_1 : Bool}, { isNative := isNative, balance := balance, selectable := selectable, priced := priced } = { isNative := isNative_1, balance := balance_1, selectable := selectable_1, priced := priced_1 } → isNative = isNative_1 ∧ balance = balance_1 ∧ selectable = selectable_1 ∧ priced = priced_1",
+      "typeHash": "0f7800d6e3c99732e7b265f91d763bcbd05917aeeb248c848d721a6f1e462e17",
+      "valueHash": null
+    },
+    {
+      "name": "FeePreselect.Tok.mk.injEq",
+      "kind": "theorem",
+      "type": "∀ (isNative : Bool) (balance : Nat) (selectable priced isNative_1 : Bool) (balance_1 : Nat) (selectable_1 priced_1 : Bool), ({ isNative := isNative, balance := balance, selectable := selectable, priced := priced } = { isNative := isNative_1, balance := balance_1, selectable := selectable_1, priced := priced_1 }) = (isNative = isNative_1 ∧ balance = balance_1 ∧ selectable = selectable_1 ∧ priced = priced_1)",
+      "typeHash": "e108725a8e0f66c05c75ba76f48b6433be03469a7c106f668a7d08e1f79d52cb",
+      "valueHash": null
+    },
+    {
+      "name": "FeePreselect.Tok.mk.noConfusion",
+      "kind": "definition",
+      "type": "{P : Sort u} → {isNative : Bool} → {balance : Nat} → {selectable priced isNative' : Bool} → {balance' : Nat} → {selectable' priced' : Bool} → { isNative := isNative, balance := balance, selectable := selectable, priced := priced } = { isNative := isNative', balance := balance', selectable := selectable', priced := priced' } → (isNative = isNative' → balance = balance' → selectable = selectable' → priced = priced' → P) → P",
+      "typeHash": "6708e5feb6557acb9e9fa0be171f150a9cb7920db941afc55e08b53652e10222",
+      "valueHash": "a791ee4c906586b856d58e7db2499b719b6608350c7123191e82c2ec35db18b0"
+    },
+    {
+      "name": "FeePreselect.Tok.mk.sizeOf_spec",
+      "kind": "theorem",
+      "type": "∀ (isNative : Bool) (balance : Nat) (selectable priced : Bool), sizeOf { isNative := isNative, balance := balance, selectable := selectable, priced := priced } = 1 + sizeOf isNative + sizeOf balance + sizeOf selectable + sizeOf priced",
+      "typeHash": "24caa30984bbec9ae72add8d6a1ef43cf69f99b70c339556b68cbde7bb6ad3e1",
+      "valueHash": null
+    },
+    {
+      "name": "FeePreselect.Tok.noConfusion",
+      "kind": "definition",
+      "type": "{P : Sort u} → {t t' : FeePreselect.Tok} → t = t' → FeePreselect.Tok.noConfusionType P t t'",
+      "typeHash": "ee6974c8be7e7f207ca8191cbab722b59208b6ddd1056c65fff38efb0d8232e0",
+      "valueHash": "67c0fbbad4e0d076cb236a517627dabc2dc73b14fa3f9da0f8a1f310861179db"
+    },
+    {
+      "name": "FeePreselect.Tok.noConfusionType",
+      "kind": "definition",
+      "type": "Sort u → FeePreselect.Tok → FeePreselect.Tok → Sort u",
+      "typeHash": "0a72f55c6e6b9a575da7af47c0a301a3f6969b90a2a11e2aef836fe0f2c6f7ed",
+      "valueHash": "1d2afeee0f82b2ef614202134bc82eae429c72c857c713a1194f3fc0359fec7c"
+    },
+    {
+      "name": "FeePreselect.Tok.priced",
+      "kind": "definition",
+      "type": "FeePreselect.Tok → Bool",
+      "typeHash": "cacb603e7eaf99e620c795f2ec07fbf0d9970043ea8e37762f2edb9ec965fb4c",
+      "valueHash": "cdc712782ad50218b1802bf518e00b330291de3122e2224cbf34445abe06551c"
+    },
+    {
+      "name": "FeePreselect.Tok.rec",
+      "kind": "recursor",
+      "type": "{motive : FeePreselect.Tok → Sort u} → ((isNative : Bool) → (balance : Nat) → (selectable priced : Bool) → motive { isNative := isNative, balance := balance, selectable := selectable, priced := priced }) → (t : FeePreselect.Tok) → motive t",
+      "typeHash": "0b824c0076830a2518f277953ddf91e9397d8d684d1ad75c2c60497fda33d911",
+      "valueHash": null
+    },
+    {
+      "name": "FeePreselect.Tok.recOn",
+      "kind": "definition",
+      "type": "{motive : FeePreselect.Tok → Sort u} → (t : FeePreselect.Tok) → ((isNative : Bool) → (balance : Nat) → (selectable priced : Bool) → motive { isNative := isNative, balance := balance, selectable := selectable, priced := priced }) → motive t",
+      "typeHash": "76cb700963781ba54aa4e9f638852d93acf8fc12286853018fb3c6fd199728c5",
+      "valueHash": "fbc45780489ae6e6925cc9d807296a2684076b5f1af3a857ae81ac4ab01e4d65"
+    },
+    {
+      "name": "FeePreselect.Tok.selectable",
+      "kind": "definition",
+      "type": "FeePreselect.Tok → Bool",
+      "typeHash": "cacb603e7eaf99e620c795f2ec07fbf0d9970043ea8e37762f2edb9ec965fb4c",
+      "valueHash": "52870a7aa5fa98e25925bfb539107112677b43749f62c998b1c40ec18cbbe7ad"
+    },
+    {
+      "name": "FeePreselect.cases",
+      "kind": "definition",
+      "type": "List (List FeePreselect.Tok × Nat)",
+      "typeHash": "533de69eae1131381a79576b0c19e1000323c7f69ee0041f60811e1c133adc66",
+      "valueHash": "0a52e9f7f21f972910574c5bcfed291cc29d7bbd8c0d2245b528a569b4116c0f"
+    },
+    {
+      "name": "FeePreselect.coinCovers",
+      "kind": "definition",
+      "type": "List FeePreselect.Tok → Nat → Bool",
+      "typeHash": "384f218465ddc54ee9c657d3613c8d005a12a8848e057063522fa183013e88f2",
+      "valueHash": "b2ad10590da2ffa89e01cba8ced51225b2af64d57aecdcb0529ca02e7327931c"
+    },
+    {
+      "name": "FeePreselect.coinCovers.eq_1",
+      "kind": "theorem",
+      "type": "∀ (ts : List FeePreselect.Tok) (need : Nat), FeePreselect.coinCovers ts need = match List.find? (fun x => x.isNative) ts with | some c => decide (need ≤ c.balance) | none => false",
+      "typeHash": "b07ecb0c771878494a4f06c96634a9149869baa23b3bffdb7e0a4cc9a7d638df",
+      "valueHash": null
+    },
+    {
+      "name": "FeePreselect.coinPreferred",
+      "kind": "definition",
+      "type": "List FeePreselect.Tok → Nat → Bool",
+      "typeHash": "384f218465ddc54ee9c657d3613c8d005a12a8848e057063522fa183013e88f2",
+      "valueHash": "ef0a0d519bc132e816dedadd7345ebe55e6ac042d35c485fbeccceb1588c8c9e"
+    },
+    {
+      "name": "FeePreselect.errIffCoinShort",
+      "kind": "definition",
+      "type": "List FeePreselect.Tok → Nat → Bool",
+      "typeHash": "384f218465ddc54ee9c657d3613c8d005a12a8848e057063522fa183013e88f2",
+      "valueHash": "bfff4844d01da5b0636c037a1e5da5111199d209cd736d5b4fc320cad1745b73"
+    },
+    {
+      "name": "FeePreselect.fallback",
+      "kind": "definition",
+      "type": "FeePreselect.State → Option FeePreselect.Tok → FeePreselect.State",
+      "typeHash": "f39e633f5434c843482cc115b60367321f108a4c5c7acb3b7b46d51df8872ad9",
+      "valueHash": "0e8c6f8adc3306b1026c0bb4dd15f272941ee9af51a76d971c998df4325fecce"
+    },
+    {
+      "name": "FeePreselect.fallback.eq_1",
+      "kind": "theorem",
+      "type": "∀ (s : FeePreselect.State) (t : Option FeePreselect.Tok), FeePreselect.fallback s t = { sel := t, ownerPick := s.ownerPick, err := s.err }",
+      "typeHash": "309ded6b3ac862f3f2f326d55e2d0f5c4acbd8b09962f73ceed0125f4a048599",
+      "valueHash": null
+    },
+    {
+      "name": "FeePreselect.fallback_hands_back",
+      "kind": "theorem",
+      "type": "∀ (s : FeePreselect.State) (t : Option FeePreselect.Tok), t ≠ s.ownerPick → FeePreselect.ownerHolds (FeePreselect.fallback s t) = false",
+      "typeHash": "f857482e6a296c8000ea9a816719746b183efe3fa101841f5b6749bdf7121181",
+      "valueHash": null
+    },
+    {
+      "name": "FeePreselect.find_holds",
+      "kind": "theorem",
+      "type": "∀ {p : FeePreselect.Tok → Bool} {ts : List FeePreselect.Tok} {t : FeePreselect.Tok}, List.find? p ts = some t → p t = true",
+      "typeHash": "60361078fc8b1f07518b675c7178487b82157bd2a44f8d2565a8e9be0cde6b80",
+      "valueHash": null
+    },
+    {
+      "name": "FeePreselect.handleEthSuccess",
+      "kind": "definition",
+      "type": "FeePreselect.State → List FeePreselect.Tok → Nat → FeePreselect.State",
+      "typeHash": "949d7a9eb51ba781fc3870b35a234a22bc925ee5a3bd8fa91a87a953ed8ea124",
+      "valueHash": "1b987c08bd416e78f401a6dea341e3532929cd73dbba7d1066792faa301fca7f"
+    },
+    {
+      "name": "FeePreselect.handleEthSuccess.eq_1",
+      "kind": "theorem",
+      "type": "∀ (s : FeePreselect.State) (ts : List FeePreselect.Tok) (need : Nat), FeePreselect.handleEthSuccess s ts need = if ts.isEmpty = true then { sel := s.sel, ownerPick := s.ownerPick, err := false } else have pick := FeePreselect.preselectFeeToken ts need; { sel := if FeePreselect.ownerHolds s = true then s.sel else pick, ownerPick := s.ownerPick, err := match pick with | some p => !p.isNative | none => true }",
+      "typeHash": "de027576e6cb01258722efadb81e6cedf1de54d41d9dfe3e3ca12766781883ea",
+      "valueHash": null
+    },
+    {
+      "name": "FeePreselect.instDecidableEqState",
+      "kind": "definition",
+      "type": "DecidableEq FeePreselect.State",
+      "typeHash": "a189caf6f7a53bf2891beb59fafbe88946136463accdcc35c6e630a864b908bd",
+      "valueHash": "5f4cf51480155574b1bc86d066c27ec89bb7a530bda10f29a47399b63799a453"
+    },
+    {
+      "name": "FeePreselect.instDecidableEqState.decEq",
+      "kind": "definition",
+      "type": "(x x_1 : FeePreselect.State) → Decidable (x = x_1)",
+      "typeHash": "eb30291cf10b1dfd6a51a9b573fcd0a92f8d7cc06237d38bff6485eea191fbb6",
+      "valueHash": "a894c87fcacdb18eed4a63e2d3bad5263131d72ac30f00cea8da021e3f8525f3"
+    },
+    {
+      "name": "FeePreselect.instDecidableEqState.decEq.match_1",
+      "kind": "definition",
+      "type": "(motive : FeePreselect.State → FeePreselect.State → Sort u_1) → (x x_1 : FeePreselect.State) → ((a a_1 : Option FeePreselect.Tok) → (a_2 : Bool) → (b b_1 : Option FeePreselect.Tok) → (b_2 : Bool) → motive { sel := a, ownerPick := a_1, err := a_2 } { sel := b, ownerPick := b_1, err := b_2 }) → motive x x_1",
+      "typeHash": "7780c9ce33749c5134293fbdad8ee5817391353653f931f9ac1b0a7fa4e81275",
+      "valueHash": "130e00c087095e8768e73ebaf2799d421789da9fb850e62d7ed4fde5cb7e3581"
+    },
+    {
+      "name": "FeePreselect.instDecidableEqTok",
+      "kind": "definition",
+      "type": "DecidableEq FeePreselect.Tok",
+      "typeHash": "418b53683f1631841f019bedb5298aa731fa9cc21b308b571d40ff35c6eb24cd",
+      "valueHash": "60ea51ac0d6ddb47feb5159e370120b8b36bad10a83df36103fcc16eddb1b558"
+    },
+    {
+      "name": "FeePreselect.instDecidableEqTok.decEq",
+      "kind": "definition",
+      "type": "(x x_1 : FeePreselect.Tok) → Decidable (x = x_1)",
+      "typeHash": "f005427f62bbfc2ae165f45c42a1058a321511d5d06b2693073a45ba38f7f8a8",
+      "valueHash": "36e47b2b45421156dc069c43e16b957c0dfadfe7c98f4cd806418c4c1fec1c70"
+    },
+    {
+      "name": "FeePreselect.instDecidableEqTok.decEq.match_1",
+      "kind": "definition",
+      "type": "(motive : FeePreselect.Tok → FeePreselect.Tok → Sort u_1) → (x x_1 : FeePreselect.Tok) → ((a : Bool) → (a_1 : Nat) → (a_2 a_3 b : Bool) → (b_1 : Nat) → (b_2 b_3 : Bool) → motive { isNative := a, balance := a_1, selectable := a_2, priced := a_3 } { isNative := b, balance := b_1, selectable := b_2, priced := b_3 }) → motive x x_1",
+      "typeHash": "7db85fe5e781d0640623c686534ba513c1b2dddacd2a5960a8851f4f4e1675f7",
+      "valueHash": "2d3cc4836ec565be01261a80455068d9f1d4cfe30f399e6bb0e0126202849349"
+    },
+    {
+      "name": "FeePreselect.instReprState",
+      "kind": "definition",
+      "type": "Repr FeePreselect.State",
+      "typeHash": "171bc8377321879310bdd9930d48ca40c08c7ab092cb3433e39021d97d506f0e",
+      "valueHash": "3a0194c10fdf841cf5caaf2c432ca5b05a6afcc859bd733ae694dff1325ba61d"
+    },
+    {
+      "name": "FeePreselect.instReprState.repr",
+      "kind": "definition",
+      "type": "FeePreselect.State → Nat → Format",
+      "typeHash": "2f46619e8d834d7b7b4eb7e08cc45ef95703798bc5169e096b4f77e5915e8d31",
+      "valueHash": "a20b3e6d90d4af21443fdc28467fd65a4dfb5f1e30f335a8d8f19387ba42753d"
+    },
+    {
+      "name": "FeePreselect.instReprTok",
+      "kind": "definition",
+      "type": "Repr FeePreselect.Tok",
+      "typeHash": "3da4ed658aae6c82abae9a2c1f1a85d5b319b04ee6277fef443a5745eda6d2c6",
+      "valueHash": "f450ce97274bc336baab6cb5fd485256826d61fc0ce4337b744622cc21f578ae"
+    },
+    {
+      "name": "FeePreselect.instReprTok.repr",
+      "kind": "definition",
+      "type": "FeePreselect.Tok → Nat → Format",
+      "typeHash": "9b1b8020b19022381696462ad26be8da7519c3c4e20340aadc7c2f72200e9b55",
+      "valueHash": "5668b3c2ab213a0c2236a48b9c307bc0938a41f428cf6d8f4bcb50ab129972b1"
+    },
+    {
+      "name": "FeePreselect.lists",
+      "kind": "definition",
+      "type": "List (List FeePreselect.Tok)",
+      "typeHash": "25ae2ff71c817e77b9854901742c1ca5da242796a08b9e079ecf1b859da300b6",
+      "valueHash": "a9259fb9cce92eab97c47101f2890ce10029da2dab37e0e6715b774c7c289733"
+    },
+    {
+      "name": "FeePreselect.member",
+      "kind": "definition",
+      "type": "List FeePreselect.Tok → Nat → Bool",
+      "typeHash": "384f218465ddc54ee9c657d3613c8d005a12a8848e057063522fa183013e88f2",
+      "valueHash": "751cb9f5706d360c0ef9e2392b75ba3b8b8b25431cc092163a9dfdb984cd7318"
+    },
+    {
+      "name": "FeePreselect.noneIffNothingPays",
+      "kind": "definition",
+      "type": "List FeePreselect.Tok → Nat → Bool",
+      "typeHash": "384f218465ddc54ee9c657d3613c8d005a12a8848e057063522fa183013e88f2",
+      "valueHash": "2003a75867cac652054603e3ac12716b432c6292ae74569e8375802f90c80a19"
+    },
+    {
+      "name": "FeePreselect.ownerHolds",
+      "kind": "definition",
+      "type": "FeePreselect.State → Bool",
+      "typeHash": "1e7f5fe10d84e282a293c2331c38e0b2429b056319e5e6af69caac59fbde8811",
+      "valueHash": "ea98b913c66f17a5075001e7302fc24320cb0e37e8d52a9c4a3ba0db4055b3bd"
+    },
+    {
+      "name": "FeePreselect.ownerHolds.eq_1",
+      "kind": "theorem",
+      "type": "∀ (s : FeePreselect.State), FeePreselect.ownerHolds s = (s.sel.isSome && s.sel == s.ownerPick)",
+      "typeHash": "70b3f3eb9ee0b834ac20d5ed080cf01f4106566e6a3bc077cf27bf8d5fcfa21f",
+      "valueHash": null
+    },
+    {
+      "name": "FeePreselect.pickFeeToken",
+      "kind": "definition",
+      "type": "FeePreselect.State → Option FeePreselect.Tok → FeePreselect.State",
+      "typeHash": "f39e633f5434c843482cc115b60367321f108a4c5c7acb3b7b46d51df8872ad9",
+      "valueHash": "61ba2f139d0c7c1c693ed238bf582c90b1e45fef69bf214e23f89eb4e80dbf82"
+    },
+    {
+      "name": "FeePreselect.pickFeeToken.eq_1",
+      "kind": "theorem",
+      "type": "∀ (s : FeePreselect.State) (t : Option FeePreselect.Tok), FeePreselect.pickFeeToken s t = { sel := t, ownerPick := t, err := s.err }",
+      "typeHash": "9e1294f824717bcb3491a1dc2352bcdb3330e994d3e4ccc729e3b0c3d8a68761",
+      "valueHash": null
+    },
+    {
+      "name": "FeePreselect.pick_is_owner",
+      "kind": "theorem",
+      "type": "∀ (s : FeePreselect.State) (t : FeePreselect.Tok), FeePreselect.ownerHolds (FeePreselect.pickFeeToken s (some t)) = true",
+      "typeHash": "2c353ba3df4b781af4bb9c10a16ed98c633aac67a0907acd4501a2aac461d483",
+      "valueHash": null
+    },
+    {
+      "name": "FeePreselect.preselectFeeToken",
+      "kind": "definition",
+      "type": "List FeePreselect.Tok → Nat → Option FeePreselect.Tok",
+      "typeHash": "476cc91d162e2c4d657d538fd3332efd500e2cebd3903dad8944949ee876ae1e",
+      "valueHash": "bd8a644847787d2ca24675dd798a5f59603a9fcad36b2192d764819a59461856"
+    },
+    {
+      "name": "FeePreselect.preselectFeeToken.eq_1",
+      "kind": "theorem",
+      "type": "∀ (ts : List FeePreselect.Tok) (need : Nat), FeePreselect.preselectFeeToken ts need = match List.find? (fun x => x.isNative) ts with | some c => if need ≤ c.balance then some c else List.find? FeePreselect.provenErc20 ts | none => List.find? FeePreselect.provenErc20 ts",
+      "typeHash": "fff6a36038c4830ba1be271aedb989d5ba0f350e7e71624c56573220fa805ce6",
+      "valueHash": null
+    },
+    {
+      "name": "FeePreselect.preselectFeeToken.match_1",
+      "kind": "definition",
+      "type": "(motive : Option FeePreselect.Tok → Sort u_1) → (x : Option FeePreselect.Tok) → ((c : FeePreselect.Tok) → motive (some c)) → (Unit → motive none) → motive x",
+      "typeHash": "f3e135ba4cb0e7c1bde5c4f1df04c915a66e81e382f5fa73e68026ec62f00826",
+      "valueHash": "cda8ee95a954a4bbff58eb18872a291ace4858083693616f53310edfb88e74d5"
+    },
+    {
+      "name": "FeePreselect.preselectFeeToken.match_1.eq_1",
+      "kind": "theorem",
+      "type": "∀ (motive : Option FeePreselect.Tok → Sort u_1) (c : FeePreselect.Tok) (h_1 : (c : FeePreselect.Tok) → motive (some c)) (h_2 : Unit → motive none), (match some c with | some c => h_1 c | none => h_2 ()) = h_1 c",
+      "typeHash": "968a1ab0e2fc418d8c4d770f4e6d5b15ff2348ff70c906b13e9a82c4ed461786",
+      "valueHash": null
+    },
+    {
+      "name": "FeePreselect.preselectFeeToken.match_1.eq_2",
+      "kind": "theorem",
+      "type": "∀ (motive : Option FeePreselect.Tok → Sort u_1) (h_1 : (c : FeePreselect.Tok) → motive (some c)) (h_2 : Unit → motive none), (match none with | some c => h_1 c | none => h_2 ()) = h_2 ()",
+      "typeHash": "431913cc8b2d9860e1f2761924e1dadfb1fe9ea65c413f58114d0a4e25340463",
+      "valueHash": null
+    },
+    {
+      "name": "FeePreselect.preselectFeeToken.match_1.splitter",
+      "kind": "definition",
+      "type": "(motive : Option FeePreselect.Tok → Sort u_1) → (x : Option FeePreselect.Tok) → ((c : FeePreselect.Tok) → motive (some c)) → (Unit → motive none) → motive x",
+      "typeHash": "f3e135ba4cb0e7c1bde5c4f1df04c915a66e81e382f5fa73e68026ec62f00826",
+      "valueHash": "59884596b6ef0deafd5587cfbd7623fafedcbf386f5aceafac6dc91cd6f2bd9f"
+    },
+    {
+      "name": "FeePreselect.preselect_member",
+      "kind": "theorem",
+      "type": "∀ (ts : List FeePreselect.Tok) (need : Nat) (p : FeePreselect.Tok), FeePreselect.preselectFeeToken ts need = some p → p ∈ ts",
+      "typeHash": "6d932bfcca798afbd18cab6256bf548ec3c8ddf35918a2dbc80764ddc3242460",
+      "valueHash": null
+    },
+    {
+      "name": "FeePreselect.preselect_none_iff",
+      "kind": "theorem",
+      "type": "∀ (ts : List FeePreselect.Tok) (need : Nat), FeePreselect.preselectFeeToken ts need = none ↔ FeePreselect.coinCovers ts need = false ∧ ∀ (t : FeePreselect.Tok), t ∈ ts → FeePreselect.provenErc20 t = false",
+      "typeHash": "d96840bffbec4714eec120c6358e4f1b4593942fa12b46aba6b3556a9683429e",
+      "valueHash": null
+    },
+    {
+      "name": "FeePreselect.preselect_prefers_coin",
+      "kind": "theorem",
+      "type": "∀ (ts : List FeePreselect.Tok) (need : Nat), FeePreselect.coinCovers ts need = true → ∃ c, List.find? (fun x => x.isNative) ts = some c ∧ FeePreselect.preselectFeeToken ts need = some c",
+      "typeHash": "6b93b5cbf8b10218cd066d6abc93888e8e68a17e986a162638c190281403710b",
+      "valueHash": null
+    },
+    {
+      "name": "FeePreselect.preselect_solvent",
+      "kind": "theorem",
+      "type": "∀ (ts : List FeePreselect.Tok) (need : Nat) (p : FeePreselect.Tok), FeePreselect.preselectFeeToken ts need = some p → p.isNative = true ∧ need ≤ p.balance ∨ p.isNative = false ∧ p.selectable = true ∧ p.priced = true",
+      "typeHash": "af7c852be54eaf7c262cfff625b0a029658f37fddf8314febeeeab727c97f182",
+      "valueHash": null
+    },
+    {
+      "name": "FeePreselect.provenErc20",
+      "kind": "definition",
+      "type": "FeePreselect.Tok → Bool",
+      "typeHash": "506c66a59e7527546e54553e7f1c9868004e76ea8c9630be7f669d17cdd73357",
+      "valueHash": "226d7e6b365ddacece68f21b4a384d6622e269bd8abb562304aa1ba1246ff1d5"
+    },
+    {
+      "name": "FeePreselect.provenErc20.eq_1",
+      "kind": "theorem",
+      "type": "∀ (t : FeePreselect.Tok), FeePreselect.provenErc20 t = (!t.isNative && t.selectable && t.priced)",
+      "typeHash": "848ec930a9bd9d7025f4beb0f08b51569dfbe2e989646c0d28b58f8e8def6e34",
+      "valueHash": null
+    },
+    {
+      "name": "FeePreselect.proven_not_coin",
+      "kind": "theorem",
+      "type": "∀ {t : FeePreselect.Tok}, FeePreselect.provenErc20 t = true → t.isNative = false",
+      "typeHash": "50a3a63650a2077aeaab07e834f8319ac37461527e77da2748b2ab41f6796b23",
+      "valueHash": null
+    },
+    {
+      "name": "FeePreselect.reset_hands_back",
+      "kind": "theorem",
+      "type": "∀ (s : FeePreselect.State), FeePreselect.ownerHolds (FeePreselect.pickFeeToken s none) = false",
+      "typeHash": "3c065afbf2576421a818d578db359d550399c442004e586f431ab4dde05c9d62",
+      "valueHash": null
+    },
+    {
+      "name": "FeePreselect.solvent",
+      "kind": "definition",
+      "type": "List FeePreselect.Tok → Nat → Bool",
+      "typeHash": "384f218465ddc54ee9c657d3613c8d005a12a8848e057063522fa183013e88f2",
+      "valueHash": "54954ddabb61cb96229a083c0fd3f6810643fd9569a08bcdf3ecf3a2d79c3e7b"
+    },
+    {
+      "name": "FeePreselect.step_err_iff",
+      "kind": "theorem",
+      "type": "∀ (s : FeePreselect.State) (ts : List FeePreselect.Tok) (need : Nat), ts ≠ [] → ((FeePreselect.handleEthSuccess s ts need).err = true ↔ FeePreselect.coinCovers ts need = false)",
+      "typeHash": "c6d78ea101c45507f5259b1e0506497c491bdb5bf581446afecce2ca92582163",
+      "valueHash": null
+    },
+    {
+      "name": "FeePreselect.step_keeps_owner_pick",
+      "kind": "theorem",
+      "type": "∀ (s : FeePreselect.State) (ts : List FeePreselect.Tok) (need : Nat), FeePreselect.ownerHolds s = true → (FeePreselect.handleEthSuccess s ts need).sel = s.sel",
+      "typeHash": "dabdd136e2cfa12570575b7f75644e48ac333db38b11655a0248fb6d94b341f3",
+      "valueHash": null
+    },
+    {
+      "name": "FeePreselect.step_takes_preselect",
+      "kind": "theorem",
+      "type": "∀ (s : FeePreselect.State) (ts : List FeePreselect.Tok) (need : Nat), FeePreselect.ownerHolds s = false → ts ≠ [] → (FeePreselect.handleEthSuccess s ts need).sel = FeePreselect.preselectFeeToken ts need",
+      "typeHash": "dd929937366d8e5e576fb90b961a6e189f58ba1e675519cb590d0a5903a8f7d4",
+      "valueHash": null
+    },
+    {
+      "name": "FeePreselect.toks",
+      "kind": "definition",
+      "type": "List FeePreselect.Tok",
+      "typeHash": "f40c6a402e88d469c1dc9d704926e97ca05ae2924a4da794c43ccbff310a30ec",
+      "valueHash": "9c83727b81210c2964059f4f098c9c2c2915554e35760d6c0b76c0901ad8e752"
+    },
+    {
+      "name": "FeePreselect.vectors",
+      "kind": "definition",
+      "type": "List (List FeePreselect.Tok × Nat)",
+      "typeHash": "533de69eae1131381a79576b0c19e1000323c7f69ee0041f60811e1c133adc66",
+      "valueHash": "6fd4d005f7e3fb1af486a90e41ddc7522c7b646780e933c2adb8ebc44a67a2ea"
+    },
+    {
+      "name": "match_75",
+      "kind": "definition",
+      "type": "(motive : List FeePreselect.Tok × Nat → Sort u_1) → (x : List FeePreselect.Tok × Nat) → ((ts : List FeePreselect.Tok) → (n : Nat) → motive (ts, n)) → motive x",
+      "typeHash": "40f859006a873f88be34e8f5243538108b147c7f32e803bb4b505ac7b85989cb",
+      "valueHash": "db134185b549f218643841a1173e2d8d3ecd8ec0a359a9606018d2ad3f493348"
+    }
+  ]
+}

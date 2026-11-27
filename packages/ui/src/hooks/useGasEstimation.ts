@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import type { Address, Hex } from 'viem';
+import { parseEther, type Address, type Hex } from 'viem';
 import type { Account, TokenEstimate, TransactionCall } from '@jaw.id/core';
 import { Erc20EstimationError, estimateErc20PaymasterCosts, jawPaymasterUrl } from '@jaw.id/core';
 import type { FeeTokenOption } from '../components/FeeTokenSelector';
+import { preselectFeeToken, provenErc20 } from '../utils/feePreselect';
 import { classifyRevert, INSUFFICIENT_FUNDS_ERROR, isRevert, messageOf } from '../utils/transactionFailure';
 
 // ============================================================================
@@ -212,6 +213,14 @@ export function useGasEstimation({
   const [estimatingTokenCosts, setEstimatingTokenCosts] = useState<boolean>(false);
   const [selectedFeeToken, setSelectedFeeToken] = useState<FeeTokenOption | null>(null);
 
+  // A token chosen from outside is the owner's, and the preselection never replaces it while it
+  // is still the one selected. Resetting to null, or a fallback switching away, hands it back.
+  const ownerPickRef = useRef<string | null>(null);
+  const pickFeeToken = useCallback((token: FeeTokenOption | null) => {
+    ownerPickRef.current = token?.address.toLowerCase() ?? null;
+    setSelectedFeeToken(token);
+  }, []);
+
   // Track estimation version to handle race conditions
   const estimationVersionRef = useRef<number>(0);
 
@@ -244,12 +253,11 @@ export function useGasEstimation({
   );
   const ethEstimatedForRef = useRef<string>('');
 
-  // Track ERC-20 token addresses to re-run estimation when new tokens are added
-  // This is stable when only gasCostFormatted/isSelectable change (preventing infinite loops)
-  const erc20TokenAddresses = useMemo(
+  // Re-run estimation when a token joins the list, the coin included, since the preselection
+  // reads its balance. Stable when only estimates change (preventing infinite loops).
+  const feeTokenAddresses = useMemo(
     () =>
       feeTokens
-        .filter((t) => !t.isNative)
         .map((t) => t.address.toLowerCase())
         .sort()
         .join(','),
@@ -455,7 +463,9 @@ export function useGasEstimation({
 
       if (ethSuccess) {
         ethEstimatedForRef.current = ethInputsKey;
-        handleEthSuccess(ethResult.value, updatedFeeTokens);
+        // Under a permission the granter sends the value, not the account paying the fee.
+        const sent = permissionId ? 0n : callsWithBigIntValue.reduce((sum, call) => sum + (call.value ?? 0n), 0n);
+        handleEthSuccess(ethResult.value, updatedFeeTokens, sent);
       } else if (ethInsufficientFunds) {
         // Defensive: this branch only runs when the ETH leg was actually measured, so the key is
         // already stale — but a fallback fee must never become reusable if that ever changes.
@@ -482,18 +492,8 @@ export function useGasEstimation({
       }
     }
     // Note: feeTokens and onFeeTokensUpdate accessed via refs to prevent infinite loops
-    // erc20TokenAddresses triggers re-estimation when new ERC-20 tokens are added (but not when estimates update)
-  }, [
-    account,
-    transactionCalls,
-    chainId,
-    apiKey,
-    isSponsored,
-    permissionId,
-    address,
-    erc20TokenAddresses,
-    ethInputsKey,
-  ]);
+    // feeTokenAddresses triggers re-estimation when tokens are added (but not when estimates update)
+  }, [account, transactionCalls, chainId, apiKey, isSponsored, permissionId, address, feeTokenAddresses, ethInputsKey]);
 
   /** Explicit refetch discards the reuse key so the ETH leg is genuinely re-measured. */
   const forceRefetch = useCallback(() => {
@@ -506,16 +506,21 @@ export function useGasEstimation({
   // -------------------------------------------------------------------------
 
   /**
-   * Handle successful ETH gas estimation
+   * The coin estimate passing does not mean the coin balance covers it, so the preselection
+   * compares balances with fees: the coin when it covers its fee and the value sent, else an
+   * ERC-20 the paymaster proved. A coin that falls short is the shortfall a prefund error
+   * reports, whatever ends up selected. An empty list means fee tokens are not offered at all.
    */
-  const handleEthSuccess = useCallback((gasPrice: string, updatedFeeTokens: FeeTokenOption[]) => {
+  const handleEthSuccess = useCallback((gasPrice: string, updatedFeeTokens: FeeTokenOption[], sent: bigint) => {
     setGasFee(gasPrice);
-    setGasEstimationError('');
+    if (updatedFeeTokens.length === 0) {
+      setGasEstimationError('');
+      return;
+    }
 
-    // Auto-select native only when nothing is selected — decided inside the updater, because
-    // `estimateGas` holds the callback from when the estimation started: a closure read would
-    // see the stale null and overwrite a token the user picked while it was in flight.
-    setSelectedFeeToken((prev) => prev ?? updatedFeeTokens.find((t) => t.isNative && t.isSelectable) ?? prev);
+    const pick = preselectFeeToken(updatedFeeTokens, parseEther(gasPrice) + sent);
+    setGasEstimationError(pick?.isNative ? '' : INSUFFICIENT_FUNDS_ERROR);
+    setSelectedFeeToken((prev) => (prev?.address.toLowerCase() === ownerPickRef.current ? prev : pick));
   }, []);
 
   /**
@@ -531,7 +536,9 @@ export function useGasEstimation({
           prev && !prev.isNative
             ? updatedFeeTokens.find((t) => t.address.toLowerCase() === prev.address.toLowerCase())
             : undefined;
-        return prevUpdated?.isSelectable ? prevUpdated : selectableErc20;
+        const next = prevUpdated?.isSelectable ? prevUpdated : selectableErc20;
+        if (next.address.toLowerCase() !== ownerPickRef.current) ownerPickRef.current = null;
+        return next;
       });
       setGasFee(FALLBACK_GAS_ESTIMATE_ETH);
       setGasEstimationError('');
@@ -563,7 +570,6 @@ export function useGasEstimation({
       setGasEstimationError(INSUFFICIENT_FUNDS_ERROR);
       return;
     }
-    const provenErc20 = (t: FeeTokenOption) => !t.isNative && t.isSelectable && !!t.gasCostMaxFormatted;
     const selectableErc20 = updatedFeeTokens.find(provenErc20);
     if (selectableErc20) {
       // Keep the user's own choice when it is itself proven; otherwise take the first that is.
@@ -572,7 +578,9 @@ export function useGasEstimation({
           prev && !prev.isNative
             ? updatedFeeTokens.find((t) => t.address.toLowerCase() === prev.address.toLowerCase())
             : undefined;
-        return prevUpdated && provenErc20(prevUpdated) ? prevUpdated : selectableErc20;
+        const next = prevUpdated && provenErc20(prevUpdated) ? prevUpdated : selectableErc20;
+        if (next.address.toLowerCase() !== ownerPickRef.current) ownerPickRef.current = null;
+        return next;
       });
       setGasFee(FALLBACK_GAS_ESTIMATE_ETH);
       setGasEstimationError('');
@@ -602,7 +610,7 @@ export function useGasEstimation({
     tokenEstimates,
     estimatingTokenCosts,
     selectedFeeToken,
-    setSelectedFeeToken,
+    setSelectedFeeToken: pickFeeToken,
     isPayingWithErc20,
     refetch: forceRefetch,
   };
