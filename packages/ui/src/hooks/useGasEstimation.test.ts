@@ -1354,6 +1354,77 @@ describe('useGasEstimation preselects a fee token the account can pay with', () 
     expect(hook.gasFee).toBe('2');
     expect(hook.selectedFeeToken?.symbol).toBe('USDC');
   });
+
+  it.each([
+    ['an AA21', "UserOperation reverted during simulation: AA21 didn't pay prefund"],
+    ['an estimation error', 'bundler unavailable'],
+  ])("an owner's pick made before %s fallback renders is held", async (_, message) => {
+    erc20Mock.mockResolvedValue([usdcEstimate, usdtEstimate]);
+    const outcomes: Array<() => Promise<string>> = [
+      async () => FEE,
+      async () => {
+        throw new Error(message);
+      },
+      async () => FEE,
+    ];
+    await mount(
+      makeAccount(() => outcomes.shift()!()),
+      [nativeEth(10n ** 18n), token({}), token({ symbol: 'USDT', address: USDT })]
+    );
+    act(() => hook.setSelectedFeeToken(tokensNow.find((t) => t.isNative)!));
+    const usdt = tokensNow.find((t) => t.symbol === 'USDT')!;
+
+    // The fallback queues its update, and the click lands before React renders it.
+    await act(async () => {
+      hook.refetch();
+      for (let i = 0; i < 20; i++) await Promise.resolve();
+      hook.setSelectedFeeToken(usdt);
+    });
+    await settle();
+    expect(hook.selectedFeeToken?.symbol).toBe('USDT');
+
+    await act(async () => {
+      hook.refetch();
+    });
+    await settle();
+    expect(hook.gasFee).toBe(FEE);
+    expect(hook.selectedFeeToken?.symbol).toBe('USDT');
+  });
+
+  it.each([
+    ['an AA21', "UserOperation reverted during simulation: AA21 didn't pay prefund"],
+    ['an estimation error', 'bundler unavailable'],
+  ])('the same token picked again before %s fallback renders is held', async (_, message) => {
+    erc20Mock.mockResolvedValue([usdcEstimate]);
+    const outcomes: Array<() => Promise<string>> = [
+      async () => FEE,
+      async () => {
+        throw new Error(message);
+      },
+      async () => '2',
+    ];
+    await mount(
+      makeAccount(() => outcomes.shift()!()),
+      [nativeEth(10n ** 18n), token({})]
+    );
+    const eth = tokensNow.find((t) => t.isNative)!;
+    act(() => hook.setSelectedFeeToken(eth));
+
+    await act(async () => {
+      hook.refetch();
+      for (let i = 0; i < 20; i++) await Promise.resolve();
+      hook.setSelectedFeeToken(eth);
+    });
+    await settle();
+    expect(hook.selectedFeeToken?.isNative).toBe(true);
+
+    await act(async () => {
+      hook.refetch();
+    });
+    await settle();
+    expect(hook.gasFee).toBe('2');
+    expect(hook.selectedFeeToken?.isNative).toBe(true);
+  });
 });
 
 describe('useGasEstimation offers a fee token only if what the batch leaves of it covers the fee', () => {
