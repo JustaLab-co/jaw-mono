@@ -176,6 +176,15 @@ export function NetworkFeeRow({
       // tokens, so an unselectable selection is always a settled verdict, never in flight.
       const hasTokenCost = selectedFeeToken.gasCostFormatted !== undefined;
       if (!selectedFeeToken.isSelectable || (hasTokenCost && !selectedFeeToken.gasCostMaxFormatted)) {
+        // The balance covers the fee on its own; it is the batch that sends it away.
+        if (selectedFeeToken.usedByTransaction) {
+          return (
+            <InlineWarning
+              text="Used by this transaction"
+              detail={`This transaction spends the ${selectedFeeToken.symbol} the network fee needs. Pick another token to pay with.`}
+            />
+          );
+        }
         if (selectedFeeToken.gasCostFormatted === 'Estimation failed') {
           return (
             <InlineWarning
