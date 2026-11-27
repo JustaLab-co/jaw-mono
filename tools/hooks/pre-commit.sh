@@ -22,12 +22,18 @@ tr '\0' '\n' <"$dir/staged" | grep -vE '\.(md|mdx|txt)$' | tr '\n' '\0' >"$dir/c
 # that indexes it in the checkout, so a later commit can read what this one
 # stored.
 git checkout-index -a --prefix="$dir/tree/" || exit 1
-find "$root" -name .git -prune -o -name node_modules -type d -prune -print >"$dir/modules" || exit 1
+# A folder find cannot read (a container's bind mount) holds no dependencies
+# to link, so its errors are left out.
+find "$root" -name .git -prune -o -name node_modules -type d -prune -print >"$dir/modules" 2>/dev/null
 node "$here/link-modules.mjs" "$root" "$dir/tree" "$dir/modules" || exit 1
 cd "$dir/tree" || exit 1
 # Nx asks git for the default branch; an empty repo keeps it from erroring.
 git init -q || exit 1
-export NX_DAEMON=false NX_CACHE_DIRECTORY="$root/.nx/cache" NX_WORKSPACE_DATA_DIRECTORY="$root/.nx/workspace-data/pre-commit"
+# Nx 18 reads the graph cache location from NX_PROJECT_GRAPH_CACHE_DIRECTORY,
+# later versions from NX_WORKSPACE_DATA_DIRECTORY.
+data="$root/.nx/workspace-data/pre-commit"
+export NX_DAEMON=false NX_CACHE_DIRECTORY="$root/.nx/cache" \
+  NX_WORKSPACE_DATA_DIRECTORY="$data" NX_PROJECT_GRAPH_CACHE_DIRECTORY="$data"
 
 nx graph --file="$dir/graph.json" >/dev/null || exit 1
 projects=$(node "$here/owners.mjs" "$dir/graph.json" "$dir/code") || exit 1

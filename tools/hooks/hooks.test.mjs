@@ -25,7 +25,7 @@ case "$1" in
   run-many)
     if [ -n "$BUILD_IN_COPY" ]; then mkdir -p "$(dirname "$BUILD_IN_COPY")" && echo built >"$BUILD_IN_COPY"; fi
     [ -n "$PROBE" ] && cat $PROBE >"${dir}/probe" 2>/dev/null
-    echo "$NX_WORKSPACE_DATA_DIRECTORY $NX_CACHE_DIRECTORY" >"${dir}/nx.env"
+    echo "$NX_WORKSPACE_DATA_DIRECTORY $NX_CACHE_DIRECTORY $NX_PROJECT_GRAPH_CACHE_DIRECTORY" >"${dir}/nx.env"
     p=$(echo "$*" | sed 's/.* -p \\([^ ]*\\).*/\\1/')
     cat "$NX_RERUN_DIR/$p.log" 2>/dev/null
     exit "$(cat "$NX_RERUN_DIR/$p.rc" 2>/dev/null || echo 0)" ;;
@@ -212,8 +212,8 @@ function failing(reruns, runner = 'vitest') {
 test('each failed project is rerun on its own, with 120s timeouts', () => {
   const r = failing({ a: { log: 'vitest-timeouts.log' }, b: { log: 'vitest-timeouts.log' } });
   assert.deepEqual(r.calls.slice(1), [
-    'run-many -t test -p a --parallel=1 -- --testTimeout=120000 --hookTimeout=120000',
-    'run-many -t test -p b --parallel=1 -- --testTimeout=120000 --hookTimeout=120000',
+    'run-many -t test -p a --parallel=1 --exclude-task-dependencies --skip-nx-cache -- --testTimeout=120000 --hookTimeout=120000',
+    'run-many -t test -p b --parallel=1 --exclude-task-dependencies --skip-nx-cache -- --testTimeout=120000 --hookTimeout=120000',
   ]);
   assert.equal(r.code, 0, r.out);
 });
@@ -411,9 +411,11 @@ test('pre-commit keeps Nx workspace data and cache in the checkout, so the cache
   s.write('a/sub/y.ts', 'x\n');
   s.git('add', 'a/sub/y.ts');
   preCommit(s);
-  const [data, cache] = readFileSync(join(s.dir, 'nx.env'), 'utf8').trim().split(' ');
+  const [data, cache, graph] = readFileSync(join(s.dir, 'nx.env'), 'utf8').trim().split(' ');
   assert.equal(data, join(realpathSync(s.repo), '.nx/workspace-data/pre-commit'));
   assert.equal(cache, join(realpathSync(s.repo), '.nx/cache'));
+  // Nx 18 reads the graph cache location from this name instead.
+  assert.equal(graph, data);
 });
 
 test('pre-commit fails when the staged tree cannot be copied', () => {
@@ -467,4 +469,17 @@ test('pre-commit sees a workspace package built in the copy through node_modules
   const r = preCommit(s, { BUILD_IN_COPY: 'core/dist/index.d.ts', PROBE: 'node_modules/@x/core/dist/index.d.ts' });
   assert.equal(r.code, 0);
   assert.equal(readFileSync(join(s.dir, 'probe'), 'utf8'), 'built\n');
+});
+
+test('pre-commit still runs when a gitignored folder cannot be read', () => {
+  const s = scratch();
+  const locked = join(s.repo, 'data/locked');
+  execFileSync('mkdir', ['-p', locked]);
+  chmodSync(locked, 0o000);
+  after(() => chmodSync(locked, 0o755));
+  s.write('a/sub/y.ts', 'x\n');
+  s.git('add', 'a/sub/y.ts');
+  const r = preCommit(s);
+  assert.equal(r.code, 0);
+  assert.equal(r.calls.at(-1), 'run-many -t lint,typecheck -p a-sub');
 });
