@@ -5,7 +5,7 @@
 import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -24,6 +24,7 @@ case "$1" in
   affected) cat "$NX_FIRST_LOG" 2>/dev/null; exit "\${NX_FIRST_RC:-0}" ;;
   run-many)
     [ -n "$PROBE" ] && cat $PROBE >"${dir}/probe" 2>/dev/null
+    echo "$NX_WORKSPACE_DATA_DIRECTORY $NX_CACHE_DIRECTORY" >"${dir}/nx.env"
     p=$(echo "$*" | sed 's/.* -p \\([^ ]*\\).*/\\1/')
     cat "$NX_RERUN_DIR/$p.log" 2>/dev/null
     exit "$(cat "$NX_RERUN_DIR/$p.rc" 2>/dev/null || echo 0)" ;;
@@ -210,8 +211,8 @@ function failing(reruns, runner = 'vitest') {
 test('each failed project is rerun on its own, with 120s timeouts', () => {
   const r = failing({ a: { log: 'vitest-timeouts.log' }, b: { log: 'vitest-timeouts.log' } });
   assert.deepEqual(r.calls.slice(1), [
-    'run-many -t test -p a --skip-nx-cache -- --testTimeout=120000 --hookTimeout=120000',
-    'run-many -t test -p b --skip-nx-cache -- --testTimeout=120000 --hookTimeout=120000',
+    'run-many -t test -p a --parallel=1 -- --testTimeout=120000 --hookTimeout=120000',
+    'run-many -t test -p b --parallel=1 -- --testTimeout=120000 --hookTimeout=120000',
   ]);
   assert.equal(r.code, 0, r.out);
 });
@@ -380,4 +381,67 @@ test('an app error that says it timed out is a real failure', () => {
   const log =
     ' FAIL  x.test.ts > calls the node\nError: RPC request timed out in 2000ms\n\n      Tests  1 failed (1)\n';
   assert.equal(failing({ a: { log } }).code, 1);
+});
+
+// A workspace package linked from node_modules, as Bun and Yarn install them.
+function withWorkspaceLink(s) {
+  s.commit('core', { 'core/index.ts': 'committed\n' });
+  execFileSync('mkdir', ['-p', join(s.repo, 'node_modules/@x')]);
+  execFileSync('ln', ['-s', '../../core', join(s.repo, 'node_modules/@x/core')]);
+  execFileSync('mkdir', ['-p', join(s.repo, 'node_modules/dep')]);
+  writeFileSync(join(s.repo, 'node_modules/dep/index.js'), 'dep\n');
+}
+
+test('pre-commit resolves workspace packages to their staged copy', () => {
+  const s = scratch();
+  withWorkspaceLink(s);
+  s.write('core/index.ts', 'staged\n');
+  s.git('add', 'core/index.ts');
+  s.write('core/index.ts', 'unstaged\n');
+  s.write('a/sub/y.ts', 'x\n');
+  s.git('add', 'a/sub/y.ts');
+  const r = preCommit(s, { PROBE: 'node_modules/@x/core/index.ts node_modules/dep/index.js' });
+  assert.equal(r.code, 0);
+  assert.equal(readFileSync(join(s.dir, 'probe'), 'utf8'), 'staged\ndep\n');
+});
+
+test('pre-commit keeps Nx workspace data and cache in the checkout, so the cache can hit', () => {
+  const s = scratch();
+  s.write('a/sub/y.ts', 'x\n');
+  s.git('add', 'a/sub/y.ts');
+  preCommit(s);
+  const [data, cache] = readFileSync(join(s.dir, 'nx.env'), 'utf8').trim().split(' ');
+  assert.equal(data, join(realpathSync(s.repo), '.nx/workspace-data/pre-commit'));
+  assert.equal(cache, join(realpathSync(s.repo), '.nx/cache'));
+});
+
+test('pre-commit fails when the staged tree cannot be copied', () => {
+  const s = scratch();
+  const real = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
+  const bin = join(s.dir, 'failing-git');
+  execFileSync('mkdir', ['-p', bin]);
+  // Writes the tree's root, as a copy that runs out of space would, then fails.
+  writeFileSync(
+    join(bin, 'git'),
+    `#!/bin/sh\nif [ "$1" = checkout-index ]; then mkdir -p "\${3#--prefix=}"; exit 1; fi\nexec "${real}" "$@"\n`
+  );
+  chmodSync(join(bin, 'git'), 0o755);
+  s.write('a/sub/y.ts', 'x\n');
+  s.git('add', 'a/sub/y.ts');
+  const r = preCommit(s, { PATH: `${bin}:${s.bin}:${process.env.PATH}` });
+  assert.notEqual(r.code, 0);
+  assert.ok(!r.calls.some((call) => call.startsWith('run-many')));
+});
+
+test('pre-commit fails when the dependencies cannot be linked in', () => {
+  const s = scratch();
+  withWorkspaceLink(s);
+  // A tracked file inside node_modules collides with the link of the same name.
+  writeFileSync(join(s.repo, 'node_modules/dep/index.js'), 'tracked\n');
+  s.git('add', '-f', 'node_modules/dep/index.js');
+  s.write('a/sub/y.ts', 'x\n');
+  s.git('add', 'a/sub/y.ts');
+  const r = preCommit(s);
+  assert.notEqual(r.code, 0);
+  assert.ok(!r.calls.some((call) => call.startsWith('run-many')));
 });

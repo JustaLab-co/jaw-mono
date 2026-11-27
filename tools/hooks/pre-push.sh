@@ -124,10 +124,11 @@ if [ -n "$blocking" ] || [ -z "$failed" ]; then
 fi
 
 # Each project is rerun and judged on its own, so one project's timeout never
-# covers another's real failure.
+# covers another's real failure. Nx never caches a failed test, so the test
+# runs again while the tasks it depends on come from the cache.
 for project in $failed; do
   echo "pre-push: rerunning $project with a 120s timeout"
-  if run nx run-many -t test -p "$project" --skip-nx-cache $(timeouts 120000); then
+  if run nx run-many -t test -p "$project" --parallel=1 $(timeouts 120000); then
     echo "pre-push: WARNING $project passed only on the serial rerun, likely load"
     continue
   fi

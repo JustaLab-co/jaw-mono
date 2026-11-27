@@ -15,16 +15,15 @@ trap 'rm -rf "$dir"' EXIT
 git diff --cached --name-only -z --no-renames --diff-filter=ACMRD >"$dir/staged"
 [ -s "$dir/staged" ] || exit 0
 
-# The staged tree, with the installed dependencies linked in. The Nx cache is
-# shared, since its keys hash the inputs it reads.
-git checkout-index -a --prefix="$dir/tree/"
-find "$root" -name .git -prune -o -name node_modules -type d -prune -print |
-  while read -r modules; do
-    target="$dir/tree/${modules#"$root"/}"
-    mkdir -p "$(dirname "$target")" && ln -s "$modules" "$target"
-  done
+# The staged tree, with the installed dependencies linked in. Workspace
+# packages resolve to their staged copy. Nx keeps its cache and the database
+# that indexes it in the checkout, so a later commit can read what this one
+# stored.
+git checkout-index -a --prefix="$dir/tree/" || exit 1
+find "$root" -name .git -prune -o -name node_modules -type d -prune -print >"$dir/modules" || exit 1
+node "$here/link-modules.mjs" "$root" "$dir/tree" "$dir/modules" || exit 1
 cd "$dir/tree" || exit 1
-export NX_DAEMON=false NX_CACHE_DIRECTORY="$root/.nx/cache"
+export NX_DAEMON=false NX_CACHE_DIRECTORY="$root/.nx/cache" NX_WORKSPACE_DATA_DIRECTORY="$root/.nx/workspace-data/pre-commit"
 
 nx graph --file="$dir/graph.json" >/dev/null || exit 1
 projects=$(node "$here/owners.mjs" "$dir/graph.json" "$dir/staged") || exit 1
