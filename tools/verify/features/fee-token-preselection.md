@@ -6,7 +6,7 @@ When the dApp has no paymaster, the signing dialog lets the owner pay the networ
 - otherwise the first ERC-20 the paymaster proved can pay (priced, with a balance over its "Up to" ceiling);
 - otherwise nothing, with "Insufficient funds" in the fee row and Confirm disabled.
 
-A token the owner picks stays picked while it is still the one selected. Code: `preselectFeeToken` in `packages/ui/src/utils/feePreselect.ts`, called from `handleEthSuccess` in `packages/ui/src/hooks/useGasEstimation.ts`. Model: `lean/Model/FeePreselect.lean`.
+An ERC-20 is offered only when its balance, less what the batch itself moves out of the account in it, covers its "Up to" ceiling. What the batch moves out comes from the dialog's asset preview, once it has simulated; under a permission, or while the preview has not run, the raw balance counts, as before. A token the owner picks stays picked while it is still the one selected. Code: `preselectFeeToken` in `packages/ui/src/utils/feePreselect.ts`, called from `handleEthSuccess` in `packages/ui/src/hooks/useGasEstimation.ts`. Model: `lean/Model/FeePreselect.lean`.
 
 ## Sub-features
 
@@ -16,6 +16,7 @@ A token the owner picks stays picked while it is still the one selected. Code: `
 - The owner's pick survives the estimates landing.
 - A coin-only list that loads after the first estimate is still checked.
 - A native send whose value leaves too little coin for the fee falls to the ERC-20.
+- A batch that spends all of an ERC-20 does not offer it for the fee; one that leaves at least its ceiling does. Code: `outflowOf` and `paysAfterOutflow` in `packages/ui/src/utils/feePreselect.ts`.
 
 ## How to get to it (user POV)
 
@@ -27,7 +28,7 @@ Playground `/core`, connected, `eth_sendTransaction` with `value` 0 to any addre
 tools/verify/fee-token-checks.sh
 ```
 
-Proof: `vitest.txt` shows the `useGasEstimation preselects a fee token the account can pay with` block passing, plus `preselectFeeToken` agreeing with the Lean vectors. `lean.txt` shows `Model.FeePreselect` built. All six sub-features are covered here, including the two a person cannot easily reach by hand (the late coin-only list and the native send).
+Proof: `vitest.txt` shows the `useGasEstimation preselects a fee token the account can pay with` and `useGasEstimation offers a fee token only if what the batch leaves of it covers the fee` blocks passing, `ReactUIHandler hands the batch outflow to the fee estimate` passing, plus `preselectFeeToken` agreeing with the Lean vectors. `lean.txt` shows `Model.FeePreselect` built. All six sub-features are covered here, including the two a person cannot easily reach by hand (the late coin-only list and the native send).
 
 ## Driving it with a person on Base Sepolia (layer 3)
 
@@ -51,6 +52,8 @@ For every case: open `/core`, connect, run `eth_sendTransaction` with `to` your 
 
 5. **Nothing can pay.** Send it 1000 wei of ETH and nothing else. Run the request.
    Expect: the fee row reads "Insufficient funds" and Confirm is disabled. Picking ETH by hand in "Pay with" keeps it blocked.
+6. **A batch that spends all the USDC.** This one runs in the in-app dialog: open `/core?mode=app-specific`, create an account there (app-specific passkeys are per app, so Account 1 is not available), and fund it with 0.001 ETH and 2 USDC. Run `wallet_sendCalls` with one call, `transfer(<your second wallet>, <the whole USDC balance>)` on the USDC contract, and wait for the asset preview to list the USDC going out.
+   Expect: in "Pay with", USDC is greyed out and the dialog is on ETH. Then the same with all but 1 USDC: USDC is offered again.
 
 Proof: five screenshots plus the basescan page for case 2, saved under `tools/verify/evidence/<timestamp>-fee-token/` with the two addresses and the commit (`git rev-parse HEAD`).
 

@@ -44,6 +44,8 @@ export interface FeeTokenOption {
   estimationFailure?: string;
   /** The paymaster estimation failed because the calls revert. */
   estimationReverted?: boolean;
+  /** The balance covers the fee, but not what the batch itself leaves of it. */
+  usedByTransaction?: boolean;
   // Optional: Token logo URI from API
   logoURI?: string;
 }
@@ -200,17 +202,17 @@ export const FeeTokenSelector = ({
     const balanceInUsd = nativeBalanceUsd(token);
     const gasCost = showGasCost ? getGasCost(token) : null;
     const isSelected = selectedToken?.address === token.address;
+    const inactive = !token.isSelectable || disabled;
 
     return (
       <button
         onClick={() => handleSelect(token)}
-        disabled={!token.isSelectable || disabled}
+        disabled={inactive}
+        aria-disabled={inactive || undefined}
         className={cn(
           'flex w-full items-center gap-2 rounded-md px-2 py-2 transition-colors',
-          'hover:bg-muted/60',
           isSelected && 'bg-secondary',
-          !token.isSelectable && 'cursor-not-allowed opacity-50',
-          token.isSelectable && 'cursor-pointer'
+          inactive ? 'cursor-default opacity-50' : 'hover:bg-muted/60 cursor-pointer'
         )}
       >
         {/* Token Icon */}
@@ -232,7 +234,9 @@ export const FeeTokenSelector = ({
 
         {/* Gas Cost / Status: the dollar figure when priced, and the ceiling whenever it is known */}
         <div className="shrink-0 text-right">
-          {gasCost ? (
+          {token.usedByTransaction ? (
+            <span className="text-muted-foreground text-body-xs">Used by this transaction</span>
+          ) : gasCost ? (
             <>
               <div className="text-xs font-semibold">{gasCost.usd ?? <SubText>{gasCost.formatted}</SubText>}</div>
               {(gasCost.maxFormatted || gasCost.usd) && (

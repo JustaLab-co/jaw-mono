@@ -34,9 +34,27 @@ const eth = (balance: bigint): FeeTokenOption => ({
   isSelectable: balance > 0n,
 });
 
+const usdc = (isSelectable: boolean): FeeTokenOption => ({
+  uid: 'usdc',
+  symbol: 'USDC',
+  address: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+  decimals: 6,
+  balance: 10_000_000n,
+  balanceFormatted: '10',
+  isNative: false,
+  isSelectable,
+  gasCostFormatted: '0.02',
+  gasCostMaxFormatted: '0.05',
+});
+
 let root: Root | null = null;
 
-async function renderConfirm(over: { gasFeeLoading?: boolean; estimatingTokenCosts?: boolean; funded?: boolean }) {
+async function renderConfirm(over: {
+  gasFeeLoading?: boolean;
+  estimatingTokenCosts?: boolean;
+  funded?: boolean;
+  feeToken?: FeeTokenOption;
+}) {
   const container = document.createElement('div');
   root = createRoot(container);
   await act(async () =>
@@ -50,7 +68,9 @@ async function renderConfirm(over: { gasFeeLoading?: boolean; estimatingTokenCos
         gasFeeLoading={over.gasFeeLoading ?? false}
         gasEstimationError={over.funded ? '' : INSUFFICIENT_FUNDS_ERROR}
         sponsored={false}
-        feeTokens={[eth(over.funded ? 1_000_000_000_000_000n : 0n)]}
+        feeTokens={[eth(over.funded ? 1_000_000_000_000_000n : 0n), ...(over.feeToken ? [over.feeToken] : [])]}
+        selectedFeeToken={over.feeToken}
+        isPayingWithErc20={!!over.feeToken}
         estimatingTokenCosts={over.estimatingTokenCosts ?? false}
         onConfirm={async () => undefined}
         onCancel={() => undefined}
@@ -100,6 +120,18 @@ describe('TransactionDialog Confirm while the fee is estimating', () => {
     const confirm = await renderConfirm({});
 
     expect(confirm.textContent).toBe('Insufficient Funds');
+    expect(confirm.disabled).toBe(true);
+  });
+
+  it('enables Confirm with a selected ERC-20 fee the account can pay', async () => {
+    const confirm = await renderConfirm({ funded: true, feeToken: usdc(true) });
+
+    expect(confirm.disabled).toBe(false);
+  });
+
+  it('holds Confirm on a selected ERC-20 fee that is no longer payable', async () => {
+    const confirm = await renderConfirm({ funded: true, feeToken: usdc(false) });
+
     expect(confirm.disabled).toBe(true);
   });
 });

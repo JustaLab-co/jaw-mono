@@ -25,9 +25,27 @@ const eth = (balance: bigint): FeeTokenOption => ({
   isSelectable: balance > 0n,
 });
 
+const usdc = (isSelectable: boolean): FeeTokenOption => ({
+  uid: 'usdc',
+  symbol: 'USDC',
+  address: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+  decimals: 6,
+  balance: 10_000_000n,
+  balanceFormatted: '10',
+  isNative: false,
+  isSelectable,
+  gasCostFormatted: '0.02',
+  gasCostMaxFormatted: '0.05',
+});
+
 let root: Root | null = null;
 
-async function renderGrant(over: { gasFeeLoading?: boolean; estimatingTokenCosts?: boolean; funded?: boolean }) {
+async function renderGrant(over: {
+  gasFeeLoading?: boolean;
+  estimatingTokenCosts?: boolean;
+  funded?: boolean;
+  feeToken?: FeeTokenOption;
+}) {
   const container = document.createElement('div');
   root = createRoot(container);
   await act(async () =>
@@ -56,7 +74,9 @@ async function renderGrant(over: { gasFeeLoading?: boolean; estimatingTokenCosts
         gasFeeLoading={over.gasFeeLoading ?? false}
         gasEstimationError={over.funded ? '' : INSUFFICIENT_FUNDS_ERROR}
         estimatingTokenCosts={over.estimatingTokenCosts ?? false}
-        feeTokens={[eth(over.funded ? 1_000_000_000_000_000n : 0n)]}
+        feeTokens={[eth(over.funded ? 1_000_000_000_000_000n : 0n), ...(over.feeToken ? [over.feeToken] : [])]}
+        selectedFeeToken={over.feeToken}
+        isPayingWithErc20={!!over.feeToken}
       />
     )
   );
@@ -106,6 +126,18 @@ describe('PermissionDialog Grant while the fee is estimating', () => {
     const grant = await renderGrant({});
 
     expect(grant.textContent).toBe('Insufficient Funds');
+    expect(grant.disabled).toBe(true);
+  });
+
+  it('enables Grant with a selected ERC-20 fee the account can pay', async () => {
+    const grant = await renderGrant({ funded: true, feeToken: usdc(true) });
+
+    expect(grant.disabled).toBe(false);
+  });
+
+  it('holds Grant on a selected ERC-20 fee that is no longer payable', async () => {
+    const grant = await renderGrant({ funded: true, feeToken: usdc(false) });
+
     expect(grant.disabled).toBe(true);
   });
 });
