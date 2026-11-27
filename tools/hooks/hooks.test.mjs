@@ -366,3 +366,18 @@ test('pre-commit fails when the project lookup fails', () => {
   assert.notEqual(r.code, 0);
   assert.ok(!r.calls.some((call) => call.startsWith('run-many')));
 });
+
+test('a push that moves a file between projects tests both paths', () => {
+  const s = scratch();
+  s.git('switch', '-qc', 'feat');
+  s.git('mv', 'a/util.ts', 'b/util.ts');
+  s.git('commit', '-qm', 'move');
+  const r = prePush(s, [[s.git('rev-parse', 'HEAD'), zero]]);
+  assert.deepEqual(filesArg(r.calls[0]), ['a/util.ts', 'b/util.ts']);
+});
+
+test('an app error that says it timed out is a real failure', () => {
+  const log =
+    ' FAIL  x.test.ts > calls the node\nError: RPC request timed out in 2000ms\n\n      Tests  1 failed (1)\n';
+  assert.equal(failing({ a: { log } }).code, 1);
+});

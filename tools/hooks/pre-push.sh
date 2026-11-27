@@ -36,9 +36,9 @@ while read -r _ local _ remote; do
   if [ "$remote" != "$zero" ] && git cat-file -e "$remote^{commit}" 2>/dev/null; then
     pushed=$remote
   fi
-  git log --no-merges --format= --name-only "$local" --not "origin/$base" $pushed >>"$tmp/files"
+  git log --no-merges --no-renames --format= --name-only "$local" --not "origin/$base" $pushed >>"$tmp/files"
   for merge in $(git rev-list --merges "$local" --not "origin/$base" $pushed); do
-    git diff-tree --cc --name-only --no-commit-id "$merge" >>"$tmp/files"
+    git diff-tree --cc --no-renames --name-only --no-commit-id "$merge" >>"$tmp/files"
   done
 done
 files=$(grep -v '^$' "$tmp/files" | sort -u | paste -sd, -)
@@ -102,7 +102,7 @@ verdict() {
       next
     }
     pending && /[^ ]/ {
-      if (/timed out in|Exceeded timeout of/) load++
+      if (/^ *Error: (Test|Hook) timed out in [0-9]+ms|^ *thrown: "Exceeded timeout of/) load++
       else if (/Channel closed|ERR_IPC_CHANNEL_CLOSED|was terminated by another process/) load++
       else real++
       pending = 0
