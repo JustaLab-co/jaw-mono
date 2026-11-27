@@ -40,8 +40,9 @@ esac`,
 function scratch() {
   const dir = mkdtempSync(join(tmpdir(), 'hooks-'));
   const repo = join(dir, 'repo');
+  const ident = ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false'];
   const git = (...args) =>
-    execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', ...args], {
+    execFileSync('git', [...ident, ...args], {
       cwd: repo,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
@@ -63,7 +64,12 @@ function scratch() {
   };
   commit('init', { 'a/util.ts': 'base\n', 'b/main.ts': 'base\n' });
   git('push', '-q', 'origin', 'main');
-  return { dir, repo, git, write, commit, bin: stubs(dir) };
+  // Merges main into the current branch and checks that it stopped on a conflict.
+  const conflict = () => {
+    const r = spawnSync('git', [...ident, 'merge', '-q', 'main'], { cwd: repo });
+    assert.equal(r.status, 1, 'the merge should stop on a conflict');
+  };
+  return { dir, repo, git, write, commit, conflict, bin: stubs(dir) };
 }
 
 function prePush(s, refs, env = {}, runner = 'vitest') {
@@ -117,7 +123,7 @@ test('a conflicted merge tests the files its resolution changed', () => {
   s.commit('main', { 'a/util.ts': 'main\n', 'b/main.ts': 'moved\n' });
   s.git('push', '-q', 'origin', 'main');
   s.git('switch', '-q', 'feat');
-  spawnSync('git', ['merge', '-q', 'main'], { cwd: s.repo });
+  s.conflict();
   s.commit('merge main', { 'a/util.ts': 'both\n' });
   const r = prePush(s, [[s.git('rev-parse', 'HEAD'), pushed]]);
   assert.deepEqual(filesArg(r.calls[0]), ['a/util.ts']);
@@ -294,7 +300,7 @@ test('pre-commit only formats during a merge', () => {
   s.git('switch', '-q', 'main');
   s.commit('main', { 'a/util.ts': 'main\n' });
   s.git('switch', '-q', 'feat');
-  spawnSync('git', ['merge', '-q', 'main'], { cwd: s.repo });
+  s.conflict();
   s.write('a/util.ts', 'both\n');
   s.git('add', 'a/util.ts');
   const r = preCommit(s);
