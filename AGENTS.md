@@ -107,6 +107,7 @@ Git submodules containing Foundry projects:
 
 - **justanaccount** - smart account implementation
 - **permissions** - Permission manager contract for delegated access control
+- **call-checkers** - Reusable call checker templates (`ArgIn`, `ArgAtMost`, `ValueAtMost`) and the factory that clones them, for permission rules like "only pay this address"
 
 ### Core SDK Architecture
 
