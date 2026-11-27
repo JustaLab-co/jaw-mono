@@ -1319,6 +1319,112 @@ describe('useGasEstimation preselects a fee token the account can pay with', () 
     await settle();
     expect(hook.selectedFeeToken?.isNative).toBe(true);
   });
+
+  it.each([
+    ['an AA21', "UserOperation reverted during simulation: AA21 didn't pay prefund"],
+    ['an estimation error', 'bundler unavailable'],
+  ])("an owner's pick replaced by %s fallback is not held when a later round brings it back", async (_, message) => {
+    erc20Mock.mockResolvedValue([usdcEstimate]);
+    const outcomes: Array<() => Promise<string>> = [
+      async () => FEE,
+      async () => {
+        throw new Error(message);
+      },
+      async () => FEE,
+      async () => '2',
+    ];
+    await mount(
+      makeAccount(() => outcomes.shift()!()),
+      [nativeEth(10n ** 18n), token({})]
+    );
+    act(() => hook.setSelectedFeeToken(tokensNow.find((t) => t.isNative)!));
+
+    for (let round = 0; round < 2; round++) {
+      await act(async () => {
+        hook.refetch();
+      });
+      await settle();
+    }
+    expect(hook.selectedFeeToken?.isNative).toBe(true);
+
+    await act(async () => {
+      hook.refetch();
+    });
+    await settle();
+    expect(hook.gasFee).toBe('2');
+    expect(hook.selectedFeeToken?.symbol).toBe('USDC');
+  });
+
+  it.each([
+    ['an AA21', "UserOperation reverted during simulation: AA21 didn't pay prefund"],
+    ['an estimation error', 'bundler unavailable'],
+  ])("an owner's pick made before %s fallback renders is held", async (_, message) => {
+    erc20Mock.mockResolvedValue([usdcEstimate, usdtEstimate]);
+    const outcomes: Array<() => Promise<string>> = [
+      async () => FEE,
+      async () => {
+        throw new Error(message);
+      },
+      async () => FEE,
+    ];
+    await mount(
+      makeAccount(() => outcomes.shift()!()),
+      [nativeEth(10n ** 18n), token({}), token({ symbol: 'USDT', address: USDT })]
+    );
+    act(() => hook.setSelectedFeeToken(tokensNow.find((t) => t.isNative)!));
+    const usdt = tokensNow.find((t) => t.symbol === 'USDT')!;
+
+    // The fallback queues its update, and the click lands before React renders it.
+    await act(async () => {
+      hook.refetch();
+      for (let i = 0; i < 20; i++) await Promise.resolve();
+      hook.setSelectedFeeToken(usdt);
+    });
+    await settle();
+    expect(hook.selectedFeeToken?.symbol).toBe('USDT');
+
+    await act(async () => {
+      hook.refetch();
+    });
+    await settle();
+    expect(hook.gasFee).toBe(FEE);
+    expect(hook.selectedFeeToken?.symbol).toBe('USDT');
+  });
+
+  it.each([
+    ['an AA21', "UserOperation reverted during simulation: AA21 didn't pay prefund"],
+    ['an estimation error', 'bundler unavailable'],
+  ])('the same token picked again before %s fallback renders is held', async (_, message) => {
+    erc20Mock.mockResolvedValue([usdcEstimate]);
+    const outcomes: Array<() => Promise<string>> = [
+      async () => FEE,
+      async () => {
+        throw new Error(message);
+      },
+      async () => '2',
+    ];
+    await mount(
+      makeAccount(() => outcomes.shift()!()),
+      [nativeEth(10n ** 18n), token({})]
+    );
+    const eth = tokensNow.find((t) => t.isNative)!;
+    act(() => hook.setSelectedFeeToken(eth));
+
+    await act(async () => {
+      hook.refetch();
+      for (let i = 0; i < 20; i++) await Promise.resolve();
+      hook.setSelectedFeeToken(eth);
+    });
+    await settle();
+    expect(hook.selectedFeeToken?.isNative).toBe(true);
+
+    await act(async () => {
+      hook.refetch();
+    });
+    await settle();
+    expect(hook.gasFee).toBe('2');
+    expect(hook.selectedFeeToken?.isNative).toBe(true);
+  });
 });
 
 describe('useGasEstimation offers a fee token only if what the batch leaves of it covers the fee', () => {
@@ -1331,6 +1437,7 @@ describe('useGasEstimation offers a fee token only if what the batch leaves of i
     await mount(passingEth(), [nativeEth(10n ** 18n), token({})], undefined, [spends(USDC, 10_000_000n)]);
 
     expect(usdc().isSelectable).toBe(false);
+    expect(usdc().usedByTransaction).toBe(true);
     expect(hook.selectedFeeToken?.isNative).toBe(true);
   });
 
@@ -1350,6 +1457,7 @@ describe('useGasEstimation offers a fee token only if what the batch leaves of i
     ]);
 
     expect(usdc().isSelectable).toBe(true);
+    expect(usdc().usedByTransaction).toBe(false);
     expect(hook.selectedFeeToken?.symbol).toBe('USDC');
   });
 
@@ -1360,6 +1468,14 @@ describe('useGasEstimation offers a fee token only if what the batch leaves of i
     ]);
 
     expect(usdc().isSelectable).toBe(false);
+  });
+
+  it('a USDC balance short of the fee before any outflow reads as short, not as used by the batch', async () => {
+    erc20Mock.mockResolvedValue([{ ...usdcEstimate, hasSufficientBalance: false }]);
+    await mount(passingEth(), [nativeEth(10n ** 18n), token({})], undefined, [spends(USDC, 10_000_000n)]);
+
+    expect(usdc().isSelectable).toBe(false);
+    expect(usdc().usedByTransaction).toBe(false);
   });
 
   it('the address of the outflow in other letter case still counts', async () => {

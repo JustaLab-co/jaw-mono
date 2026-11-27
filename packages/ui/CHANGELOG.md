@@ -1,3 +1,33 @@
+## 1.17.8 (2026-11-27)
+
+### 🩹 Fixes
+
+- **ui:** keep an owner pick made before a fallback renders ([#689](https://github.com/JustaLab-co/jaw-mono/pull/689))
+
+### ❤️ Thank You
+
+- Mariano Aguero @mariano-aguero
+
+## 1.17.7 (2026-11-27)
+
+### 🩹 Fixes
+
+- **ui:** offer a fee token only past the batch outflow ([#680](https://github.com/JustaLab-co/jaw-mono/pull/680))
+
+### ❤️ Thank You
+
+- Mariano Aguero @mariano-aguero
+
+## 1.17.6 (2026-11-27)
+
+### 🩹 Fixes
+
+- **ui:** preselect a fee token the account can pay with ([#678](https://github.com/JustaLab-co/jaw-mono/pull/678))
+
+### ❤️ Thank You
+
+- Mariano Aguero @mariano-aguero
+
 ## 1.17.5 (2026-11-26)
 
 ### 🧱 Updated Dependencies

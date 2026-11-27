@@ -228,6 +228,30 @@ describe('FeeTokenSelector fees', () => {
   });
 });
 
+describe('FeeTokenSelector token the transaction spends', () => {
+  const spent = { ...usdc, isSelectable: false, usedByTransaction: true };
+
+  it('says why in place of the fee and keeps the balance', () => {
+    openPicker([eth, spent]);
+
+    const [, row] = rows();
+    expect([row.fee, row.balance]).toEqual(['Used by this transaction', 'Bal: 1.26 USDC']);
+  });
+
+  it('cannot be picked and does not look like it can', () => {
+    const onSelect = vi.fn();
+    openPicker([eth, spent], { onSelect });
+
+    const [, row] = rows();
+    act(() => row.button.click());
+
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(row.button.getAttribute('aria-disabled')).toBe('true');
+    expect(row.button.className).not.toMatch(/hover:|cursor-pointer|cursor-not-allowed/);
+    expect(row.button.querySelector('svg.lucide-chevron-right, svg.lucide-chevron-down')).toBeNull();
+  });
+});
+
 describe('FeeTokenSelector picking', () => {
   it('selects the token the owner picks and closes the list', () => {
     const onSelect = vi.fn();
