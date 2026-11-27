@@ -1366,6 +1366,7 @@ describe('useGasEstimation offers a fee token only if what the batch leaves of i
     await mount(passingEth(), [nativeEth(10n ** 18n), token({})], undefined, [spends(USDC, 10_000_000n)]);
 
     expect(usdc().isSelectable).toBe(false);
+    expect(usdc().usedByTransaction).toBe(true);
     expect(hook.selectedFeeToken?.isNative).toBe(true);
   });
 
@@ -1385,6 +1386,7 @@ describe('useGasEstimation offers a fee token only if what the batch leaves of i
     ]);
 
     expect(usdc().isSelectable).toBe(true);
+    expect(usdc().usedByTransaction).toBe(false);
     expect(hook.selectedFeeToken?.symbol).toBe('USDC');
   });
 
@@ -1395,6 +1397,14 @@ describe('useGasEstimation offers a fee token only if what the batch leaves of i
     ]);
 
     expect(usdc().isSelectable).toBe(false);
+  });
+
+  it('a USDC balance short of the fee before any outflow reads as short, not as used by the batch', async () => {
+    erc20Mock.mockResolvedValue([{ ...usdcEstimate, hasSufficientBalance: false }]);
+    await mount(passingEth(), [nativeEth(10n ** 18n), token({})], undefined, [spends(USDC, 10_000_000n)]);
+
+    expect(usdc().isSelectable).toBe(false);
+    expect(usdc().usedByTransaction).toBe(false);
   });
 
   it('the address of the outflow in other letter case still counts', async () => {

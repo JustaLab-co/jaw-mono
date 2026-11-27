@@ -131,6 +131,7 @@ function unpriced(token: FeeTokenOption): FeeTokenOption {
     ...token,
     estimationFailure: undefined,
     estimationReverted: undefined,
+    usedByTransaction: undefined,
     gasCostFormatted: undefined,
     gasCostMaxFormatted: undefined,
     gasCost: undefined,
@@ -430,6 +431,11 @@ export function useGasEstimation({
           // An empty token is never estimated, and one the paymaster left out has nothing proven.
           if (token.balance === 0n || !estimate) return unpriced(token);
 
+          const leftCovers = paysAfterOutflow(
+            token.balance,
+            outflowOf(assetsOutRef.current, token.address),
+            estimate.tokenCostApproved
+          );
           return {
             ...token,
             estimationFailure: undefined,
@@ -440,13 +446,8 @@ export function useGasEstimation({
             gasCostMax: estimate.tokenCostApproved,
             exchangeRate: estimate.exchangeRate,
             exchangeRateNativeToUsd: estimate.exchangeRateNativeToUsd,
-            isSelectable:
-              estimate.hasSufficientBalance &&
-              paysAfterOutflow(
-                token.balance,
-                outflowOf(assetsOutRef.current, token.address),
-                estimate.tokenCostApproved
-              ),
+            isSelectable: estimate.hasSufficientBalance && leftCovers,
+            usedByTransaction: estimate.hasSufficientBalance && !leftCovers,
           };
         });
 
