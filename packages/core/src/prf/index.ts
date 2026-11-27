@@ -1,5 +1,6 @@
 import { evaluatePrf, type EvaluatePrfOptions } from './evaluate.js';
 import { assertPrfLabel, deriveKeyFromPrf } from './derive.js';
+import type { PasskeyOwnershipProof } from '../passkey-manager/ownershipProof.js';
 
 export { PrfUnavailableError, PRF_SALT_V1, type EvaluatePrfOptions } from './evaluate.js';
 export { PRF_HKDF_SALT_V1 } from './derive.js';
@@ -14,22 +15,23 @@ export { PRF_HKDF_SALT_V1 } from './derive.js';
  * not offered in app-specific mode, where the output would land in the app's page.
  *
  * @param labels - Versioned key labels, `jaw.id/<use>/v<N>`; checked before prompting
- * @returns The derived keys by label. The caller should zero them after use.
+ * @returns The derived keys by label, which the caller should zero after use,
+ * and the prompt's ownership proof, for recording PRF support on the passkey server.
  * @throws {PrfUnavailableError} If the passkey returned no PRF result
  * @throws {WebAuthnAuthenticationError} If the prompt failed or was cancelled
  */
 export async function derivePrfKeys<const L extends string>(
     options: EvaluatePrfOptions,
     labels: readonly L[]
-): Promise<Record<L, Uint8Array>> {
+): Promise<{ keys: Record<L, Uint8Array>; proof?: PasskeyOwnershipProof }> {
     if (labels.length === 0) throw new Error('At least one key label is required');
     labels.forEach(assertPrfLabel);
 
-    const prfOutput = await evaluatePrf(options);
+    const { output: prfOutput, proof } = await evaluatePrf(options);
     const keys = {} as Record<L, Uint8Array>;
     try {
         for (const label of labels) keys[label] = await deriveKeyFromPrf(prfOutput, label);
-        return keys;
+        return { keys, proof };
     } catch (error) {
         for (const key of Object.values<Uint8Array>(keys)) key.fill(0);
         throw error;

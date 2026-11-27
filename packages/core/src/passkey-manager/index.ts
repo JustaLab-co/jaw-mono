@@ -1,4 +1,5 @@
 export { PasskeyManager } from './passkeyManager.js';
+export type { PasskeyOwnershipProof } from './ownershipProof.js';
 export type {
     PasskeyCredential,
     PasskeyAccount,

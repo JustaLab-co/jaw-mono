@@ -29,7 +29,7 @@ describe('derivePrfKeys', () => {
         const getFn = getFnReturning(new Uint8Array(PRF_OUTPUT));
         const labels = ['jaw.id/backup-encryption/v1', 'jaw.id/privacy-pools/root/v1'] as const;
 
-        const keys = await derivePrfKeys({ rpId: 'keys.jaw.id', credentialId: CREDENTIAL_ID, getFn }, labels);
+        const { keys } = await derivePrfKeys({ rpId: 'keys.jaw.id', credentialId: CREDENTIAL_ID, getFn }, labels);
 
         expect(getFn).toHaveBeenCalledTimes(1);
         expect(Object.keys(keys)).toEqual([...labels]);
@@ -43,7 +43,7 @@ describe('derivePrfKeys', () => {
     });
 
     it('never returns the PRF output itself', async () => {
-        const keys = await derivePrfKeys(
+        const { keys } = await derivePrfKeys(
             { rpId: 'keys.jaw.id', credentialId: CREDENTIAL_ID, getFn: getFnReturning(new Uint8Array(PRF_OUTPUT)) },
             ['jaw.id/backup-encryption/v1']
         );
@@ -78,7 +78,7 @@ describe('derivePrfKeys', () => {
     });
 
     it('zeroes the PRF output once the keys are derived', async () => {
-        const keys = await derivePrfKeys(
+        const { keys } = await derivePrfKeys(
             { rpId: 'keys.jaw.id', credentialId: CREDENTIAL_ID, getFn: getFnReturning(new Uint8Array(PRF_OUTPUT)) },
             ['jaw.id/backup-encryption/v1', 'jaw.id/privacy-pools/root/v1']
         );
@@ -111,5 +111,26 @@ describe('derivePrfKeys', () => {
         expect(prfOutput).toEqual(new Uint8Array(32));
         const firstKey = await vi.mocked(deriveKeyFromPrf).mock.results[0].value;
         expect(firstKey).toEqual(new Uint8Array(32));
+    });
+
+    it('returns the proof of the one PRF prompt next to the keys', async () => {
+        const text = (value: string) => new TextEncoder().encode(value);
+        const getFn = vi.fn().mockResolvedValue({
+            id: CREDENTIAL_ID,
+            type: 'public-key',
+            getClientExtensionResults: () => ({ prf: { results: { first: new Uint8Array(PRF_OUTPUT).buffer } } }),
+            response: {
+                authenticatorData: text('auth-data').buffer,
+                clientDataJSON: text(JSON.stringify({ type: 'webauthn.get', origin: 'https://keys.jaw.id' })).buffer,
+                signature: text('sig').buffer,
+            },
+        });
+
+        const { proof } = await derivePrfKeys({ rpId: 'keys.jaw.id', credentialId: CREDENTIAL_ID, getFn }, [
+            'jaw.id/backup-encryption/v1',
+        ]);
+
+        expect(getFn).toHaveBeenCalledTimes(1);
+        expect(proof?.signature).toBe('c2ln');
     });
 });

@@ -684,6 +684,54 @@ describe('PasskeyManager', () => {
             );
         });
 
+        it('sends the proof of holding the passkey with the changes, when given one', async () => {
+            manager.addAccountToList(stored());
+            const proof = { authenticatorData: 'YXV0aA', clientDataJSON: 'Y2xpZW50', signature: 'c2ln' };
+
+            await manager.recordAuthenticatorInfo(mockCredentialId, { prfSupported: true }, false, proof);
+
+            expect(utils.updatePasskeyInBackend).toHaveBeenCalledWith(
+                mockCredentialId,
+                { prfSupported: true, proof },
+                undefined,
+                false,
+                undefined
+            );
+        });
+
+        it('sends nothing, proof included, when nothing changed', async () => {
+            manager.addAccountToList(stored({ prfSupported: true }));
+            const proof = { authenticatorData: 'YXV0aA', clientDataJSON: 'Y2xpZW50', signature: 'c2ln' };
+
+            await manager.recordAuthenticatorInfo(mockCredentialId, { prfSupported: true }, false, proof);
+
+            expect(utils.updatePasskeyInBackend).not.toHaveBeenCalled();
+        });
+
+        it('records a sign-in with the proof its own assertion gives, without asking the passkey again', async () => {
+            manager.addAccountToList(stored());
+            const proof = { authenticatorData: 'YXV0aA', clientDataJSON: 'Y2xpZW50', signature: 'c2ln' };
+            const signIn = vi.spyOn(utils, 'authenticateWithWebAuthnUtils').mockResolvedValue({
+                credential: { id: mockCredentialId, type: 'public-key' } as never,
+                challenge: new Uint8Array(32),
+                authenticator: { backupEligible: true, backupState: true },
+                proof,
+            });
+
+            await manager.authenticateWithWebAuthn('keys.jaw.id', mockCredentialId);
+            await vi.waitFor(() => expect(utils.updatePasskeyInBackend).toHaveBeenCalled());
+
+            expect(signIn).toHaveBeenCalledTimes(1);
+            expect(utils.updatePasskeyInBackend).toHaveBeenCalledWith(
+                mockCredentialId,
+                { backupEligible: true, backupState: true, proof },
+                undefined,
+                false,
+                undefined
+            );
+            signIn.mockRestore();
+        });
+
         it('sends only the fields that changed', async () => {
             manager.addAccountToList(stored({ backupEligible: true, backupState: false }));
 

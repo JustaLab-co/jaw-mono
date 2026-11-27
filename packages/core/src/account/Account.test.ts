@@ -982,7 +982,7 @@ describe('Account', () => {
             );
         });
 
-        it('Account.import records the backup flags the login reported', async () => {
+        it('Account.import records the backup flags the login reported, with the proof from that same login', async () => {
             const { PasskeyManager } = await import('../passkey-manager/index.js');
             const { createSmartAccount } = await import('./smartAccount.js');
             const address = '0x1234567890123456789012345678901234567890';
@@ -992,6 +992,13 @@ describe('Account', () => {
             } as never);
 
             const recordAuthenticatorInfo = vi.fn().mockResolvedValue({});
+            const proof = { authenticatorData: 'YXV0aA', clientDataJSON: 'Y2xpZW50', signature: 'c2ln' };
+            const importPasskeyAccount = vi.fn().mockResolvedValue({
+                name: 'imported',
+                credential: { id: 'imp-cred', publicKey: '0x04imported' },
+                authenticator: { backupEligible: true, backupState: true },
+                proof,
+            });
             vi.mocked(PasskeyManager).mockImplementation(
                 () =>
                     ({
@@ -1002,11 +1009,7 @@ describe('Account', () => {
                             creationDate: new Date().toISOString(),
                             isImported: true,
                         }),
-                        importPasskeyAccount: vi.fn().mockResolvedValue({
-                            name: 'imported',
-                            credential: { id: 'imp-cred', publicKey: '0x04imported' },
-                            authenticator: { backupEligible: true, backupState: true },
-                        }),
+                        importPasskeyAccount,
                         storePasskeyAccountForLogin: vi.fn(),
                         fetchAccountRecord: vi.fn().mockRejectedValue(new Error('no record endpoint in tests')),
                         recordAuthenticatorInfo,
@@ -1015,10 +1018,13 @@ describe('Account', () => {
 
             await Account.import({ chainId: 1, apiKey: 'test-api-key', rpId: 'myapp.com' });
 
-            expect(recordAuthenticatorInfo).toHaveBeenCalledWith('imp-cred', {
-                backupEligible: true,
-                backupState: true,
-            });
+            expect(importPasskeyAccount).toHaveBeenCalledTimes(1);
+            expect(recordAuthenticatorInfo).toHaveBeenCalledWith(
+                'imp-cred',
+                { backupEligible: true, backupState: true },
+                false,
+                proof
+            );
         });
     });
 

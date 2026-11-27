@@ -18,6 +18,7 @@ import {
 } from './utils.js';
 import type { WebAuthnAccount } from 'viem/account-abstraction';
 import type { AccountRecord } from '../account/accountRecord.js';
+import type { PasskeyOwnershipProof } from './ownershipProof.js';
 
 /**
  * PasskeyManager handles passkey authentication and account management
@@ -259,7 +260,8 @@ export class PasskeyManager {
     ): Promise<WebAuthnAuthenticationResult> {
         const result = await authenticateWithWebAuthnUtils(rpId, credentialId, options, getFn);
         // Saved locally before this returns; the passkey server is told in the background.
-        if (result.authenticator) void this.recordAuthenticatorInfo(credentialId, result.authenticator);
+        if (result.authenticator)
+            void this.recordAuthenticatorInfo(credentialId, result.authenticator, false, result.proof);
         return result;
     }
 
@@ -277,12 +279,16 @@ export class PasskeyManager {
      * then sent to the passkey server, best-effort: a failure there is swallowed,
      * because this is bookkeeping and must never fail a login.
      *
+     * @param proof - The assertion this was observed on (a sign-in, an import or a
+     * PRF derivation), sent so the passkey server can check the caller holds the
+     * passkey. Without one, a server that requires proofs refuses the update.
      * @returns The fields that changed (empty when nothing did or the account is not stored)
      */
     async recordAuthenticatorInfo(
         credentialId: string,
         observed: PasskeyAuthenticatorInfo,
-        dev = false
+        dev = false,
+        proof?: PasskeyOwnershipProof
     ): Promise<PasskeyAuthenticatorInfo> {
         const accounts = this.fetchAccounts();
         const index = accounts.findIndex((account) => account.credentialId === credentialId);
@@ -297,7 +303,13 @@ export class PasskeyManager {
         );
 
         try {
-            await updatePasskeyInBackend(credentialId, changes, this.apiKey, dev, this.preference.serverUrl);
+            await updatePasskeyInBackend(
+                credentialId,
+                proof ? { ...changes, proof } : changes,
+                this.apiKey,
+                dev,
+                this.preference.serverUrl
+            );
         } catch {
             // Best-effort: the next observation sends the change again only if
             // it differs from what is stored, so a missed update stays missed

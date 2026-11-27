@@ -6,6 +6,7 @@ import { restCall } from '../api/index.js';
 import type { PasskeyRegistrationRequest, PasskeyLookupResponse, PasskeyUpdateRequest } from './types.js';
 import type { AccountRecord } from '../account/accountRecord.js';
 import type { WebAuthnAccount } from 'viem/account-abstraction';
+import { ownershipChallenge, ownershipProofFromAssertion, type PasskeyOwnershipProof } from './ownershipProof.js';
 import {
     readAuthenticatorInfo,
     readAssertionAuthenticatorInfo,
@@ -157,6 +158,8 @@ export interface WebAuthnAuthenticationResult {
     challenge: Uint8Array;
     /** The backup flags the authenticator reported on this login, when readable. */
     authenticator?: PasskeyAuthenticatorInfo;
+    /** This login's assertion, as proof of holding the passkey for the passkey server, when it can give one. */
+    proof?: PasskeyOwnershipProof;
 }
 
 export interface ImportWebAuthnAuthenticationResult {
@@ -167,6 +170,8 @@ export interface ImportWebAuthnAuthenticationResult {
     };
     /** The backup flags the authenticator reported on this login, when readable. */
     authenticator?: PasskeyAuthenticatorInfo;
+    /** This login's assertion, as proof of holding the passkey for the passkey server, when it can give one. */
+    proof?: PasskeyOwnershipProof;
 }
 
 /**
@@ -392,8 +397,9 @@ export async function authenticateWithWebAuthnUtils(
         // Convert credentialId from base64url to binary format
         const credentialIdBuffer = toBuffer(credentialId);
 
-        // Generate challenge
-        const challenge = crypto.getRandomValues(new Uint8Array(32));
+        // Nothing else checks this challenge, so it is the one a passkey update
+        // proof needs: the assertion then doubles as the proof, with no extra prompt.
+        const challenge = ownershipChallenge();
 
         const publicKeyOptions = {
             challenge: challenge,
@@ -424,6 +430,7 @@ export async function authenticateWithWebAuthnUtils(
             credential,
             challenge,
             authenticator: authenticatorInfoFromAssertion(credential),
+            proof: ownershipProofFromAssertion(credential),
         };
     } catch (error) {
         if (error instanceof WebAuthnAuthenticationError) {
@@ -561,7 +568,8 @@ export async function importPasskeyUtils(
     const resolvedRpId = resolveRpId(rpId);
 
     try {
-        const challenge = crypto.getRandomValues(new Uint8Array(32));
+        // Doubles as a passkey update proof, as in authenticateWithWebAuthnUtils.
+        const challenge = ownershipChallenge();
 
         const publicKeyOptions = {
             challenge: challenge,
@@ -590,6 +598,7 @@ export async function importPasskeyUtils(
                 publicKey: passkeyData.publicKey,
             },
             authenticator: authenticatorInfoFromAssertion(credential),
+            proof: ownershipProofFromAssertion(credential),
         };
     } catch (error) {
         throw new PasskeyLookupError(

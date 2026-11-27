@@ -1,3 +1,4 @@
+import type { PasskeyOwnershipProof } from './ownershipProof.js';
 import type { AccountRecord } from '../account/accountRecord.js';
 import type { PasskeyAuthenticatorInfo } from './authenticatorData.js';
 
@@ -51,7 +52,10 @@ export interface PasskeyRegistrationRequest extends PasskeyAuthenticatorInfo {
  * What became known about a registered passkey after it was created: the
  * fields that changed, sent to `PATCH <passkeys>/:credentialId`.
  */
-export type PasskeyUpdateRequest = PasskeyAuthenticatorInfo;
+export type PasskeyUpdateRequest = PasskeyAuthenticatorInfo & {
+    /** An assertion of the passkey, proving the caller holds it. The server takes the backup flags from it. */
+    proof?: PasskeyOwnershipProof;
+};
 
 export interface LookupPasskeysRequest {
     credentialIds: string[];
