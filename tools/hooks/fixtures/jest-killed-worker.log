@@ -1,0 +1,13 @@
+ FAIL  c/x.test.js
+  ● Test suite failed to run
+
+    A jest worker process (pid=4242) was terminated by another process: signal=SIGKILL, exitCode=null. Operating system logs may contain more information on why this occurred.
+
+ PASS  c/z.test.js
+ PASS  c/y.test.js
+
+Test Suites: 1 failed, 2 passed, 3 total
+Tests:       2 passed, 2 total
+Snapshots:   0 total
+Time:        0.535 s
+Ran all test suites.

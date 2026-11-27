@@ -1,0 +1,32 @@
+
+ RUN  v3.2.7 /repo
+
+ ❯ x.test.ts (2 tests | 2 failed) 612ms
+   × hangs one 306ms
+     → Test timed out in 300ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+   × hangs two 305ms
+     → Test timed out in 300ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  x.test.ts > hangs one
+Error: Test timed out in 300ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ ❯ x.test.ts:2:1
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+ FAIL  x.test.ts > hangs two
+Error: Test timed out in 300ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ ❯ x.test.ts:3:1
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯
+
+ Test Files  1 failed (1)
+      Tests  2 failed (2)
+   Start at  12:00:00
+   Duration  857ms (transform 21ms, setup 0ms, collect 17ms, tests 612ms, environment 0ms, prepare 50ms)
+

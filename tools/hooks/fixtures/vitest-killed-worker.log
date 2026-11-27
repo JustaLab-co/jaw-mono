@@ -1,0 +1,16 @@
+
+ RUN  v3.2.7 /repo
+
+ ✓ y.test.ts (1 test) 1ms
+
+⎯⎯⎯⎯ Unhandled Rejection ⎯⎯⎯⎯⎯
+Error: Channel closed
+ ❯ target.send /repo/node:internal/child_process:778:16
+ ❯ ProcessWorker.send /repo/node_modules/tinypool/dist/index.js:140:41
+ ❯ MessagePort.<anonymous> /repo/node_modules/tinypool/dist/index.js:149:62
+ ❯ [nodejs.internal.kHybridDispatch] /repo/node:internal/event_target:848:20
+ ❯ MessagePort.<anonymous> /repo/node:internal/per_context/messageport:23:28
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
+Serialized Error: { code: 'ERR_IPC_CHANNEL_CLOSED' }
+

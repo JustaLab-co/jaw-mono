@@ -1,0 +1,38 @@
+
+ RUN  v3.2.7 /repo
+
+ ❯ x.test.ts (3 tests | 2 failed) 313ms
+   × asserts 6ms
+     → expected 1 to be 2 // Object.is equality
+   × hangs 306ms
+     → Test timed out in 300ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+   ✓ passes 0ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  x.test.ts > asserts
+AssertionError: expected 1 to be 2 // Object.is equality
+
+- Expected
++ Received
+
+- 2
++ 1
+
+ ❯ x.test.ts:2:35
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+ FAIL  x.test.ts > hangs
+Error: Test timed out in 300ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ ❯ x.test.ts:3:1
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯
+
+ Test Files  1 failed (1)
+      Tests  2 failed | 1 passed (3)
+   Start at  12:00:00
+   Duration  832ms (transform 317ms, setup 0ms, collect 312ms, tests 313ms, environment 0ms, prepare 55ms)
+

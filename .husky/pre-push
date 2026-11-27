@@ -2,7 +2,7 @@
 # lint and typecheck run in pre-commit and CI. FULL_HOOKS=1 runs the previous
 # full checks.
 if [ "$FULL_HOOKS" != 1 ]; then
-  sh "$(dirname "$0")/../tools/hooks/pre-push.sh" main -t test --exclude=docs
+  sh "$(dirname "$0")/../tools/hooks/pre-push.sh" main vitest -t test --exclude=docs
   exit
 fi
 

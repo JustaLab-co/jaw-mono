@@ -1,0 +1,29 @@
+ FAIL  a/x.test.js
+  ✕ asserts (2 ms)
+  ✕ hangs (301 ms)
+  ✓ passes
+
+  ● asserts
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 2
+    Received: 1
+
+      4 |
+
+  ● hangs
+
+    thrown: "Exceeded timeout of 300 ms for a test.
+    Add a timeout value to this test to increase the timeout, if this is a long-running test. See https://jestjs.io/docs/api#testname-fn-timeout."
+
+      4 |
+
+Test Suites: 1 failed, 1 total
+Tests:       2 failed, 1 passed, 3 total
+Snapshots:   0 total
+Time:        0.462 s
+Ran all test suites.
+Jest did not exit one second after the test run has completed.
+
+'This usually means that there are asynchronous operations that weren't stopped in your tests. Consider running Jest with `--detectOpenHandles` to troubleshoot this issue.

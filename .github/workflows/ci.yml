@@ -53,6 +53,9 @@ jobs:
       - name: Test the bridge probe's pairs
         run: bun test ./tools/bridge-table
 
+      - name: Test the git hooks
+        run: node --test tools/hooks/hooks.test.mjs
+
       - uses: nrwl/nx-set-shas@v4
 
       # e2e is published-e2e: the SDK packages installed from a local registry.
