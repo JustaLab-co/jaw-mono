@@ -1,3 +1,13 @@
+## 1.17.7 (2026-11-27)
+
+### 🩹 Fixes
+
+- **ui:** offer a fee token only past the batch outflow ([#680](https://github.com/JustaLab-co/jaw-mono/pull/680))
+
+### ❤️ Thank You
+
+- Mariano Aguero @mariano-aguero
+
 ## 1.17.6 (2026-11-27)
 
 ### 🩹 Fixes
