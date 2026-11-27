@@ -209,11 +209,11 @@ function failing(reruns, runner = 'vitest') {
   return prePush(s, [[head, zero]], { NX_FIRST_LOG: first, NX_FIRST_RC: '1', NX_RERUN_DIR: dir }, runner);
 }
 
-test('each failed project is rerun on its own, with 120s timeouts', () => {
+test('each failed project reruns only its test, uncached, with 120s timeouts', () => {
   const r = failing({ a: { log: 'vitest-timeouts.log' }, b: { log: 'vitest-timeouts.log' } });
   assert.deepEqual(r.calls.slice(1), [
-    'run-many -t test -p a --parallel=1 -- --testTimeout=120000 --hookTimeout=120000',
-    'run-many -t test -p b --parallel=1 -- --testTimeout=120000 --hookTimeout=120000',
+    'run-many -t test -p a --parallel=1 --exclude-task-dependencies --skip-nx-cache -- --testTimeout=120000 --hookTimeout=120000',
+    'run-many -t test -p b --parallel=1 --exclude-task-dependencies --skip-nx-cache -- --testTimeout=120000 --hookTimeout=120000',
   ]);
   assert.equal(r.code, 0, r.out);
 });
@@ -483,12 +483,6 @@ test('pre-commit still runs when a gitignored folder cannot be read', () => {
   const r = preCommit(s);
   assert.equal(r.code, 0);
   assert.equal(r.calls.at(-1), 'run-many -t lint,typecheck -p a-sub');
-});
-
-test('a rerun replayed from the cache says so', () => {
-  const r = failing({ a: { log: '> nx run a:test  [local cache]\n', rc: 0 } });
-  assert.equal(r.code, 0);
-  assert.match(r.out, /a passed with the same inputs before/);
 });
 
 test('a commit from a linked worktree leaves the main checkout a work tree', () => {
