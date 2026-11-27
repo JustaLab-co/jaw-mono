@@ -531,13 +531,15 @@ export function useGasEstimation({
 
     if (selectableErc20) {
       // Auto-select an ERC-20, keeping the user's own choice when it can still pay.
+      // The updater runs at render, after a newer pick may have replaced this one.
+      const owner = ownerPickRef.current;
       setSelectedFeeToken((prev) => {
         const prevUpdated =
           prev && !prev.isNative
             ? updatedFeeTokens.find((t) => t.address.toLowerCase() === prev.address.toLowerCase())
             : undefined;
         const next = prevUpdated?.isSelectable ? prevUpdated : selectableErc20;
-        if (next.address.toLowerCase() !== ownerPickRef.current) ownerPickRef.current = null;
+        if (ownerPickRef.current === owner && next.address.toLowerCase() !== owner) ownerPickRef.current = null;
         return next;
       });
       setGasFee(FALLBACK_GAS_ESTIMATE_ETH);
@@ -573,13 +575,15 @@ export function useGasEstimation({
     const selectableErc20 = updatedFeeTokens.find(provenErc20);
     if (selectableErc20) {
       // Keep the user's own choice when it is itself proven; otherwise take the first that is.
+      // The updater runs at render, after a newer pick may have replaced this one.
+      const owner = ownerPickRef.current;
       setSelectedFeeToken((prev) => {
         const prevUpdated =
           prev && !prev.isNative
             ? updatedFeeTokens.find((t) => t.address.toLowerCase() === prev.address.toLowerCase())
             : undefined;
         const next = prevUpdated && provenErc20(prevUpdated) ? prevUpdated : selectableErc20;
-        if (next.address.toLowerCase() !== ownerPickRef.current) ownerPickRef.current = null;
+        if (ownerPickRef.current === owner && next.address.toLowerCase() !== owner) ownerPickRef.current = null;
         return next;
       });
       setGasFee(FALLBACK_GAS_ESTIMATE_ETH);
