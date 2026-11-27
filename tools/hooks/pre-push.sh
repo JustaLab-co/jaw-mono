@@ -58,19 +58,23 @@ fi
 # Jest's test timeout covers hooks; Vitest has a separate one.
 timeouts() {
   if [ "$runner" = vitest ]; then
-    echo "--testTimeout=$1 --hookTimeout=$1"
+    echo "-- --testTimeout=$1 --hookTimeout=$1"
   else
-    echo "--testTimeout=$1"
+    echo "-- --testTimeout=$1"
   fi
 }
 
+# Up to one load per core the projects keep their own timeouts. Past it the
+# timeout scales with the load, and the rerun allows more than any project's
+# own budget, so a lowered one can only cost a rerun.
 set -- "$@" --files="$files"
-timeout=5000
+limits=
 if [ "$ratio" -gt 1 ]; then
   timeout=$((5000 * (ratio < 6 ? ratio : 6)))
   set -- "$@" --parallel=1
+  limits=$(timeouts "$timeout")
 fi
-echo "pre-push: testing against origin/$base, load $load on $cores cores, test timeout ${timeout}ms"
+echo "pre-push: testing against origin/$base, load $load on $cores cores"
 
 run() {
   { "$@" 2>&1; echo $? >"$tmp/rc"; } | tee "$tmp/log"
@@ -78,47 +82,59 @@ run() {
   [ "$(cat "$tmp/rc")" = 0 ]
 }
 
-run nx affected "$@" -- $(timeouts "$timeout") && exit 0
-
 # Nx lists failed tasks and the tasks it skipped because a dependency failed.
+tasks() {
+  awk '
+    /^Failed tasks:/ { section = "failed"; next }
+    /^Tasks not run because/ { section = "skipped"; next }
+    /^ *- / && section { sub(/^ *- /, ""); print section, $1; next }
+    /[^ ]/ { section = "" }
+  ' "$tmp/plain"
+}
+
+# Every failure Vitest or Jest reports opens with one or more headers, and the
+# next line names the error. A run counts as load only when each error is a
+# timeout or a killed worker, or when it died of memory before reporting any.
+verdict() {
+  awk '
+    /^ FAIL  .*( > |\[ )/ || (/^  ● / && !/^  ● Console$/) || /Unhandled (Rejection|Error) / {
+      pending = 1
+      next
+    }
+    pending && /[^ ]/ {
+      if (/timed out in|Exceeded timeout of/) load++
+      else if (/Channel closed|ERR_IPC_CHANNEL_CLOSED|was terminated by another process/) load++
+      else real++
+      pending = 0
+      next
+    }
+    /heap out of memory/ { oom = 1 }
+    END { print (real == 0 && (load > 0 || oom)) ? "load" : "real" }
+  ' "$tmp/plain"
+}
+
+run nx affected "$@" $limits && exit 0
+
 # Only a failed test is worth a rerun; anything else is a real failure.
-awk '
-  /^Failed tasks:/ { section = "failed"; next }
-  /^Tasks not run because/ { section = "skipped"; next }
-  /^ *- / && section { sub(/^ *- /, ""); print section, $1; next }
-  /[^ ]/ { section = "" }
-' "$tmp/plain" >"$tmp/tasks"
-blocking=$(awk '$1 == "skipped" || $2 !~ /:test$/ { print $2 }' "$tmp/tasks" | paste -sd, -)
-failed=$(awk '$1 == "failed" && $2 ~ /:test$/ { sub(/:test$/, "", $2); print $2 }' "$tmp/tasks" | sort -u | paste -sd, -)
+blocking=$(tasks | awk '$1 == "skipped" || $2 !~ /:test$/ { print $2 }' | paste -sd, -)
+failed=$(tasks | awk '$1 == "failed" && $2 ~ /:test$/ { sub(/:test$/, "", $2); print $2 }' | sort -u)
 if [ -n "$blocking" ] || [ -z "$failed" ]; then
   echo "pre-push: ${blocking:-a task} failed or never ran, blocking the push"
   exit 1
 fi
 
-echo "pre-push: rerunning $failed one at a time with a 30s timeout"
-if run nx run-many -t test -p "$failed" --parallel=1 --skip-nx-cache -- $(timeouts 30000); then
-  echo "pre-push: WARNING $failed passed only on the serial rerun, likely load"
-  exit 0
-fi
-
-# Every failure Vitest or Jest reports opens with a header, and the next line
-# names the error. The push goes through only when each of them is a timeout
-# or a killed worker, or when the run died of memory before reporting any.
-verdict=$(awk '
-  pending && /[^ ]/ {
-    if (/timed out in|Exceeded timeout of/) load++
-    else if (/Channel closed|ERR_IPC_CHANNEL_CLOSED|was terminated by another process/) load++
-    else real++
-    pending = 0
-    next
-  }
-  /^ FAIL  .*( > |\[ )/ || /^  ● / || /Unhandled (Rejection|Error) / { pending = 1 }
-  /heap out of memory/ { oom = 1 }
-  END { print (real == 0 && (load > 0 || oom)) ? "load" : "real" }
-' "$tmp/plain")
-if [ "$verdict" = load ]; then
-  echo "pre-push: WARNING $failed failed only on timeouts or a killed worker, pushing. CI reruns these tests."
-  exit 0
-fi
-echo "pre-push: $failed failed, blocking the push"
-exit 1
+# Each project is rerun and judged on its own, so one project's timeout never
+# covers another's real failure.
+for project in $failed; do
+  echo "pre-push: rerunning $project with a 120s timeout"
+  if run nx run-many -t test -p "$project" --skip-nx-cache $(timeouts 120000); then
+    echo "pre-push: WARNING $project passed only on the serial rerun, likely load"
+    continue
+  fi
+  others=$(tasks | awk -v t="$project:test" '$1 == "skipped" || $2 != t { print $2 }' | paste -sd, -)
+  if [ -n "$others" ] || [ "$(verdict)" != load ]; then
+    echo "pre-push: $project failed, blocking the push"
+    exit 1
+  fi
+  echo "pre-push: WARNING $project failed only on timeouts or a killed worker. CI reruns its tests."
+done
