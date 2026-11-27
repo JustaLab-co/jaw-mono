@@ -1,3 +1,13 @@
+## 1.17.8 (2026-11-27)
+
+### 🩹 Fixes
+
+- **ui:** keep an owner pick made before a fallback renders ([#689](https://github.com/JustaLab-co/jaw-mono/pull/689))
+
+### ❤️ Thank You
+
+- Mariano Aguero @mariano-aguero
+
 ## 1.17.7 (2026-11-27)
 
 ### 🩹 Fixes
