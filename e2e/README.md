@@ -126,13 +126,14 @@ JAW_TRUSTED_HOSTS=localhost JAW_E2E_HTTPS=1 JAW_E2E_TRUSTED=1 bunx playwright te
 
 `.github/workflows/e2e.yml` runs `connect-flows` on Chromium over http, against
 production builds, on every PR that touches the keys app, the SDK packages or
-`e2e/`, and uploads the report and traces when it fails.
+`e2e/`, and uploads the report and traces when it fails. It is skipped while the
+PR is a draft and runs when the PR is marked ready for review.
 
 `.github/workflows/e2e-iframe.yml` runs every suite over https on chromium,
 firefox and webkit, with a throwaway certificate made on the runner. It is
 heavier, so on PRs it only runs when something the iframe depends on changes:
 the SDK transport and the checks that route to it, the keys app, `ui` or
-`e2e/`. Both can also be run from the Actions tab.
+`e2e/`, and is skipped on drafts too. Both can also be run from the Actions tab.
 
 Neither runs `cli-bridge`: `e2e.yml` runs only the chromium project, and
 `e2e-iframe.yml` serves https, where the suite skips.

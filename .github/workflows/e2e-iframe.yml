@@ -6,12 +6,12 @@ name: E2E (iframe)
 # Heavier than connect-flows (three browsers and dev servers), so on PRs it
 # only runs when something the iframe depends on changes: the SDK transport
 # and the checks that route to it, the keys app (the clickjacking guard and
-# the embedded shell live there), the dialogs in ui, or the suites. It can
-# also be run from the Actions tab.
+# the embedded shell live there), the dialogs in ui, or the suites, and never
+# on a draft. It can also be run from the Actions tab.
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
     paths:
       - 'packages/core/src/communicator/**'
       - 'packages/core/src/trusted-hosts.ts'

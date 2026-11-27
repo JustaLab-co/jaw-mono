@@ -572,7 +572,9 @@ export function useGasEstimation({
           prev && !prev.isNative
             ? updatedFeeTokens.find((t) => t.address.toLowerCase() === prev.address.toLowerCase())
             : undefined;
-        return prevUpdated?.isSelectable ? prevUpdated : selectableErc20;
+        const next = prevUpdated?.isSelectable ? prevUpdated : selectableErc20;
+        if (next.address.toLowerCase() !== ownerPickRef.current) ownerPickRef.current = null;
+        return next;
       });
       setGasFee(FALLBACK_GAS_ESTIMATE_ETH);
       setGasEstimationError('');
@@ -612,7 +614,9 @@ export function useGasEstimation({
           prev && !prev.isNative
             ? updatedFeeTokens.find((t) => t.address.toLowerCase() === prev.address.toLowerCase())
             : undefined;
-        return prevUpdated && provenErc20(prevUpdated) ? prevUpdated : selectableErc20;
+        const next = prevUpdated && provenErc20(prevUpdated) ? prevUpdated : selectableErc20;
+        if (next.address.toLowerCase() !== ownerPickRef.current) ownerPickRef.current = null;
+        return next;
       });
       setGasFee(FALLBACK_GAS_ESTIMATE_ETH);
       setGasEstimationError('');
