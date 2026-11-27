@@ -212,8 +212,8 @@ function failing(reruns, runner = 'vitest') {
 test('each failed project is rerun on its own, with 120s timeouts', () => {
   const r = failing({ a: { log: 'vitest-timeouts.log' }, b: { log: 'vitest-timeouts.log' } });
   assert.deepEqual(r.calls.slice(1), [
-    'run-many -t test -p a --parallel=1 --exclude-task-dependencies --skip-nx-cache -- --testTimeout=120000 --hookTimeout=120000',
-    'run-many -t test -p b --parallel=1 --exclude-task-dependencies --skip-nx-cache -- --testTimeout=120000 --hookTimeout=120000',
+    'run-many -t test -p a --parallel=1 -- --testTimeout=120000 --hookTimeout=120000',
+    'run-many -t test -p b --parallel=1 -- --testTimeout=120000 --hookTimeout=120000',
   ]);
   assert.equal(r.code, 0, r.out);
 });
@@ -406,14 +406,15 @@ test('pre-commit resolves workspace packages to their staged copy', () => {
   assert.equal(readFileSync(join(s.dir, 'probe'), 'utf8'), 'staged\ndep\n');
 });
 
-test('pre-commit keeps Nx workspace data and cache in the checkout, so the cache can hit', () => {
+test('pre-commit keeps its own Nx database and cache in the checkout', () => {
   const s = scratch();
   s.write('a/sub/y.ts', 'x\n');
   s.git('add', 'a/sub/y.ts');
   preCommit(s);
   const [data, cache, graph] = readFileSync(join(s.dir, 'nx.env'), 'utf8').trim().split(' ');
   assert.equal(data, join(realpathSync(s.repo), '.nx/workspace-data/pre-commit'));
-  assert.equal(cache, join(realpathSync(s.repo), '.nx/cache'));
+  // Its own cache: two databases evicting from one folder lose each other's entries.
+  assert.equal(cache, join(data, 'cache'));
   // Nx 18 reads the graph cache location from this name instead.
   assert.equal(graph, data);
 });
@@ -482,4 +483,34 @@ test('pre-commit still runs when a gitignored folder cannot be read', () => {
   const r = preCommit(s);
   assert.equal(r.code, 0);
   assert.equal(r.calls.at(-1), 'run-many -t lint,typecheck -p a-sub');
+});
+
+test('a rerun replayed from the cache says so', () => {
+  const r = failing({ a: { log: '> nx run a:test  [local cache]\n', rc: 0 } });
+  assert.equal(r.code, 0);
+  assert.match(r.out, /a passed with the same inputs before/);
+});
+
+test('a commit from a linked worktree leaves the main checkout a work tree', () => {
+  const s = scratch();
+  const worktree = join(s.dir, 'linked');
+  s.git('worktree', 'add', '-q', '-b', 'feat', worktree);
+  const hooks = join(s.dir, 'githooks');
+  execFileSync('mkdir', ['-p', hooks]);
+  writeFileSync(join(hooks, 'pre-commit'), `#!/bin/sh\nexec sh "${join(here, 'pre-commit.sh')}" -t lint,typecheck\n`);
+  chmodSync(join(hooks, 'pre-commit'), 0o755);
+  s.git('config', 'core.hooksPath', hooks);
+  execFileSync('mkdir', ['-p', join(worktree, 'a/sub')]);
+  writeFileSync(join(worktree, 'a/sub/y.ts'), 'x\n');
+  const git = (...args) =>
+    spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', ...args], {
+      cwd: worktree,
+      encoding: 'utf8',
+      env: { ...process.env, PATH: `${s.bin}:${process.env.PATH}` },
+    });
+  git('add', 'a/sub/y.ts');
+  const commit = git('commit', '-qm', 'feat');
+  assert.equal(commit.status, 0, commit.stderr);
+  assert.equal(s.git('config', '--get', 'core.bare'), 'false');
+  assert.equal(s.git('rev-parse', '--is-inside-work-tree'), 'true');
 });
