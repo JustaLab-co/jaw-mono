@@ -766,3 +766,72 @@ describe('passkey-manager/utils — React Native adapter support', () => {
         });
     });
 });
+
+describe('the ownership proof of a sign-in or an import (no extra prompt)', () => {
+    const text = (value: string) => new TextEncoder().encode(value);
+    const b64url = (bytes: Uint8Array) =>
+        btoa(String.fromCharCode(...bytes))
+            .replace(/\+/g, '-')
+            .replace(/\//g, '_')
+            .replace(/=/g, '');
+    const loginAuthData = new Uint8Array([...new Array(32).fill(0x11), 0x01 | 0x08 | 0x10, 0, 0, 0, 1]);
+
+    /** A getFn that answers like a browser on https://keys.jaw.id, echoing the challenge it was asked to sign. */
+    function browserGetFn(id: string) {
+        return vi.fn().mockImplementation(async (options: CredentialRequestOptions) => {
+            const challenge = options.publicKey!.challenge as Uint8Array;
+            const clientDataJSON = text(
+                JSON.stringify({ type: 'webauthn.get', challenge: b64url(challenge), origin: 'https://keys.jaw.id' })
+            );
+            return {
+                id,
+                type: 'public-key',
+                response: {
+                    authenticatorData: loginAuthData.buffer,
+                    clientDataJSON: clientDataJSON.buffer,
+                    signature: text('der-signature').buffer,
+                },
+            };
+        });
+    }
+
+    const signedChallenge = (getFn: ReturnType<typeof browserGetFn>) =>
+        new TextDecoder().decode(getFn.mock.calls[0][0].publicKey.challenge as Uint8Array);
+
+    it('a sign-in signs the passkey update challenge and returns its assertion as the proof, from one prompt', async () => {
+        const getFn = browserGetFn('cred-123');
+
+        const result = await authenticateWithWebAuthnUtils('keys.jaw.id', 'cred-123', undefined, getFn);
+
+        expect(getFn).toHaveBeenCalledTimes(1);
+        expect(signedChallenge(getFn)).toMatch(/^jaw\.id\/passkey-update\/v1:\d{13}:[0-9a-f]{32}$/);
+        expect(result.proof).toEqual({
+            authenticatorData: b64url(loginAuthData),
+            clientDataJSON: expect.any(String),
+            signature: b64url(text('der-signature')),
+        });
+        expect(JSON.parse(atob(result.proof!.clientDataJSON.replace(/-/g, '+').replace(/_/g, '/')))).toMatchObject({
+            origin: 'https://keys.jaw.id',
+        });
+    });
+
+    it('an import signs the passkey update challenge and returns its assertion as the proof, from one prompt', async () => {
+        const getFn = browserGetFn('cred-imported');
+
+        const result = await importPasskeyUtils(getFn, 'keys.jaw.id');
+
+        expect(getFn).toHaveBeenCalledTimes(1);
+        expect(signedChallenge(getFn)).toMatch(/^jaw\.id\/passkey-update\/v1:\d{13}:[0-9a-f]{32}$/);
+        expect(result.proof?.authenticatorData).toBe(b64url(loginAuthData));
+        expect(result.proof?.signature).toBe(b64url(text('der-signature')));
+    });
+
+    it('a sign-in through a getFn that returns no signature gives no proof and still signs in', async () => {
+        const getFn = vi.fn().mockResolvedValue({ id: 'cred-123', type: 'public-key', response: {} });
+
+        const result = await authenticateWithWebAuthnUtils('keys.jaw.id', 'cred-123', undefined, getFn);
+
+        expect(result.credential.id).toBe('cred-123');
+        expect(result.proof).toBeUndefined();
+    });
+});

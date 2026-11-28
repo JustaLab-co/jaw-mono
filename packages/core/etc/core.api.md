@@ -1007,7 +1007,7 @@ export class PasskeyManager {
     // Warning: (ae-forgotten-export) The symbol "ImportWebAuthnAuthenticationResult" needs to be exported by the entry point index.d.ts
     importPasskeyAccount(getFn?: PasskeyGetFn, rpId?: string): Promise<ImportWebAuthnAuthenticationResult>;
     logout(): void;
-    recordAuthenticatorInfo(credentialId: string, observed: PasskeyAuthenticatorInfo, dev?: boolean): Promise<PasskeyAuthenticatorInfo>;
+    recordAuthenticatorInfo(credentialId: string, observed: PasskeyAuthenticatorInfo, dev?: boolean, proof?: PasskeyOwnershipProof): Promise<PasskeyAuthenticatorInfo>;
     removeAccount(credentialId: string): void;
     setAccountAddress(credentialId: string, address: `0x${string}`): void;
     setAccountAddresses(entries: Array<{
@@ -1019,6 +1019,13 @@ export class PasskeyManager {
     storePasskeyAccount(name: string, credentialId: string, publicKey: `0x${string}`, address: Address_2, dev?: boolean, account?: AccountRecord, authenticator?: PasskeyAuthenticatorInfo): Promise<void>;
     storePasskeyAccountForLogin(credentialId: string, address: Address_2, dev?: boolean, account?: AccountRecord): Promise<void>;
     updatePreference(preference: Partial<JawProviderPreference>): void;
+}
+
+// @public
+export interface PasskeyOwnershipProof {
+    authenticatorData: string;
+    clientDataJSON: string;
+    signature: string;
 }
 
 // @public

@@ -577,7 +577,12 @@ export class Account {
         await passkeyManager.storePasskeyAccountForLogin(importResult.credential.id, address, false, record);
         // Saved locally before this returns; the passkey server is told in the background.
         if (importResult.authenticator) {
-            void passkeyManager.recordAuthenticatorInfo(importResult.credential.id, importResult.authenticator);
+            void passkeyManager.recordAuthenticatorInfo(
+                importResult.credential.id,
+                importResult.authenticator,
+                false,
+                importResult.proof
+            );
         }
 
         const passkeyAccount = passkeyManager.getAccountByCredentialId(importResult.credential.id);

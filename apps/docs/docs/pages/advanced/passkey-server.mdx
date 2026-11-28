@@ -109,7 +109,7 @@ Storing them is optional. They are useful for metrics, and nothing in the SDK re
 
 ### PATCH /passkeys/:credentialId - Update Authenticator Info (optional)
 
-Updates what is known about a registered passkey's authenticator. The SDK sends it after a sign-in or an import, when the authenticator reports backup flags that differ from what it has stored for that passkey. This is how passkeys registered before these fields existed get them filled in.
+Updates what is known about a registered passkey's authenticator. The SDK sends it after a sign-in or an import, when the authenticator reports backup flags that differ from what it has stored for that passkey, and on keys.jaw.id after a PRF key derivation. This is how passkeys registered before these fields existed get them filled in.
 
 The path is your passkeys endpoint followed by the credential ID: with `serverUrl` set to `https://your-server.example.com/passkeys`, the request goes to `https://your-server.example.com/passkeys/<credentialId>`. The credential ID is base64url, so it needs no escaping.
 
@@ -117,20 +117,37 @@ The path is your passkeys endpoint followed by the credential ID: with `serverUr
 
 - `Content-Type: application/json`
 
-**Request Body:** only the fields that changed, any of the four optional fields of the registration body:
+**Request Body:** only the fields that changed, any of the four optional fields of the registration body, and, when the SDK has one, a `proof`:
 
 ```json
 {
   "backupEligible": true,
-  "backupState": true
+  "backupState": true,
+  "proof": {
+    "authenticatorData": "<base64url>",
+    "clientDataJSON": "<base64url>",
+    "signature": "<base64url>"
+  }
 }
 ```
+
+`proof` is the WebAuthn assertion of the sign-in, import or PRF prompt the update comes from, so it costs the user no extra prompt. Anyone who knows a credential ID can call this route, and the proof is how your server can tell that the caller holds the passkey. The SDK sends it when the assertion comes from an `https` origin and carries a signature. It sends none from a native Android app (`android:apk-key-hash:...` origin), from any other non-https origin, or through a custom `getFn` that returns no signature.
+
+To check a proof, as the JAW passkey server does:
+
+- Verify `signature` (ES256, DER-encoded) over `authenticatorData || SHA-256(clientDataJSON)` with the public key you stored for this credential.
+- `clientDataJSON.type` is `webauthn.get`.
+- `clientDataJSON.challenge`, base64url-decoded, is the UTF-8 string `jaw.id/passkey-update/v1:<unix ms>:<32 lowercase hex>`, and its time is recent (the JAW server accepts up to 5 minutes old and 1 minute ahead). Refusing any other challenge matters: the same passkey signs transactions and messages over a 32-byte hash, and those assertions are public on-chain.
+- `clientDataJSON.origin` is one of your pages, served over https on the passkey's rpId or a subdomain of it. The first 32 bytes of `authenticatorData` are the SHA-256 of the rpId.
+- The user presence flag (bit 0 of byte 32 of `authenticatorData`) is set.
+- Take `backupEligible` (bit 3) and `backupState` (bit 4) from the signed `authenticatorData` rather than from the body.
 
 **Success Response (200):** any non-null `data`, as for registration.
 
 **Behavior:**
 
 - Update only the fields in the body, and return `404` for a credential that is not registered.
+- Accept the `proof` field even if you do not check it; do not reject the request because of it.
 - This endpoint is optional. The SDK ignores every error from it, including a `404` for the route itself, and does not retry: a sign-in or an import never fails because of it.
 
 ### GET /passkeys - Lookup Passkeys by Credential IDs

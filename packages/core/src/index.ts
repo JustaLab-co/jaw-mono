@@ -117,6 +117,7 @@ export {
     type NativePasskeyGetFn,
     type NativePasskeyCreateFn,
     type NativeCredentialResult,
+    type PasskeyOwnershipProof,
 } from './passkey-manager/index.js';
 
 /** Storage exports (used with AccountConfig.storage for React Native) **/
