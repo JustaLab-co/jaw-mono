@@ -70,6 +70,23 @@ describe('NetworkFeeRow — ERC-20 fee slot', () => {
     expect(html).not.toContain('Estimating');
   });
 
+  it('says the batch spends a selected token it uses, matching the picker, not insufficient funds', () => {
+    // 10 USDC held covers a 0.05 USDC fee, but the batch sends most of it away.
+    const html = markup(
+      usdc({
+        balance: 10_000_000n,
+        balanceFormatted: '10.00',
+        gasCostFormatted: '0.05',
+        gasCostMaxFormatted: '0.0625',
+        isSelectable: false,
+        usedByTransaction: true,
+      })
+    );
+    expect(html).toContain('Used by this transaction');
+    expect(html).not.toContain('Insufficient funds');
+    expect(html).not.toContain('Up to');
+  });
+
   it('still shows Estimating... while the estimate is genuinely in flight (undefined, selectable)', () => {
     const html = markup(usdc({ gasCostFormatted: undefined, gasCostMaxFormatted: undefined, isSelectable: true }));
     expect(html).toContain('Estimating');
