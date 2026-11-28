@@ -1,0 +1,5 @@
+failed to load config from /repo/vitest.config.ts
+
+⎯⎯⎯⎯⎯⎯⎯ Startup Error ⎯⎯⎯⎯⎯⎯⎯⎯
+Error: config failed to load
+

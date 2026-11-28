@@ -1,0 +1,25 @@
+ FAIL  e/hang.test.js
+  ● hangs
+
+    thrown: "Exceeded timeout of 300 ms for a test.
+    Add a timeout value to this test to increase the timeout, if this is a long-running test. See https://jestjs.io/docs/api#testname-fn-timeout."
+
+      2 |
+
+      at Object.<anonymous> (hang.test.js:1:27)
+
+ PASS  e/log.test.js
+  ● Console
+
+    console.log
+      consumer started
+
+      at Object.log (log.test.js:1:30)
+
+A worker process has failed to exit gracefully and has been force exited. This is likely caused by tests leaking due to improper teardown. Try running with --detectOpenHandles to find leaks. Active timers can also cause this, ensure that .unref() was called on them.
+
+Test Suites: 1 failed, 1 passed, 2 total
+Tests:       1 failed, 1 passed, 2 total
+Snapshots:   0 total
+Time:        3.315 s
+Ran all test suites.

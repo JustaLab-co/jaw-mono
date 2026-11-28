@@ -2,7 +2,11 @@
 export PATH="$HOME/.bun/bin:$PATH"
 
 # Format staged files via lint-staged (Prettier)
-bunx lint-staged
+bunx lint-staged || exit 1
 
-# Run all tests with Vitest, excluding docs app
-bunx vitest run --exclude='**/apps/docs/**' --exclude='**/contracts/**'
+# FULL_HOOKS=1 keeps the previous behavior: every test, excluding docs app.
+if [ "$FULL_HOOKS" = 1 ]; then
+  bunx vitest run --exclude='**/apps/docs/**' --exclude='**/contracts/**'
+  exit
+fi
+sh "$(dirname "$0")/../tools/hooks/pre-commit.sh" -t lint,typecheck --exclude=docs

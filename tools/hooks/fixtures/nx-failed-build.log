@@ -1,0 +1,36 @@
+
+ NX   Running target test for 2 projects and 1 task they depend on:
+
+- b
+- c
+
+> nx run a:build
+
+> echo broken build; exit 1
+
+broken build
+> echo broken build; exit 1
+
+broken build
+Warning: command "echo broken build; exit 1" exited with non-zero status code
+> nx run c:test
+
+> echo c fails; exit 1
+
+c fails
+> echo c fails; exit 1
+
+c fails
+Warning: command "echo c fails; exit 1" exited with non-zero status code
+
+ NX   Running target test for 2 projects and 1 task they depend on failed
+
+Tasks not run because their dependencies failed or --nx-bail=true:
+
+- b:test
+
+Failed tasks:
+
+- a:build
+- c:test
+

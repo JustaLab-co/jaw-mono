@@ -1,0 +1,21 @@
+
+ RUN  v3.2.7 /repo
+
+ ❯ x.test.ts (2 tests | 2 skipped) 305ms
+   ↓ one
+   ↓ two
+
+⎯⎯⎯⎯⎯⎯ Failed Suites 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  x.test.ts [ x.test.ts ]
+Error: Hook timed out in 300ms.
+If this is a long-running hook, pass a timeout value as the last argument or configure it globally with "hookTimeout".
+ ❯ x.test.ts:2:1
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+ Test Files  1 failed (1)
+      Tests  2 skipped (2)
+   Start at  12:00:00
+   Duration  539ms (transform 22ms, setup 0ms, collect 17ms, tests 305ms, environment 0ms, prepare 60ms)
+

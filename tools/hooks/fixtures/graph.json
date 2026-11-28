@@ -1,0 +1,10 @@
+{
+  "graph": {
+    "nodes": {
+      "ws": { "name": "ws", "type": "lib", "data": { "root": "." } },
+      "a": { "name": "a", "type": "lib", "data": { "root": "a" } },
+      "a-sub": { "name": "a-sub", "type": "lib", "data": { "root": "a/sub" } }
+    },
+    "dependencies": {}
+  }
+}
