@@ -245,6 +245,10 @@ export const TransactionModal = ({
     assetsOut: assetPreviewSimulated && !permissionId ? assetsOut : undefined,
   });
 
+  // The estimate counts no outflow until the preview has run, so an ERC-20 the batch drains can
+  // read as payable. Its fee stays pending, which keeps Confirm disabled, until the preview lands.
+  const outflowPending = isPayingWithErc20 && !permissionId && assetPreviewLoading;
+
   // Compute paymaster URL based on fee token selection (for ERC-20 paymaster)
   const computedPaymasterUrl = useMemo(() => {
     // If already sponsored via capabilities or config, use that
@@ -499,7 +503,7 @@ export const TransactionModal = ({
       onFeeTokenSelect={setSelectedFeeToken}
       showFeeTokenSelector={showFeeTokenSelector}
       onRetryEstimation={retryEstimation}
-      estimatingTokenCosts={estimatingTokenCosts}
+      estimatingTokenCosts={estimatingTokenCosts || outflowPending}
       isPayingWithErc20={isPayingWithErc20}
       nativeCurrencySymbol={chain?.nativeCurrency?.symbol}
     />

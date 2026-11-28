@@ -24,6 +24,7 @@ type DialogProps = {
   networkName: string;
   mainnetRpcUrl: string;
   isProcessing: boolean;
+  estimatingTokenCosts: boolean;
 };
 /** Props the modal handed the dialog on the last render. */
 let dialog: DialogProps;
@@ -39,6 +40,7 @@ const sendTransaction = vi.fn();
 let account: object | null = { sendCalls, sendTransaction };
 const OUT = [{ address: '0x3333333333333333333333333333333333333333', diff: -5n, direction: 'out' }];
 let previewSimulated = true;
+let payingWithErc20 = false;
 
 vi.mock('@jaw.id/ui', async (importActual) => {
   const actual = await importActual<typeof import('@jaw.id/ui')>();
@@ -69,7 +71,7 @@ vi.mock('@jaw.id/ui', async (importActual) => {
         estimatingTokenCosts: false,
         selectedFeeToken,
         setSelectedFeeToken,
-        isPayingWithErc20: false,
+        isPayingWithErc20: payingWithErc20,
         refetch: () => undefined,
       };
     },
@@ -139,6 +141,7 @@ beforeEach(() => {
   root = createRoot(document.createElement('div'));
   estimatedAssetsOut = 'never called';
   previewSimulated = true;
+  payingWithErc20 = false;
   selectedFeeToken = null;
   tokenEstimates = [];
   feeTokenCapability = undefined;
@@ -171,6 +174,36 @@ describe('TransactionModal hands the batch outflow to the fee estimate', () => {
   it('not under a permission, where the preview reads the granter and another account pays the fee', async () => {
     await open(request(`0x${'1'.repeat(64)}`));
     expect(estimatedAssetsOut).toBeUndefined();
+  });
+});
+
+// Until the preview has run the estimate counts no outflow, so an ERC-20 the batch drains can
+// read as payable. The fee stays pending, which keeps Confirm disabled, until the preview lands.
+describe('TransactionModal holds an ERC-20 fee pending until the batch outflow is known', () => {
+  it('while an ERC-20 pays and the preview is loading', async () => {
+    payingWithErc20 = true;
+    previewSimulated = false;
+    await open(request());
+    expect(dialog.estimatingTokenCosts).toBe(true);
+  });
+
+  it('not once the preview has run', async () => {
+    payingWithErc20 = true;
+    await open(request());
+    expect(dialog.estimatingTokenCosts).toBe(false);
+  });
+
+  it('not when the fee is paid in the native token', async () => {
+    previewSimulated = false;
+    await open(request());
+    expect(dialog.estimatingTokenCosts).toBe(false);
+  });
+
+  it('not under a permission, where the outflow is not counted', async () => {
+    payingWithErc20 = true;
+    previewSimulated = false;
+    await open(request(`0x${'1'.repeat(64)}`));
+    expect(dialog.estimatingTokenCosts).toBe(false);
   });
 });
 
