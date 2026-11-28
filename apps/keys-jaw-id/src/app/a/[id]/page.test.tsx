@@ -12,6 +12,7 @@ vi.mock('@jaw.id/core', async (original) =>
 
 import ShortLinkPage from './page';
 import { FakeSocket, created, host, root, setUp, tearDown } from '../../cli-bridge/test-harness';
+import { sealForTest } from '../../../lib/short-link.testkit';
 
 const fixture = JSON.parse(
   readFileSync(join(__dirname, '../../cli-bridge/fixtures/short-link-current.json'), 'utf8')
@@ -85,6 +86,22 @@ describe('/a/[id]', () => {
     await vi.waitFor(() => expect(host.textContent).toContain('This link is damaged or has expired'));
 
     expect(FakeSocket.all).toHaveLength(0);
+  });
+
+  it('given a batch blob, when the page has no batch screen, then it opens no socket and keeps nothing for a reload', async () => {
+    const plain = {
+      v: 2,
+      account: '0x1111111111111111111111111111111111111111',
+      members: [{ id: 'BAQEBAQEBAQEBAQEBAQEBA', key, chainId: 84532 }],
+    };
+    const sealed = await sealForTest(plain, id, key);
+    serve(() => new Response(JSON.stringify({ blob: sealed })));
+
+    await open(key);
+    await vi.waitFor(() => expect(host.textContent).toContain('This link is damaged or has expired'));
+
+    expect(FakeSocket.all).toHaveLength(0);
+    expect(sessionStorage.getItem(`short-link-seen:${id}`)).toBeNull();
   });
 
   it('given the tab opened the link before, when it reloads without the key after the request ended, then it shows the request as done', async () => {

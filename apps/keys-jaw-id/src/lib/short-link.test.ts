@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { openShortLink } from './short-link';
+import { sealForTest } from './short-link.testkit';
 
 const fixture = JSON.parse(
   readFileSync(join(__dirname, '../app/cli-bridge/fixtures/short-link-current.json'), 'utf8')
@@ -74,16 +75,7 @@ describe('openShortLink', () => {
 });
 
 describe('openShortLink on a plaintext it did not expect', () => {
-  async function sealed(plain: unknown) {
-    const iv = new Uint8Array(12).fill(9);
-    const k = await crypto.subtle.importKey('raw', Buffer.from(key, 'base64url'), 'AES-GCM', false, ['encrypt']);
-    const ct = await crypto.subtle.encrypt(
-      { name: 'AES-GCM', iv, additionalData: new TextEncoder().encode(`jaw-short-link/1\n${id}`) },
-      k,
-      new TextEncoder().encode(typeof plain === 'string' ? plain : JSON.stringify(plain))
-    );
-    return Buffer.concat([iv, new Uint8Array(ct)]).toString('base64url');
-  }
+  const sealed = (plain: unknown) => sealForTest(plain, id, key);
 
   it.each([
     ['another version', { ...opened, v: 2 }],
@@ -99,5 +91,59 @@ describe('openShortLink on a plaintext it did not expect', () => {
 
   it('opens a plaintext it built itself, so the test above seals the way the server does', async () => {
     expect(await openShortLink(id, key, serving({ blob: await sealed(opened) }))).toBeDefined();
+  });
+});
+
+describe('openShortLink on a batch', () => {
+  const account = '0x1111111111111111111111111111111111111111';
+  const member = (n: number, chainId: number) => ({ id: `${String.fromCharCode(65 + n)}`.repeat(22), key, chainId });
+  const batch = { v: 2, account, members: [member(0, 84532), member(1, 11155111), member(2, 11155420)] };
+
+  const sealed = (plain: unknown) => sealForTest(plain, id, key);
+  const open = async (plain: unknown) => openShortLink(id, key, serving({ blob: await sealed(plain) }));
+
+  it('opens the account and the members, each with its short link and chain', async () => {
+    expect(await open(batch)).toEqual({ account, members: batch.members });
+  });
+
+  it('opens five members, the account cap', async () => {
+    const five = [84532, 11155111, 11155420, 421614, 80002].map((c, n) => member(n, c));
+    expect(await open({ ...batch, members: five })).toEqual({ account, members: five });
+  });
+
+  it('opens an account written in any letter case', async () => {
+    const mixed = '0xAbCdEf0000000000000000000000000000000001';
+    expect(await open({ ...batch, account: mixed })).toEqual({ account: mixed, members: batch.members });
+  });
+
+  it('keeps only the fields of a member it knows', async () => {
+    const extra = { ...member(0, 84532), session: 'not-from-here' };
+    expect(await open({ ...batch, members: [extra] })).toEqual({ account, members: [member(0, 84532)] });
+  });
+
+  it.each([
+    ['no members', { ...batch, members: [] }],
+    ['six members', { ...batch, members: [1, 2, 3, 4, 5, 6].map((c, n) => member(n, c)) }],
+    ['members that are not a list', { ...batch, members: {} }],
+    ['two members on one chain', { ...batch, members: [member(0, 84532), member(1, 84532)] }],
+    ['one member twice', { ...batch, members: [member(0, 84532), member(0, 11155111)] }],
+    ['a member with a bad id', { ...batch, members: [{ ...member(0, 84532), id: '../cli-key' }] }],
+    ['a member with a bad key', { ...batch, members: [{ ...member(0, 84532), key: 'AAAA' }] }],
+    [
+      'a member whose key is not canonical',
+      { ...batch, members: [{ ...member(0, 84532), key: 'AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgJ' }] },
+    ],
+    ['a member that names the batch itself', { ...batch, members: [{ ...member(0, 84532), id }] }],
+    ['a member with a chain that is not an integer', { ...batch, members: [{ ...member(0, 84532), chainId: 1.5 }] }],
+    ['a member with a chain given as text', { ...batch, members: [{ ...member(0, 84532), chainId: '84532' }] }],
+    ['a member on chain 0', { ...batch, members: [{ ...member(0, 84532), chainId: 0 }] }],
+    ['a member with no chain', { ...batch, members: [{ ...member(0, 84532), chainId: undefined }] }],
+    ['a member that is not an object', { ...batch, members: ['x'] }],
+    ['no account', { ...batch, account: undefined }],
+    ['an account that is not an address', { ...batch, account: '0x1234' }],
+    ['an account with characters outside hex', { ...batch, account: '0x111111111111111111111111111111111111111g' }],
+    ['another version', { ...batch, v: 3 }],
+  ])('gives nothing for %s', async (_, plain) => {
+    expect(await open(plain)).toBeUndefined();
   });
 });
