@@ -1,171 +1,123 @@
-# Getting Started
+---
+layout: minimal
+showAskAi: false
+---
 
-:::warning
-**Using Safari or Firefox?** These browsers can't verify the embedded dialog's visibility (no IntersectionObserver v2), so JAW falls back to a popup there to prevent clickjacking. To enable the embedded dialog for your site on those browsers, message us on [Telegram](https://t.me/+RsFLPfky7-YxZjVk) to be added to our trusted allow-list. Chromium-based browsers (Chrome, Edge, Brave) work with no setup. [Learn more](/configuration/transportMode).
-:::
+import { HomePage, Cards, Card } from 'vocs';
 
-## What is JAW?
+<HomePage.Root>
+  <HomePage.Logo />
+  <HomePage.Tagline>{'Passkey smart wallets for every app.'}</HomePage.Tagline>
+  <HomePage.Description>
+    {
+      'No seed phrases, gas in stablecoins, ENS names and programmable permissions. ERC-4337 and EIP-7702 on EVM chains.'
+    }
+  </HomePage.Description>
+  <HomePage.InstallPackage name="@jaw.id/wagmi" />
+  <HomePage.Buttons>
+    <HomePage.Button href="/guides/quickstart" variant="accent">
+      Quickstart
+    </HomePage.Button>
+    <HomePage.Button href="/why-jaw">Why JAW</HomePage.Button>
+  </HomePage.Buttons>
+</HomePage.Root>
 
-The JAW SDK is a TypeScript library for building identity-first smart accounts on EVM chains: passkey-authenticated, programmable, and extensible through delegated permissions.
+## Documentation
 
-**Smart wallets** are blockchain accounts controlled by smart contracts instead of private keys. This enables powerful features like:
+<Cards>
+  <Card
+    topRight="01"
+    title="AI-Assisted Coding"
+    description="llms.txt files and agent skills that teach your coding assistant the SDK."
+    to="/llms"
+  />
+  <Card
+    topRight="02"
+    title="Get Started"
+    description="Quickstart, choosing your setup and supported networks."
+    to="/guides/quickstart"
+  />
+  <Card
+    topRight="03"
+    title="Core Concepts"
+    description="Smart accounts, passkeys, ENS names and the permission layer."
+    to="/concepts/smart-accounts"
+  />
+  <Card
+    topRight="04"
+    title="Integrations"
+    description="Wagmi, Reown AppKit, the EIP-1193 provider and React Native."
+    to="/integrations"
+  />
+  <Card
+    topRight="05"
+    title="Guides"
+    description="Gas sponsoring, stablecoin payments, subscriptions, SIWE and EIP-7702."
+    to="/guides/gas-sponsoring"
+  />
+  <Card
+    topRight="06"
+    title="Customization"
+    description="Theming, your own wallet UI and a custom passkey server."
+    to="/advanced"
+  />
+  <Card
+    topRight="07"
+    title="Reference"
+    description="Configuration, wagmi hooks, provider RPC methods and the Account class."
+    to="/configuration"
+  />
+  <Card
+    topRight="08"
+    title="Troubleshooting"
+    description="Browser support and fixes for common issues."
+    to="/troubleshooting"
+  />
+</Cards>
 
-- **Gasless transactions** - Users don't need ETH to pay for gas
-- **Batch operations** - Execute multiple actions in a single transaction
-- **Programmable permissions** - Grant limited access to third parties
+## Platform
 
-**Passkeys** replace seed phrases and passwords with biometric authentication (Face ID, fingerprint, or device PIN). Your users get:
+<Cards>
+  <Card
+    icon="lucide:layout-dashboard"
+    title="Dashboard"
+    description="Create API keys and manage your apps."
+    to="https://dashboard.jaw.id/"
+  />
+  <Card
+    icon="lucide:flask-conical"
+    title="Playground"
+    description="Call the SDK methods from your browser before you integrate."
+    to="https://playground.jaw.id/"
+  />
+  <Card
+    icon="lucide:monitor-play"
+    title="Demo"
+    description="Sign in, send, swap and delegate the way your users will."
+    to="https://demo.jaw.id/"
+  />
+  <Card
+    icon="lucide:network"
+    title="Supported Networks"
+    description="Chains and capabilities, live from the JAW API."
+    to="/supported-networks"
+  />
+</Cards>
 
-- No seed phrases to lose or steal
-- Phishing-resistant authentication
-- Cross-device sync via iCloud/Google
+## Community
 
-:::info[Building a native iOS or Android app?]
-The wagmi connector and built-in dialogs below are for web apps. In React Native, use the `Account` class with the platform's native passkey prompt — see [React Native (Expo)](/guides/react-native).
-:::
-
-## Installation
-
-:::code-group
-
-```bash [npm]
-npm install @jaw.id/wagmi wagmi @tanstack/react-query
-```
-
-```bash [pnpm]
-pnpm add @jaw.id/wagmi wagmi @tanstack/react-query
-```
-
-```bash [yarn]
-yarn add @jaw.id/wagmi wagmi @tanstack/react-query
-```
-
-```bash [bun]
-bun add @jaw.id/wagmi wagmi @tanstack/react-query
-```
-
-:::
-
-:::warning
-You need an API key to use the SDK. Get one at [JAW Dashboard](https://dashboard.jaw.id/).
-:::
-
-## Quick Start
-
-### 1. Configure Wagmi
-
-Create your wagmi config with the JAW connector:
-
-```typescript
-// config.ts
-import { createConfig, http } from 'wagmi';
-import { mainnet, base } from 'wagmi/chains';
-import { jaw } from '@jaw.id/wagmi';
-
-export const config = createConfig({
-  chains: [mainnet, base],
-  connectors: [
-    jaw({
-      apiKey: 'your-api-key',
-      appName: 'My DApp',
-      appLogoUrl: 'https://my-dapp.com/logo.png',
-    }),
-  ],
-  transports: {
-    [mainnet.id]: http(),
-    [base.id]: http(),
-  },
-});
-```
-
-### 2. Set Up Providers
-
-Wrap your app with the required providers:
-
-```tsx
-// App.tsx
-import { WagmiProvider } from 'wagmi';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { config } from './config';
-
-const queryClient = new QueryClient();
-
-function App({ children }: { children: React.ReactNode }) {
-  return (
-    <WagmiProvider config={config}>
-      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
-    </WagmiProvider>
-  );
-}
-```
-
-### 3. Connect & Interact
-
-```tsx
-import { useAccount, useSendTransaction } from 'wagmi';
-import { useConnect, useDisconnect } from '@jaw.id/wagmi';
-import { parseEther } from 'viem';
-import { config } from './config';
-
-function WalletButton() {
-  const { address, isConnected } = useAccount();
-  const { mutate: connect, isPending } = useConnect();
-  const { mutate: disconnect } = useDisconnect();
-  const { sendTransaction } = useSendTransaction();
-
-  if (isConnected) {
-    return (
-      <div>
-        <p>Connected: {address}</p>
-        <button
-          onClick={() =>
-            sendTransaction({
-              to: '0x...',
-              value: parseEther('0.01'),
-            })
-          }
-        >
-          Send ETH
-        </button>
-        <button onClick={() => disconnect({})}>Disconnect</button>
-      </div>
-    );
-  }
-
-  return (
-    <button onClick={() => connect({ connector: config.connectors[0] })} disabled={isPending}>
-      {isPending ? 'Connecting...' : 'Connect Wallet'}
-    </button>
-  );
-}
-```
-
-When users click "Connect Wallet", a popup appears for passkey authentication.
-
-## Using the Provider Directly
-
-For non-React applications or advanced use cases, you can use the provider API directly:
-
-```typescript
-import { JAW } from '@jaw.id/core';
-
-const jaw = JAW.create({
-  apiKey: 'your-api-key',
-  appName: 'My DApp',
-});
-
-// EIP-1193 compatible provider
-const accounts = await jaw.provider.request({
-  method: 'wallet_connect',
-});
-```
-
-See the [Provider API Reference](/api-reference) for all available methods.
-
-## Next Steps
-
-- **[Configuration](/configuration)** - All configuration options
-- **[Wagmi Integration](/wagmi)** - Full wagmi hooks reference
-- **[Guides](/guides/quickstart)** - Tutorials for common use cases
-- **[React Native (Expo)](/guides/react-native)** - Native iOS and Android apps
-- **[Supported Networks](/supported-networks)** - Available chains
+<Cards>
+  <Card
+    icon="simple-icons:github"
+    title="GitHub"
+    description="Source code and issue tracker."
+    to="https://github.com/JustaLab-co/jaw-mono"
+  />
+  <Card
+    icon="simple-icons:telegram"
+    title="Telegram"
+    description="Ask the team and other builders."
+    to="https://t.me/+RsFLPfky7-YxZjVk"
+  />
+  <Card icon="simple-icons:x" title="X" description="Releases and updates." to="https://x.com/_JAW_ID" />
+</Cards>
